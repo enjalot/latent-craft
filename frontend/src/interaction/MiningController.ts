@@ -1,10 +1,8 @@
-import * as THREE from "three";
-import type { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import type { ChunkMeshUserData, LoadedChunk } from "../streaming/ChunkLoader.ts";
 import type { VoxelHit } from "../engine/Raycast.ts";
 import { Inventory } from "./Inventory.ts";
-import { MINED_OPACITY } from "../config.ts";
+import { combinedVoxelOpacity, ensureTransparentMaterial } from "../voxels/VoxelOpacity.ts";
 
 function voxelKey(chunkId: number, localVoxelId: number): string {
   return `${chunkId}:${localVoxelId}`;
@@ -32,8 +30,10 @@ function voxelKey(chunkId: number, localVoxelId: number): string {
  * separate "third state" plumbing needed in `VoxelMaterial.ts` after all.
  * The one thing that DOES need doing manually: `MeshStandardMaterial`
  * defaults to `transparent: false`, so opacity <1 would otherwise render
- * fully opaque — `ensureTransparent()` flips that on lazily, once per chunk
- * material, the first time any voxel in it is mined.
+ * fully opaque — `ensureTransparentMaterial()` (`voxels/VoxelOpacity.ts`)
+ * flips that on lazily, once per chunk material, the first time any voxel in
+ * it needs opacity <1 (from mining OR from X-Ray, see the Phase 4 note
+ * below — the two share this helper).
  *
  * Mined state still can't live on the mesh across reloads — a chunk's
  * `InstancedMesh2` is disposed on eviction and rebuilt from scratch — so
@@ -42,13 +42,27 @@ function voxelKey(chunkId: number, localVoxelId: number): string {
  * becoming resident. Restoring a voxel deletes it from that set (not just a
  * visual revert), so a restored-then-evicted-then-reloaded voxel correctly
  * comes back normal rather than re-mined.
+ *
+ * Phase 4 addition: every `setOpacityAt` write below goes through
+ * `combinedVoxelOpacity()` (`voxels/VoxelOpacity.ts`) rather than a bare
+ * `MINED_OPACITY`/`1`, so a voxel mined (or restored) while the "X-Ray"
+ * hotbar item is equipped lands on the correct COMBINED opacity instead of
+ * silently ignoring X-Ray's global toggle — e.g. restoring a voxel while
+ * X-Ray is still equipped must leave it at `XRAY_OPACITY`, not snap it back
+ * to fully opaque. `isXrayActive` is injected as a callback (not a direct
+ * `XRayController` reference) to avoid a two-way constructor dependency —
+ * `XRayController` itself needs `MiningController.isMined` to do the same
+ * combination in reverse. See main.ts's bootstrap-order comment.
  */
 export class MiningController {
   readonly inventory = new Inventory();
 
   private readonly minedByChunk = new Map<number, Set<number>>();
 
-  constructor(private readonly chunkStore: ChunkStore) {}
+  constructor(
+    private readonly chunkStore: ChunkStore,
+    private readonly isXrayActive: () => boolean = () => false,
+  ) {}
 
   isMined(chunkId: number, localVoxelId: number): boolean {
     return this.minedByChunk.get(chunkId)?.has(localVoxelId) ?? false;
@@ -77,8 +91,8 @@ export class MiningController {
     if (!chunk) return false;
 
     this.markMined(chunkId, localVoxelId);
-    this.ensureTransparent(hit.mesh);
-    hit.mesh.setOpacityAt(hit.instanceId, MINED_OPACITY);
+    ensureTransparentMaterial(hit.mesh);
+    hit.mesh.setOpacityAt(hit.instanceId, combinedVoxelOpacity(true, this.isXrayActive()));
     this.snapshotStack(chunk, localVoxelId);
     return true;
   }
@@ -99,7 +113,11 @@ export class MiningController {
     if (localVoxelId === undefined || !this.isMined(chunkId, localVoxelId)) return false;
 
     this.unmark(chunkId, localVoxelId);
-    hit.mesh.setOpacityAt(hit.instanceId, 1);
+    // NOT a bare `1` — if X-Ray is still equipped, a restored voxel must
+    // land back on XRAY_OPACITY (still see-through, per that item's global
+    // effect), not snap to fully opaque just because mining's own state
+    // cleared. See this class's doc comment.
+    hit.mesh.setOpacityAt(hit.instanceId, combinedVoxelOpacity(false, this.isXrayActive()));
     this.inventory.removeStack(voxelKey(chunkId, localVoxelId));
     return true;
   }
@@ -123,26 +141,14 @@ export class MiningController {
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk) return;
 
-    this.ensureTransparent(chunk.mesh);
+    ensureTransparentMaterial(chunk.mesh);
+    const xrayActive = this.isXrayActive();
     const occupied = chunk.meta.occupied;
     for (let instanceId = 0; instanceId < occupied.length; instanceId++) {
       if (mined.has(occupied[instanceId])) {
-        chunk.mesh.setOpacityAt(instanceId, MINED_OPACITY);
+        chunk.mesh.setOpacityAt(instanceId, combinedVoxelOpacity(true, xrayActive));
       }
     }
-  }
-
-  /** Flips a chunk's material into the transparent render path, once. Cheap
-   * to call unconditionally (assigning `true` when already `true` is a
-   * no-op) — deliberately never flipped back to `false` even once every
-   * mined voxel in a chunk is restored, since a fully-opaque-again material
-   * rendered via the transparent queue is visually identical to one in the
-   * opaque queue, just with slightly more sort overhead for that one mesh;
-   * not worth the bookkeeping to track "does this chunk still have any
-   * mined voxel" just to revert it. */
-  private ensureTransparent(mesh: InstancedMesh2): void {
-    const material = mesh.material as THREE.Material;
-    if (!material.transparent) material.transparent = true;
   }
 
   private markMined(chunkId: number, localVoxelId: number): void {

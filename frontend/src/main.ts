@@ -11,15 +11,19 @@ import { ChunkStore } from "./streaming/ChunkStore.ts";
 import { loadPointIndex, type PointIndex } from "./streaming/PointIndex.ts";
 import { MiningController } from "./interaction/MiningController.ts";
 import { PointerController, type VoxelTarget } from "./interaction/PointerController.ts";
+import { XRayController } from "./interaction/XRayController.ts";
+import { EffectorFieldController } from "./interaction/EffectorField.ts";
 import { Hud, type HudStreamingState } from "./ui/Hud.ts";
 import { createHoldProgressRing } from "./ui/hud/Crosshair.ts";
 import { InventoryPanel } from "./ui/InventoryPanel.ts";
+import { Hotbar } from "./ui/Hotbar.ts";
 import {
   DATASETS,
   DEFAULT_DATASET,
   MINE_HOLD_DURATION_MS,
   WORLD_HALF_EXTENT,
   WORLD_SCALE,
+  XRAY_OPACITY,
   resolveDatasetBaseUrl,
 } from "./config.ts";
 
@@ -83,6 +87,16 @@ engine.scene.add(highlightBox);
 const hud = new Hud(app);
 const holdRing = createHoldProgressRing(app);
 
+// Phase 4 hotbar: equip-change fans out to whichever tool controller cares.
+// Both controllers are `null` until `bootstrapStreamedWorld()` finishes (see
+// below), so equipping before the world loads (or under `?synthetic=1`,
+// which never sets either) safely no-ops via optional chaining — nothing
+// special needs to happen at construction time here.
+const hotbar = new Hotbar(app, (tool) => {
+  xrayController?.setActive(tool === "xray");
+  effectorField?.setActive(tool === "effector", engine.camera);
+});
+
 // scratch objects reused every frame to avoid per-frame allocation
 const hitMatrix = new THREE.Matrix4();
 const hitPosition = new THREE.Vector3();
@@ -101,6 +115,8 @@ let chunkStore: ChunkStore | null = null;
 let proxyCloud: ProxyCloud | null = null;
 let syntheticInstances = 0;
 let miningController: MiningController | null = null;
+let xrayController: XRayController | null = null;
+let effectorField: EffectorFieldController | null = null;
 
 // --- pointer: click-and-drag to look, click-and-HOLD to mine/restore --------
 //
@@ -182,21 +198,46 @@ async function bootstrapStreamedWorld(): Promise<void> {
     chunkStore = new ChunkStore(manifest, chunkLoader, {
       onResidencyChanged: (chunkId, resident) => {
         proxyCloud?.setChunkResident(chunkId, resident);
-        // Re-hide anything mined in this chunk before it was evicted — see
-        // MiningController.onChunkResident's doc comment for why this can't
-        // live on the mesh itself.
-        if (resident) miningController?.onChunkResident(chunkId);
+        // Re-apply whatever this chunk's voxels should look like/be visible
+        // as before it was evicted — mined-but-not-restored opacity
+        // (MiningController), the global X-Ray toggle (XRayController), and
+        // "does the Effector Field currently overlap any of these voxels"
+        // (EffectorFieldController) are all independent per-voxel state
+        // that can't live on the mesh itself, since a chunk's InstancedMesh2
+        // is disposed on eviction and rebuilt from scratch on reload. See
+        // each controller's own onChunkResident doc comment.
+        if (resident) {
+          miningController?.onChunkResident(chunkId);
+          xrayController?.onChunkResident(chunkId);
+          effectorField?.onChunkResident(chunkId);
+        }
       },
     });
     engine.scene.add(chunkStore.group);
     raycastTarget = chunkStore.group;
     raycastRecursive = true;
 
-    // Constructed synchronously right after chunkStore, with no `await` in
-    // between, so the `onResidencyChanged` closure above (which only ever
-    // runs from a later microtask, once a chunk load resolves) never sees
-    // `miningController` still null.
-    miningController = new MiningController(chunkStore);
+    // All four constructed synchronously right after chunkStore, with no
+    // `await` in between, so the `onResidencyChanged` closure above (which
+    // only ever runs from a later microtask, once a chunk load resolves)
+    // never sees any of them still null.
+    //
+    // Ordering note: `MiningController` and `XRayController` each need to
+    // query the OTHER's current state (a mined voxel under X-Ray must
+    // combine both, see `voxels/VoxelOpacity.ts`), which would be a
+    // constructor cycle if either held a direct reference to the other.
+    // Both instead take a plain callback — `miningController` closes over
+    // the `xrayController` *module-scope `let`* (declared `null` above,
+    // same pattern already used for `miningController` itself pre-Phase-4),
+    // which is only ever CALLED later from user interaction, by which point
+    // `xrayController` is assigned; `xrayController` itself is constructed
+    // one line later and can reference the by-then-real `miningController`
+    // directly.
+    miningController = new MiningController(chunkStore, () => xrayController?.isActive ?? false);
+    xrayController = new XRayController(chunkStore, (chunkId, localVoxelId) =>
+      miningController?.isMined(chunkId, localVoxelId) ?? false,
+    );
+    effectorField = new EffectorFieldController(chunkStore, manifest, engine.scene);
     // Non-null assertion: `app`'s null-check `throw` above is at module scope,
     // but TS doesn't carry that narrowing into a separate nested function
     // (this one) even though `app` is a never-reassigned `const`.
@@ -258,9 +299,35 @@ function setCursorStyle(value: string): void {
   engine.renderer.domElement.style.cursor = value;
 }
 
+/** Builds the Hotbar's status line from whichever tool is currently
+ * equipped — kept out of Hud.ts per the task brief (that panel is another
+ * agent's finished work), so this is the only place equip/tool state shows
+ * up on screen. Cheap to call every frame: `Hotbar.setStatusLine` itself
+ * skips the DOM write when the text hasn't changed. */
+function computeHotbarStatus(): string {
+  const tool = hotbar.equippedTool;
+  if (tool === "xray") {
+    return (
+      `X-Ray equipped — all resident voxels translucent (opacity ${XRAY_OPACITY}) · ` +
+      `hover/mine/restore work exactly as normal`
+    );
+  }
+  if (tool === "effector") {
+    if (!effectorField) return "Effector Field equipped — waiting for world to load…";
+    return (
+      `Effector Field — radius ${effectorField.currentRadius.toFixed(2)} · ` +
+      `distance ${effectorField.currentDistance.toFixed(2)} · suppressing ${effectorField.suppressedCount} voxels\n` +
+      `scroll = move · shift+scroll = resize · [ / ] = move · - / = = resize`
+    );
+  }
+  return "";
+}
+
 engine.start((dt) => {
   flightControls.update(dt);
   chunkStore?.updateCamera(engine.camera);
+  effectorField?.update(engine.camera);
+  hotbar.setStatusLine(computeHotbarStatus());
 
   let hoverLabel = "none";
   const hit = raycastAt(pointerController.ndc);
@@ -380,6 +447,13 @@ Object.assign(window as unknown as Record<string, unknown>, {
     get miningController() {
       return miningController;
     },
+    get xrayController() {
+      return xrayController;
+    },
+    get effectorField() {
+      return effectorField;
+    },
+    hotbar,
     get currentHit() {
       return currentHit;
     },

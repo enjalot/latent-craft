@@ -208,6 +208,65 @@ export const THUMBS_BASE_PATH = "/thumbs/bl";
  * points from creating thousands of `<img>` elements at once. */
 export const INVENTORY_THUMBS_PAGE_SIZE = 60;
 
+// ---------------------------------------------------------------------------
+// Hotbar / equippable tools (Phase 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Opacity all resident voxels render at while the "X-Ray" hotbar item is
+ * equipped (1 = fully opaque, matching a normal untouched voxel). Combined
+ * with a mined voxel's own `MINED_OPACITY` via `combinedVoxelOpacity()`
+ * (`voxels/VoxelOpacity.ts`) using min(), not product — see that function's
+ * doc comment for why. Tuned by eye the same way `MINED_OPACITY` was: high
+ * enough that an X-rayed cluster still reads as "made of voxels" rather than
+ * a formless haze, low enough that whatever is behind the front layer is
+ * actually visible through it.
+ */
+export const XRAY_OPACITY = 0.4;
+
+/**
+ * Effector Field (Item 2) sizing — expressed as multiples of the manifest's
+ * own voxel/chunk world sizes (resolved once, at `EffectorFieldController`
+ * construction, when the manifest is known) rather than fixed world units,
+ * so the field is sized sensibly whether the active dataset is
+ * num_voxels=96 or num_voxels=160.
+ *
+ * Position model: the field is a sphere anchored at `distance` world units
+ * directly in front of the camera (`camera.position + forward * distance`),
+ * so flying/looking around moves it with you — that's the "movable" part.
+ * `distance` alone is what "grow/shrink the standoff" controls adjust
+ * (mouse wheel, or `[`/`]` keys); `radius` is the separate "grow/shrink the
+ * field itself" control (shift+wheel, or `-`/`=` keys) — see
+ * `EffectorFieldController`'s doc comment for the exact bindings.
+ */
+export const EFFECTOR_DEFAULT_RADIUS_VOXELS = 5;
+export const EFFECTOR_MIN_RADIUS_VOXELS = 1;
+export const EFFECTOR_MAX_RADIUS_CHUNKS = 3;
+export const EFFECTOR_RADIUS_STEP_VOXELS = 0.75;
+
+export const EFFECTOR_DEFAULT_DISTANCE_CHUNKS = 1.2;
+export const EFFECTOR_MIN_DISTANCE_VOXELS = 2;
+export const EFFECTOR_MAX_DISTANCE_CHUNKS = 8;
+export const EFFECTOR_DISTANCE_STEP_VOXELS = 2;
+
+/** A keypress ([`/`]`/`-`/`=`) moves/resizes by this many wheel-steps' worth
+ * at once — a single wheel "notch" (`deltaY` tick) is a much smaller,
+ * higher-frequency input than a discrete key tap, so a keypress needs a
+ * bigger per-event step to feel comparably responsive rather than glacial. */
+export const EFFECTOR_KEY_STEP_MULTIPLIER = 4;
+
+/** How far (world units) the field's computed sphere center has to move
+ * before its suppression set is recomputed — mirrors
+ * `CHUNK_UPDATE_MOVE_EPSILON`'s "don't redo O(instances) work every single
+ * frame when nothing meaningfully changed" role, just sized to a fraction of
+ * a voxel instead of a fraction of a chunk, since this test is per-voxel. */
+export const EFFECTOR_UPDATE_MOVE_EPSILON_VOXEL_FRAC = 0.25;
+
+/** Gizmo sphere color — deliberately distinct from the hover-highlight teal
+ * (`#7fffe0`) and the mine/restore hold-ring colors, so the field reads as
+ * its own thing rather than blending into existing HUD accents. */
+export const EFFECTOR_GIZMO_COLOR = 0x9d7bff;
+
 /**
  * Resolves the chunk-pack base URL for a dataset key, honouring
  * `CHUNK_SERVER_ORIGIN` and falling back to the page's own hostname.
