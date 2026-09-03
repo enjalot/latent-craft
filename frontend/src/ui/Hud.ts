@@ -165,7 +165,7 @@ export class Hud {
     lines.push(
       state.dragging
         ? "dragging to look…"
-        : "drag to look · WASD fly · Space/Shift up/down · hold a voxel to mine/restore",
+        : "drag to look · WASD fly · Space/Shift up/down · hold a voxel to extract it",
     );
 
     // The HUD text changes at most a few characters per frame; skipping the

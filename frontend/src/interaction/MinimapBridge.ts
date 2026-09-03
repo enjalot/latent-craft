@@ -44,6 +44,21 @@ export interface FlashlightResult {
   scanMs: number;
 }
 
+export interface VoxelHighlightResult {
+  chunkId: number;
+  localVoxelId: number;
+  /** row_id used for the 2D marker, or -1 if none could be resolved. */
+  rowId: number;
+  /** Whether the voxel's chunk is streamed in right now. */
+  chunkResident: boolean;
+  /** Whether a 3D glow box was actually placed (always true for a voxel the
+   * manifest knows about — see `highlightVoxel`'s doc comment). */
+  lit3d: boolean;
+  /** Whether a marker was drawn on the 2D minimap. */
+  lit2d: boolean;
+  world: { x: number; y: number; z: number };
+}
+
 export interface TeleportResult {
   qx: number;
   qy: number;
@@ -82,6 +97,12 @@ export interface MinimapBridgeDeps {
  * | crosshair (3D hover → 2D) | hovered voxel's `repr_row_id` → `qx/qy[row_id]` → overlay marker |
  * | avatar (camera → 2D) | nearest resident voxel → its `repr_row_id` → overlay marker (approximate, see below) |
  * | teleport (2D click → 3D) | q → nearest row_id → `row_to_voxel` → voxel center → prefetch + fly |
+ * | flashlight (inventory hover → 3D + 2D) | stack's (chunk, voxel) → glow box; stack's `repr_row_id` → overlay marker |
+ *
+ * That last row is Phase 6.5's addition (`highlightVoxel`) — the same
+ * flashlight, aimed by a caller that already knows its target instead of by a
+ * 2D cursor position. See its own doc comment for how it degrades when the
+ * target's chunk isn't streamed in.
  *
  * This class owns the panel rather than being handed one, which keeps the
  * callback wiring acyclic: the panel's hover/click callbacks need the bridge,
@@ -121,6 +142,7 @@ export class MinimapBridge {
 
   private lastFlashlightResult: FlashlightResult | null = null;
   private lastTeleportResult: TeleportResult | null = null;
+  private lastVoxelHighlightResult: VoxelHighlightResult | null = null;
 
   constructor(deps: MinimapBridgeDeps) {
     this.pack = deps.pack;
@@ -158,6 +180,10 @@ export class MinimapBridge {
 
   get lastTeleport(): TeleportResult | null {
     return this.lastTeleportResult;
+  }
+
+  get lastVoxelHighlight(): VoxelHighlightResult | null {
+    return this.lastVoxelHighlightResult;
   }
 
   get litVoxelCount(): number {
@@ -296,7 +322,98 @@ export class MinimapBridge {
     this.highlight.clear();
     this.panel.setFlashlight(null);
     this.lastFlashlightResult = null;
+    this.lastVoxelHighlightResult = null;
     this.panel.setCaption(null);
+  }
+
+  // --- flashlight: direct voxel target (inventory hover) --------------------
+
+  /**
+   * The OTHER entry point into the same flashlight machinery
+   * `applyFlashlight` drives, for callers that already know exactly which
+   * voxel they mean — currently hovering a stack row in the inventory panel
+   * (Phase 6.5). Nothing is duplicated: this reuses the same `HighlightCubes`
+   * overlay for 3D, the same `panel.setFlashlight` amber marker for 2D, and
+   * the same caption box; it just skips the 2D-position → row_ids → voxels
+   * resolution chain, because the answer is already in hand.
+   *
+   * **Graceful degradation when the target isn't resident** — the case the
+   * plan flagged. It turns out to degrade barely at all, and for a reason
+   * worth stating: BOTH halves of this highlight are computed from data that
+   * does not depend on the chunk being streamed in.
+   *
+   * - 3D: the glow box's position comes from `Manifest.voxelCenterWorldById`,
+   *   which is pure chunk/voxel grid math (the same property Phase 5 relied on
+   *   so the minimap could light up regions the camera has never visited), and
+   *   `HighlightCubes` is an independent overlay mesh with `depthTest: false`
+   *   — not the chunk's own per-instance opacity channel. So the box is drawn
+   *   at the right place either way; the only thing missing when the chunk is
+   *   out is the textured voxel inside it, which is exactly the honest signal
+   *   ("your points came from over there, but there's nothing loaded there
+   *   right now").
+   * - 2D: the marker needs a row_id, and the stack's `reprRowId` was captured
+   *   when the voxel was first extracted, so it survives eviction too. The
+   *   `rowIdHint` parameter is how the inventory passes it in; if it's absent
+   *   or unknown to the 2D pack, this falls back to the resident chunk's
+   *   `meta.reprRowId`, and only if BOTH are unavailable does the 2D marker
+   *   get skipped (reported as `lit2d: false` rather than failing silently).
+   *
+   * The caption says which of those applies, so an unloaded target reads as a
+   * state, not as a broken hover.
+   */
+  highlightVoxel(chunkId: number, localVoxelId: number, rowIdHint = -1): VoxelHighlightResult {
+    // A pending 2D hover would otherwise overwrite this highlight on the very
+    // next frame (see `update`), since both write the same overlay.
+    this.pendingHover = null;
+
+    const chunk = this.chunkStore.chunk(chunkId);
+    let rowId = -1;
+    if (rowIdHint >= 0 && this.pack.hasRow(rowIdHint)) {
+      rowId = rowIdHint;
+    } else if (chunk) {
+      const repr = chunk.meta.reprRowId[localVoxelId];
+      if (repr !== EMPTY_REPR_ROW_ID && this.pack.hasRow(repr)) rowId = repr;
+    }
+
+    this.manifest.voxelCenterWorldById(chunkId, localVoxelId, this.scratch);
+    this.highlight.begin();
+    const lit3d = this.highlight.add(this.scratch);
+    this.highlight.commit();
+
+    if (rowId >= 0) {
+      this.panel.setFlashlight({
+        qx: this.pack.rowQx(rowId),
+        qy: this.pack.rowQy(rowId),
+        radiusQ: this.panel.radiusQFromPx(MINIMAP_FLASHLIGHT_RADIUS_PX),
+      });
+    } else {
+      this.panel.setFlashlight(null);
+    }
+
+    this.panel.setCaption(
+      `inventory → chunk ${chunkId} voxel ${localVoxelId}\n` +
+        (chunk
+          ? `loaded · row ${rowId >= 0 ? rowId : "—"}`
+          : `chunk not loaded · 3D marker only${rowId >= 0 ? "" : " · no 2D fix"}`),
+    );
+
+    const result: VoxelHighlightResult = {
+      chunkId,
+      localVoxelId,
+      rowId,
+      chunkResident: chunk !== undefined,
+      lit3d,
+      lit2d: rowId >= 0,
+      world: { x: this.scratch.x, y: this.scratch.y, z: this.scratch.z },
+    };
+    this.lastVoxelHighlightResult = result;
+    return result;
+  }
+
+  /** Clears whatever `highlightVoxel` last lit up. Same teardown as leaving
+   * the minimap, deliberately — one flashlight, two ways to aim it. */
+  clearVoxelHighlight(): void {
+    this.clearFlashlight();
   }
 
   // --- avatar: camera → 2D --------------------------------------------------

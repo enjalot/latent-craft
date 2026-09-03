@@ -229,26 +229,121 @@ export const LOOK_PITCH_LIMIT_RAD = Math.PI / 2 - 0.02;
 export const LOOK_DRAG_THRESHOLD_PX = 6;
 
 // ---------------------------------------------------------------------------
-// Mining / inventory (Phase 3, extended Phase 3.5)
+// Mining / extraction / inventory (Phase 3, extended 3.5, reworked 6.5)
 // ---------------------------------------------------------------------------
 
 /**
- * How long a click-and-hold must be sustained to mine (or restore) a voxel,
- * in milliseconds. Same constant drives both directions — the UX is
- * symmetric, just the opposite visual outcome. Named/exported so it's a
- * one-line retune rather than a hunt through main.ts.
+ * Duration of ONE extraction cycle, in milliseconds — the time a hold has to
+ * be sustained before the next batch of points is pulled out of the voxel
+ * under the cursor.
+ *
+ * 533 = Phase 3.5's `MINE_HOLD_DURATION_MS` (1600) / 3, the reduction the
+ * user asked for directly. The important change isn't the number though, it's
+ * what a completed hold now *does*: 3.5's hold moved a voxel's entire point
+ * list into the inventory in one shot and flipped a boolean. A hold now runs
+ * this timer repeatedly for as long as the button is down, extracting one
+ * batch per cycle, so a voxel drains continuously rather than popping.
  */
-export const MINE_HOLD_DURATION_MS = 1600;
+export const EXTRACTION_CYCLE_MS = 533;
 
-/** Opacity a mined-but-not-yet-restored voxel renders at (1 = fully opaque,
- * matching a normal untouched voxel). Verified by eye against a real
- * screenshot, not just picked from the addendum's suggested 0.25-0.4 range
- * in the abstract: against this scene's near-black void background and dim
- * lighting (most BL book pages are dark ink on paper to begin with — see
- * `main.ts`'s lighting comment), anything in that range reads as
- * indistinguishable from fully gone. 0.55 is the value that actually stayed
- * legible as "translucent, still there" in a headless screenshot. */
-export const MINED_OPACITY = 0.55;
+/**
+ * Roughly how many extraction cycles it should take to fully drain ANY voxel,
+ * regardless of how many points it holds. See `extractionBatchSize()`.
+ *
+ * This is the constant that resolves the user's two asks (shorter holds AND a
+ * rate/spinner that scales with the block's point count), which pull against
+ * each other. The BL num_voxels=96 pack holds 5,917 occupied voxels spanning
+ * 1 to 7,098 points each (densest: chunk 116, voxel 2746 — counted straight
+ * off the pack's `meta.bin` files, not sampled), a spread of nearly four
+ * orders of magnitude. A literal "one point per cycle" rate would empty a
+ * 3-point voxel in 1.6s and that one in 63 MINUTES of unbroken holding, and a
+ * denser pack only widens the gap.
+ *
+ * Making the BATCH scale with the voxel's size, instead of making the CYCLE
+ * scale with it, keeps a fixed legible tempo — one visible pulse of extraction
+ * every ~half second, whatever you are standing in front of — while the yield
+ * per pulse scales. Measured end-to-end on the live build: 1 point/cycle out
+ * of a 3-point voxel (3 cycles), 351/cycle out of a 3,501-point one, and
+ * 710/cycle out of the 7,098-point densest one, which drained in exactly 10
+ * cycles with the opacity stepping 1.00 → 0.93 → 0.86 → … → 0.30, a dead-even
+ * 0.07 per pulse.
+ *
+ * 10 was picked by feel after timing both extremes against the live build: a
+ * full drain is ~10 * 533ms ≈ 5.3s of continuous holding, which is long enough
+ * to read as a deliberate "draining" action with visible intermediate states
+ * (0.07 of fade per pulse is plainly visible, so you can stop anywhere and get
+ * a partial) and short enough that emptying a block never becomes a chore. 5
+ * felt close to 3.5's one-shot pop; 20 turned a full drain into an 11-second
+ * hold.
+ */
+export const EXTRACTION_TARGET_CYCLES = 10;
+
+/**
+ * How many points one extraction cycle pulls out of a voxel holding
+ * `totalPoints`. Ceil (not round) so the batch is never 0, and `max(1, …)` as
+ * a second belt-and-braces guard.
+ *
+ * Consequence worth stating explicitly, since it's the whole point: the number
+ * of cycles to fully drain is `ceil(total / batch)`, which is
+ * `min(total, EXTRACTION_TARGET_CYCLES)` — so a 4-point voxel takes 4 cycles
+ * (one point each), and anything with at least `EXTRACTION_TARGET_CYCLES`
+ * points takes exactly that many cycles no matter how big it is.
+ */
+export function extractionBatchSize(totalPoints: number): number {
+  return Math.max(1, Math.ceil(totalPoints / EXTRACTION_TARGET_CYCLES));
+}
+
+/**
+ * How long a hold on an ALREADY-fully-drained voxel must be sustained to push
+ * its entire extracted stack back into it (the whole-voxel inverse of
+ * extraction; the per-point inverse lives in the inventory panel).
+ *
+ * Deliberately still 1600ms — Phase 3.5's original hold duration — rather than
+ * `EXTRACTION_CYCLE_MS`. Extraction got faster because it's incremental and
+ * self-limiting (let go and you keep exactly what you pulled); a restore is a
+ * single irreversible-feeling bulk action that also empties an inventory
+ * stack, so it keeps the longer, more deliberate hold.
+ */
+export const RESTORE_HOLD_DURATION_MS = 1600;
+
+/**
+ * Opacity a FULLY drained voxel renders at. A partially drained one sits at
+ * `lerp(1, EXTRACTION_FLOOR_OPACITY, extractedFraction)` — see
+ * `combinedVoxelOpacity()` in `voxels/VoxelOpacity.ts`.
+ *
+ * Replaces Phase 3.5's `MINED_OPACITY` (0.55), per the user's "should be
+ * pretty faded" — 0.55 was tuned as the *binary* mined state's single value,
+ * and as a floor it left a drained block looking barely touched.
+ *
+ * Picked by sweeping candidates against a real screenshot AND a `gl.readPixels`
+ * measurement, on the hardest case available: an ISOLATED voxel (all six
+ * neighbours empty, so it composites against pure void rather than against the
+ * bright cluster behind it, which is where a low opacity looks worst). Face-
+ * center luminance on that voxel, /255:
+ *
+ *     untouched 178.8 · 0.55 → 101.3 · 0.45 → 84.0 · 0.38 → 71.9
+ *     0.30 → 57.9 · 0.28 → 54.5 · 0.22 → 43.9 · empty void 0.0
+ *
+ * 0.30 is 3.1x dimmer than untouched (0.55 was only 1.8x — the "barely
+ * touched" complaint, confirmed) while staying unmistakably present against a
+ * void that measures a literal 0. Below ~0.28 the block stops reading as a
+ * translucent ghost and starts reading as a black box, i.e. as a rendering
+ * artifact rather than as state.
+ *
+ * The upper bound is not a taste call: it MUST stay meaningfully below
+ * `XRAY_OPACITY` (0.40). `combinedVoxelOpacity()` composes the two with
+ * `min()`, so a floor at or above 0.40 would render a fully drained voxel
+ * IDENTICALLY to an untouched one whenever X-Ray is equipped — silently
+ * deleting the extraction readout in exactly the mode built for looking inside
+ * a cluster. 0.30 keeps a visible gap; 0.38 would technically pass with none.
+ */
+export const EXTRACTION_FLOOR_OPACITY = 0.3;
+
+/** Duration of the fly-to-inventory animation, ms (see
+ * `ui/ExtractionFlight.ts`). One per extraction cycle, not per point — a
+ * 16,770-point batch animating as 16,770 elements would be a browser hang,
+ * not polish. */
+export const EXTRACTION_FLIGHT_MS = 620;
 
 /**
  * Base path for full-resolution per-point thumbnails, proxied same-origin
@@ -273,9 +368,9 @@ export const INVENTORY_THUMBS_PAGE_SIZE = 60;
 /**
  * Opacity all resident voxels render at while the "X-Ray" hotbar item is
  * equipped (1 = fully opaque, matching a normal untouched voxel). Combined
- * with a mined voxel's own `MINED_OPACITY` via `combinedVoxelOpacity()`
+ * with a voxel's own extraction-derived opacity via `combinedVoxelOpacity()`
  * (`voxels/VoxelOpacity.ts`) using min(), not product — see that function's
- * doc comment for why. Tuned by eye the same way `MINED_OPACITY` was: high
+ * doc comment for why. Tuned by eye the same way the extraction floor was: high
  * enough that an X-rayed cluster still reads as "made of voxels" rather than
  * a formless haze, low enough that whatever is behind the front layer is
  * actually visible through it.

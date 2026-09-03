@@ -15,21 +15,27 @@ import { combinedVoxelOpacity, ensureTransparentMaterial } from "../voxels/Voxel
  *
  * Deliberately does NOT own the per-voxel opacity math itself — that lives
  * in `combinedVoxelOpacity()` (`voxels/VoxelOpacity.ts`), shared with
- * `MiningController`, so a voxel that is BOTH mined AND under X-Ray always
- * composes to the same value regardless of which controller last wrote it
- * (min of the two candidate opacities, not their product — see that
- * function's doc comment). `isMined` is injected as a callback rather than
- * a direct `MiningController` reference specifically to avoid a two-way
- * constructor dependency (`MiningController` needs the mirror-image
+ * `MiningController`, so a voxel that is BOTH partly drained AND under X-Ray
+ * always composes to the same value regardless of which controller last wrote
+ * it (min of the two candidate opacities, not their product — see that
+ * function's doc comment). `extractedFraction` is injected as a callback
+ * rather than a direct `MiningController` reference specifically to avoid a
+ * two-way constructor dependency (`MiningController` needs the mirror-image
  * `isXrayActive` callback back) — see main.ts's bootstrap-order comment for
  * how the two are wired up without either needing to exist first.
+ *
+ * Phase 6.5 note: this callback used to be `isMined(): boolean`. Widening it
+ * to the voxel's extracted fraction is the whole change here — the equipping,
+ * re-application and residency logic below is untouched, because
+ * `combinedVoxelOpacity(0, …)` is exactly what `combinedVoxelOpacity(false, …)`
+ * used to compute.
  */
 export class XRayController {
   private active = false;
 
   constructor(
     private readonly chunkStore: ChunkStore,
-    private readonly isMined: (chunkId: number, localVoxelId: number) => boolean,
+    private readonly extractedFraction: (chunkId: number, localVoxelId: number) => number,
   ) {}
 
   get isActive(): boolean {
@@ -54,7 +60,7 @@ export class XRayController {
    * while equipped. No-op while inactive: a fresh chunk's default
    * per-instance opacity is already the correct "no X-Ray effect" value (1),
    * and `MiningController.onChunkResident` independently handles reapplying
-   * any mined voxels in it — the two don't need to coordinate here because
+   * any drained voxels in it — the two don't need to coordinate here because
    * both ultimately go through the same `combinedVoxelOpacity()`.
    */
   onChunkResident(chunkId: number): void {
@@ -69,8 +75,8 @@ export class XRayController {
     const occupied = chunk.meta.occupied;
     for (let instanceId = 0; instanceId < occupied.length; instanceId++) {
       const localVoxelId = occupied[instanceId];
-      const mined = this.isMined(chunkId, localVoxelId);
-      chunk.mesh.setOpacityAt(instanceId, combinedVoxelOpacity(mined, this.active));
+      const fraction = this.extractedFraction(chunkId, localVoxelId);
+      chunk.mesh.setOpacityAt(instanceId, combinedVoxelOpacity(fraction, this.active));
     }
   }
 }

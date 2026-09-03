@@ -8,22 +8,25 @@ import { loadProxyCloud, type ProxyCloud } from "./voxels/ProxyCloud.ts";
 import { loadManifest, type Manifest } from "./streaming/Manifest.ts";
 import { ChunkLoader, type ChunkMeshUserData } from "./streaming/ChunkLoader.ts";
 import { ChunkStore } from "./streaming/ChunkStore.ts";
-import { loadPointIndex, type PointIndex } from "./streaming/PointIndex.ts";
+import { loadPointIndex, resolveThumbUrl, type PointIndex } from "./streaming/PointIndex.ts";
 import { loadRowToVoxel } from "./streaming/RowToVoxel.ts";
 import { loadMinimapPack } from "./minimap/Manifest.ts";
 import { MinimapBridge } from "./interaction/MinimapBridge.ts";
-import { MiningController } from "./interaction/MiningController.ts";
+import { MiningController, type ExtractionCycle } from "./interaction/MiningController.ts";
 import { PointerController, type VoxelTarget } from "./interaction/PointerController.ts";
 import { XRayController } from "./interaction/XRayController.ts";
 import { EffectorFieldController } from "./interaction/EffectorField.ts";
 import { Hud, type HudStreamingState } from "./ui/Hud.ts";
 import { createHoldProgressRing } from "./ui/hud/Crosshair.ts";
 import { InventoryPanel } from "./ui/InventoryPanel.ts";
+import { ExtractionFlights } from "./ui/ExtractionFlight.ts";
 import { Hotbar } from "./ui/Hotbar.ts";
 import {
   DATASETS,
   DEFAULT_DATASET,
-  MINE_HOLD_DURATION_MS,
+  EXTRACTION_CYCLE_MS,
+  RESTORE_HOLD_DURATION_MS,
+  extractionBatchSize,
   WORLD_HALF_EXTENT,
   WORLD_SCALE,
   XRAY_OPACITY,
@@ -101,11 +104,15 @@ const hotbar = new Hotbar(app, (tool) => {
   effectorField?.setActive(tool === "effector", engine.camera);
 });
 
+// Fly-to-inventory tiles (one per extraction cycle) — see ExtractionFlight.ts.
+const extractionFlights = new ExtractionFlights(app);
+
 // scratch objects reused every frame to avoid per-frame allocation
 const hitMatrix = new THREE.Matrix4();
 const hitPosition = new THREE.Vector3();
 const hitQuaternion = new THREE.Quaternion();
 const hitScale = new THREE.Vector3();
+const projectScratch = new THREE.Vector3();
 
 let fpsEma = 60;
 let status: string | undefined = "loading manifest…";
@@ -122,6 +129,7 @@ let miningController: MiningController | null = null;
 let xrayController: XRayController | null = null;
 let effectorField: EffectorFieldController | null = null;
 let minimap: MinimapBridge | null = null;
+let inventoryPanel: InventoryPanel | null = null;
 
 // --- pointer: click-and-drag to look, click-and-HOLD to mine/restore --------
 //
@@ -136,7 +144,11 @@ const pointerController = new PointerController(engine.renderer.domElement, flig
   hitTestVoxel: (ndc) => resolveVoxelTarget(raycastAt(ndc)),
   onHoldStart: (target) => {
     holdElapsedSeconds = 0;
-    const restoring = miningController?.isMined(target.chunkId, target.localVoxelId) ?? false;
+    // A hold means "keep extracting" on any voxel that still has points in it,
+    // and "push the whole stack back" only once it is completely drained —
+    // one gesture, two unambiguous meanings, no second binding needed. See
+    // `MiningController.restoreAll`.
+    const restoring = miningController?.isFullyExtracted(target.chunkId, target.localVoxelId) ?? false;
     holdRing.show(restoring ? "restore" : "mine");
   },
   onHoldCancel: () => {
@@ -151,14 +163,24 @@ const pointerController = new PointerController(engine.renderer.domElement, flig
 // off as soon as the manifest is known (see bootstrapStreamedWorld) so it's
 // usually already resolved by the time the first voxel gets mined.
 let pointIndexPromise: Promise<PointIndex> | null = null;
+/** The resolved table, once it lands — for the couple of call sites that are
+ * synchronous by nature (the fly-to-inventory tile is created inside a frame
+ * callback and can't await anything). Null before then, which those call sites
+ * degrade around rather than block on. */
+let pointIndexReady: PointIndex | null = null;
 function loadPointIndexOnce(): Promise<PointIndex> {
   if (!manifest) return Promise.reject(new Error("point_index: manifest not loaded yet"));
   if (!pointIndexPromise) {
-    pointIndexPromise = loadPointIndex(manifest).catch((error: unknown) => {
-      console.error("[latent-scope-3d] point_index.bin load failed", error);
-      pointIndexPromise = null; // allow a later retry instead of caching the failure forever
-      throw error;
-    });
+    pointIndexPromise = loadPointIndex(manifest)
+      .then((index) => {
+        pointIndexReady = index;
+        return index;
+      })
+      .catch((error: unknown) => {
+        console.error("[latent-scope-3d] point_index.bin load failed", error);
+        pointIndexPromise = null; // allow a later retry instead of caching the failure forever
+        throw error;
+      });
   }
   return pointIndexPromise;
 }
@@ -240,13 +262,27 @@ async function bootstrapStreamedWorld(): Promise<void> {
     // directly.
     miningController = new MiningController(chunkStore, () => xrayController?.isActive ?? false);
     xrayController = new XRayController(chunkStore, (chunkId, localVoxelId) =>
-      miningController?.isMined(chunkId, localVoxelId) ?? false,
+      miningController?.extractedFraction(chunkId, localVoxelId) ?? 0,
     );
     effectorField = new EffectorFieldController(chunkStore, manifest, engine.scene);
     // Non-null assertion: `app`'s null-check `throw` above is at module scope,
     // but TS doesn't carry that narrowing into a separate nested function
     // (this one) even though `app` is a never-reassigned `const`.
-    new InventoryPanel(app!, miningController.inventory, loadPointIndexOnce);
+    inventoryPanel = new InventoryPanel(app!, miningController.inventory, {
+      getPointIndex: loadPointIndexOnce,
+      onReturnRow: (stackId, rowId) => miningController?.returnRow(stackId, rowId) ?? false,
+      onReturnStack: (stackId) => miningController?.returnStack(stackId) ?? false,
+      // `minimap` is a module-scope `let` that only gets assigned once the 2D
+      // pack finishes loading in the background (see `bootstrapMinimap`), and
+      // this closure only ever runs from a real pointer event — so hovering an
+      // inventory row before the minimap is up simply does nothing, rather than
+      // needing the panel's construction to wait on a panel it doesn't own.
+      onHoverStack: (stack) => {
+        if (!minimap) return;
+        if (stack) minimap.highlightVoxel(stack.chunkId, stack.localVoxelId, stack.reprRowId);
+        else minimap.clearVoxelHighlight();
+      },
+    });
 
     // Spawn just outside the densest chunk looking straight into it, so the
     // first thing on screen is the most interesting part of the embedding
@@ -336,6 +372,41 @@ function frameDensestChunk(m: Manifest): void {
  * re-raycasting, since the frame loop already raycasts every frame. */
 let currentHit: VoxelHit | null = null;
 
+/**
+ * Sends one tile flying from the just-drained voxel to the inventory panel.
+ *
+ * `worldPosition` is the voxel's own center (already decomposed this frame for
+ * the hover highlight), projected to screen here rather than reusing the
+ * cursor position — the cursor is on the voxel's FACE wherever you happened to
+ * click, and points should read as leaving the block, not the mouse. Falls
+ * back to the cursor if the projection lands somewhere unusable (behind the
+ * camera can only happen if the world moved between raycast and projection,
+ * but a NaN start position would strand a tile on screen forever).
+ */
+function launchExtractionFlight(cycle: ExtractionCycle, worldPosition: THREE.Vector3): void {
+  if (!inventoryPanel) return;
+  const rect = inventoryPanel.dropTargetRect();
+
+  projectScratch.copy(worldPosition).project(engine.camera);
+  let fromX = (projectScratch.x * 0.5 + 0.5) * window.innerWidth;
+  let fromY = (1 - (projectScratch.y * 0.5 + 0.5)) * window.innerHeight;
+  if (!Number.isFinite(fromX) || !Number.isFinite(fromY) || projectScratch.z > 1) {
+    fromX = (pointerController.ndc.x * 0.5 + 0.5) * window.innerWidth;
+    fromY = (1 - (pointerController.ndc.y * 0.5 + 0.5)) * window.innerHeight;
+  }
+
+  extractionFlights.launch({
+    fromX,
+    fromY,
+    // Aim at the panel's header rather than its center: a tall panel full of
+    // stacks would otherwise have tiles landing halfway down a scrolling list.
+    toX: rect.left + rect.width / 2,
+    toY: rect.top + 26,
+    url: pointIndexReady ? resolveThumbUrl(pointIndexReady, cycle.leadRowId) : null,
+    count: cycle.rowIds.length,
+  });
+}
+
 // --- per-frame loop ---------------------------------------------------------
 
 const streamingState: HudStreamingState = {
@@ -370,7 +441,7 @@ function computeHotbarStatus(): string {
   if (tool === "xray") {
     return (
       `X-Ray equipped — all resident voxels translucent (opacity ${XRAY_OPACITY}) · ` +
-      `hover/mine/restore work exactly as normal`
+      `hover/extract/return work exactly as normal`
     );
   }
   if (tool === "effector") {
@@ -393,13 +464,22 @@ engine.start((dt) => {
   chunkStore?.updateCamera(engine.camera);
   effectorField?.update(engine.camera);
   minimap?.update(engine.camera, dt);
+  // Self-corrects a stuck inventory-hover flashlight; a no-op (one null check)
+  // whenever no inventory row is hovered. See `InventoryPanel.validateHover`
+  // for the Chromium boundary-event race this defends against.
+  inventoryPanel?.validateHover();
   hotbar.setStatusLine(computeHotbarStatus());
 
   let hoverLabel = "none";
   const hit = raycastAt(pointerController.ndc);
   currentHit = hit;
   const target = resolveVoxelTarget(hit);
-  const hoveredMined = target ? (miningController?.isMined(target.chunkId, target.localVoxelId) ?? false) : false;
+  const hoveredFraction = target
+    ? (miningController?.extractedFraction(target.chunkId, target.localVoxelId) ?? 0)
+    : 0;
+  const hoveredDrained = target
+    ? (miningController?.isFullyExtracted(target.chunkId, target.localVoxelId) ?? false)
+    : false;
 
   /** The hovered voxel's representative row_id — the ONLY handle the minimap
    * has on "where is this voxel in the 2D fit" (see MinimapBridge). */
@@ -418,10 +498,17 @@ engine.start((dt) => {
       const points = chunk ? chunk.meta.count[target.localVoxelId] : 0;
       const reprRowId = chunk ? chunk.meta.reprRowId[target.localVoxelId] : -1;
       hoveredRowId = reprRowId >= 0 ? reprRowId : null;
-      const actionHint = miningController ? (hoveredMined ? " · hold to restore" : " · hold to mine") : "";
+      const actionHint = miningController
+        ? hoveredDrained
+          ? " · hold to put it all back"
+          : " · hold to extract"
+        : "";
+      const extractedHint =
+        hoveredFraction > 0 ? ` · ${Math.round(hoveredFraction * 100)}% extracted` : "";
       hoverLabel =
         `chunk ${target.chunkId} voxel ${target.localVoxelId} · ${points} pts · row ${reprRowId} · ` +
-        `${hitPosition.x.toFixed(1)}, ${hitPosition.y.toFixed(1)}, ${hitPosition.z.toFixed(1)}${actionHint}`;
+        `${hitPosition.x.toFixed(1)}, ${hitPosition.y.toFixed(1)}, ${hitPosition.z.toFixed(1)}` +
+        `${extractedHint}${actionHint}`;
     } else {
       hoverLabel = `instance #${hit.instanceId}`;
     }
@@ -431,7 +518,20 @@ engine.start((dt) => {
 
   minimap?.setHoveredRow(hoveredRowId);
 
-  // --- hold-to-mine / hold-to-restore progress -------------------------
+  // --- hold-to-extract / hold-to-put-back progress ----------------------
+  //
+  // Phase 6.5: a hold no longer performs ONE action and end. While the button
+  // is down on a voxel that still has points in it, this runs an
+  // `EXTRACTION_CYCLE_MS` timer over and over, pulling one batch out per
+  // cycle, so the voxel drains continuously for as long as you keep holding.
+  //
+  // The ring deliberately shows the VOXEL's total extraction progress rather
+  // than the current cycle's — that's the plan's explicit ask ("the spinner
+  // should visibly communicate how much of this voxel is left, scaled by its
+  // size"). Because the batch size scales with the voxel's point count, the
+  // ring advances at the same visual rate (~1/EXTRACTION_TARGET_CYCLES per
+  // cycle) whether the block holds 4 points or 167,700, and it lands exactly
+  // on full at the moment the voxel empties.
   const holdTarget = pointerController.holdTarget;
   if (holdTarget) {
     const stillHovering =
@@ -442,19 +542,49 @@ engine.start((dt) => {
       // banking any progress, per the plan's explicit requirement.
       pointerController.cancelHold();
     } else {
+      const restoring = miningController?.isFullyExtracted(holdTarget.chunkId, holdTarget.localVoxelId) ?? false;
+      const durationSeconds = (restoring ? RESTORE_HOLD_DURATION_MS : EXTRACTION_CYCLE_MS) / 1000;
       holdElapsedSeconds += dt;
-      const durationSeconds = MINE_HOLD_DURATION_MS / 1000;
-      holdRing.setProgress(holdElapsedSeconds / durationSeconds);
+
+      const cycleFraction = Math.min(1, holdElapsedSeconds / durationSeconds);
+      if (restoring) {
+        holdRing.setProgress(cycleFraction);
+      } else {
+        // Voxel-level progress: what's already out, plus the share of this
+        // in-flight cycle's batch.
+        const state = miningController?.extractionState(holdTarget.chunkId, holdTarget.localVoxelId);
+        const totalPoints = state?.total ?? chunkStore?.chunk(holdTarget.chunkId)?.meta.count[holdTarget.localVoxelId] ?? 0;
+        const already = state?.extracted.size ?? 0;
+        const inFlight = totalPoints > 0 ? Math.min(extractionBatchSize(totalPoints), totalPoints - already) : 0;
+        holdRing.setProgress(
+          totalPoints > 0 ? (already + cycleFraction * inFlight) / totalPoints : cycleFraction,
+        );
+      }
+
       if (holdElapsedSeconds >= durationSeconds) {
-        const restoring = miningController?.isMined(holdTarget.chunkId, holdTarget.localVoxelId) ?? false;
-        if (restoring) miningController?.restore(hit);
-        else miningController?.mine(hit);
-        // Consumed, not canceled — requires a fresh mousedown to arm the
-        // next hold, so a completed mine can't auto-chain into a restore
-        // while the button is still physically down.
-        pointerController.consumeHold();
-        holdElapsedSeconds = 0;
-        holdRing.hide();
+        if (restoring) {
+          miningController?.restoreAll(hit);
+          // Consumed, not canceled — requires a fresh mousedown to arm the
+          // next hold, so a completed put-back can't immediately auto-chain
+          // into re-extracting the voxel while the button is still down.
+          pointerController.consumeHold();
+          holdElapsedSeconds = 0;
+          holdRing.hide();
+        } else {
+          const cycle = miningController?.extract(hit) ?? null;
+          if (cycle) launchExtractionFlight(cycle, hitPosition);
+          holdElapsedSeconds = 0;
+          if (!cycle || cycle.complete) {
+            // Stop at the moment the voxel empties (or if extraction couldn't
+            // run at all). Continuing would roll straight into the
+            // put-it-all-back timer, and an uninterrupted hold would then
+            // silently undo the drain the user just performed.
+            pointerController.consumeHold();
+            holdRing.hide();
+          } else {
+            holdRing.setProgress(cycle.fraction);
+          }
+        }
       }
     }
   }
@@ -468,7 +598,7 @@ engine.start((dt) => {
   if (pointerController.isDragging) {
     setCursorStyle("grabbing");
   } else if (target) {
-    setCursorStyle(hoveredMined ? "pointer" : "crosshair");
+    setCursorStyle(hoveredDrained ? "pointer" : "crosshair");
   } else {
     setCursorStyle("default");
   }
@@ -529,6 +659,10 @@ Object.assign(window as unknown as Record<string, unknown>, {
     get minimap() {
       return minimap;
     },
+    get inventoryPanel() {
+      return inventoryPanel;
+    },
+    extractionFlights,
     hotbar,
     get currentHit() {
       return currentHit;

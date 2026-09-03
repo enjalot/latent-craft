@@ -3,141 +3,314 @@ import type { ChunkMeshUserData, LoadedChunk } from "../streaming/ChunkLoader.ts
 import type { VoxelHit } from "../engine/Raycast.ts";
 import { Inventory } from "./Inventory.ts";
 import { combinedVoxelOpacity, ensureTransparentMaterial } from "../voxels/VoxelOpacity.ts";
+import { extractionBatchSize } from "../config.ts";
 
-function voxelKey(chunkId: number, localVoxelId: number): string {
+export function voxelStackId(chunkId: number, localVoxelId: number): string {
   return `${chunkId}:${localVoxelId}`;
 }
 
 /**
- * Turns a raycast hit into a mined (or restored) voxel.
+ * Everything this controller remembers about one partially- or fully-drained
+ * voxel. Lives here rather than on the chunk mesh for the same reason Phase
+ * 3.5's boolean did: a chunk's `InstancedMesh2` is disposed on eviction and
+ * rebuilt from scratch on reload, so any state that must survive that cannot
+ * live on it.
+ */
+export interface VoxelExtraction {
+  chunkId: number;
+  localVoxelId: number;
+  /** Points in the voxel, extracted or not (from `meta.bin`'s `count`). */
+  total: number;
+  /**
+   * The row_ids currently OUT of this voxel — the actual ids, not a count.
+   *
+   * A count would be enough to drive the fade, and nothing else. It is not
+   * enough to (a) pick the NEXT batch without re-extracting points already in
+   * the inventory, (b) put one specific point back from the inventory panel,
+   * or (c) survive an evict/reload and still agree with the inventory stack
+   * about which points are where. All three are Phase 6.5 requirements, so the
+   * set is the real state and the count/fraction are derived from it.
+   */
+  extracted: Set<number>;
+}
+
+/** What one completed extraction cycle produced — enough for the caller to
+ * drive the fly-to-inventory animation and the HUD without re-deriving any
+ * of it. */
+export interface ExtractionCycle {
+  chunkId: number;
+  localVoxelId: number;
+  stackId: string;
+  /** The row_ids pulled out by THIS cycle (length ≤ `extractionBatchSize`). */
+  rowIds: number[];
+  /** A representative of this batch, for the flight animation's thumbnail. */
+  leadRowId: number;
+  extractedCount: number;
+  total: number;
+  /** `extractedCount / total`, 0..1. */
+  fraction: number;
+  /** True iff this cycle emptied the voxel. */
+  complete: boolean;
+}
+
+/**
+ * Turns a raycast hit into progressive extraction — and back again.
  *
- * Phase 3.5 rewrite: mining used to call `InstancedMesh2.setVisibilityAt(id,
- * false)`, which — per Phase 3's own documented finding (confirmed by
- * reading `Raycasting.js`/`FrustumCulling.js`) — makes an instance BOTH
- * invisible AND un-raycastable in one call. That's wrong for the new
- * requirement: a mined voxel must stay visible (translucent) AND stay
- * raycastable/hoverable, so the player can find it again to restore it.
+ * ## Phase 3.5's finding, still the foundation
  *
- * The fix turned out not to need any new shader/uniform machinery: reading
- * `InstancedMesh2`'s source (`InstancedMesh2.js`) turned up a first-class,
- * already-built per-instance opacity channel — `setOpacityAt`/`getOpacityAt`,
- * backed by `colorsTexture` (the same texture `ProxyCloud` already uses for
- * per-instance tint via `instance.color = …`), completely independent of
- * `VoxelMaterial.ts`'s custom `tileIndex` uniform. It lazily allocates itself
- * on first use and does NOT touch `getActiveAndVisibilityAt` (what
- * raycasting/frustum-culling actually gate on), so a mined voxel set to a
- * lower opacity via `setOpacityAt` stays fully hit-testable for free — no
- * separate "third state" plumbing needed in `VoxelMaterial.ts` after all.
- * The one thing that DOES need doing manually: `MeshStandardMaterial`
- * defaults to `transparent: false`, so opacity <1 would otherwise render
- * fully opaque — `ensureTransparentMaterial()` (`voxels/VoxelOpacity.ts`)
- * flips that on lazily, once per chunk material, the first time any voxel in
- * it needs opacity <1 (from mining OR from X-Ray, see the Phase 4 note
- * below — the two share this helper).
+ * Mining originally called `InstancedMesh2.setVisibilityAt(id, false)`, which
+ * — per Phase 3's own documented finding — makes an instance BOTH invisible
+ * AND un-raycastable in one call. That's wrong for a block you must be able to
+ * find again, so 3.5 moved to `InstancedMesh2`'s first-class per-instance
+ * opacity channel (`setOpacityAt`/`getOpacityAt`, backed by `colorsTexture`),
+ * which does NOT touch `getActiveAndVisibilityAt` (what raycasting and frustum
+ * culling actually gate on). A faded voxel therefore stays fully hit-testable
+ * for free. The one thing that needs doing manually:
+ * `MeshStandardMaterial` defaults to `transparent: false`, so opacity < 1 would
+ * otherwise render fully opaque — `ensureTransparentMaterial()` flips that on
+ * lazily, once per chunk material.
  *
- * Mined state still can't live on the mesh across reloads — a chunk's
- * `InstancedMesh2` is disposed on eviction and rebuilt from scratch — so
- * it's tracked here as an independent `Map<chunkId, Set<localVoxelId>>`,
- * re-applied via `onChunkResident` whenever `ChunkStore` reports a chunk
- * becoming resident. Restoring a voxel deletes it from that set (not just a
- * visual revert), so a restored-then-evicted-then-reloaded voxel correctly
- * comes back normal rather than re-mined.
+ * ## Phase 6.5: continuous extraction, not one-shot mining
  *
- * Phase 4 addition: every `setOpacityAt` write below goes through
- * `combinedVoxelOpacity()` (`voxels/VoxelOpacity.ts`) rather than a bare
- * `MINED_OPACITY`/`1`, so a voxel mined (or restored) while the "X-Ray"
- * hotbar item is equipped lands on the correct COMBINED opacity instead of
- * silently ignoring X-Ray's global toggle — e.g. restoring a voxel while
- * X-Ray is still equipped must leave it at `XRAY_OPACITY`, not snap it back
- * to fully opaque. `isXrayActive` is injected as a callback (not a direct
- * `XRayController` reference) to avoid a two-way constructor dependency —
- * `XRayController` itself needs `MiningController.isMined` to do the same
- * combination in reverse. See main.ts's bootstrap-order comment.
+ * Holding a voxel used to move its entire point list into the inventory in one
+ * action and flip a per-voxel boolean. It now runs an `EXTRACTION_CYCLE_MS`
+ * timer repeatedly for as long as the button is held (the timer itself lives
+ * in `main.ts`'s frame loop, which is the only place with a `dt`), and each
+ * completed cycle calls `extract()` here to pull ONE BATCH out. So:
+ *
+ * - a voxel's state is a FRACTION (0 = untouched … 1 = fully drained), not a
+ *   boolean, and its opacity is `lerp(1, EXTRACTION_FLOOR_OPACITY, fraction)`
+ *   via the same `combinedVoxelOpacity()` X-Ray composes through;
+ * - batch size scales with the voxel's own point count
+ *   (`config.ts#extractionBatchSize`), so draining any voxel takes about the
+ *   same number of pulses whether it holds 4 points or 167,700;
+ * - the per-voxel record is a real `VoxelExtraction` (see above) keyed by
+ *   `${chunkId}:${localVoxelId}`, re-applied via `onChunkResident` exactly the
+ *   way 3.5's boolean set was. A voxel drained 40%, evicted, and re-streamed
+ *   comes back at 40% — same fraction, same specific row_ids, no double
+ *   counting (the extracted set is keyed by row_id, so even a re-run of the
+ *   same cycle could not double-extract a point).
+ *
+ * Reversal exists at two granularities and they share one path
+ * (`returnRows`): `restoreAll()` (hold on a fully-drained voxel) and
+ * `returnRow()` (one thumbnail in the inventory panel).
+ *
+ * ## Cross-controller composition
+ *
+ * Every `setOpacityAt` write goes through `combinedVoxelOpacity()`
+ * (`voxels/VoxelOpacity.ts`) rather than a bare constant, so a voxel drained
+ * (or refilled) while the "X-Ray" hotbar item is equipped lands on the correct
+ * COMBINED opacity instead of silently ignoring X-Ray's global toggle.
+ * `isXrayActive` is injected as a callback (not a direct `XRayController`
+ * reference) to avoid a two-way constructor dependency — `XRayController`
+ * itself needs `MiningController.extractedFraction` to do the same combination
+ * in reverse. See main.ts's bootstrap-order comment.
  */
 export class MiningController {
   readonly inventory = new Inventory();
 
-  private readonly minedByChunk = new Map<number, Set<number>>();
+  private readonly extractionByChunk = new Map<number, Map<number, VoxelExtraction>>();
 
   constructor(
     private readonly chunkStore: ChunkStore,
     private readonly isXrayActive: () => boolean = () => false,
   ) {}
 
-  isMined(chunkId: number, localVoxelId: number): boolean {
-    return this.minedByChunk.get(chunkId)?.has(localVoxelId) ?? false;
+  /** 0 (untouched) … 1 (fully drained). The single number every other system
+   * — opacity, cursor style, hold-ring color, HUD label — reads. */
+  extractedFraction(chunkId: number, localVoxelId: number): number {
+    const state = this.extractionByChunk.get(chunkId)?.get(localVoxelId);
+    if (!state || state.total === 0) return 0;
+    return Math.min(1, state.extracted.size / state.total);
+  }
+
+  /** True iff every point in the voxel is currently in the inventory. */
+  isFullyExtracted(chunkId: number, localVoxelId: number): boolean {
+    const state = this.extractionByChunk.get(chunkId)?.get(localVoxelId);
+    return !!state && state.total > 0 && state.extracted.size >= state.total;
+  }
+
+  /** The live per-voxel record, or `undefined` for an untouched voxel.
+   * Exposed for the HUD and the verification harness — treat as read-only. */
+  extractionState(chunkId: number, localVoxelId: number): VoxelExtraction | undefined {
+    return this.extractionByChunk.get(chunkId)?.get(localVoxelId);
+  }
+
+  /** Every voxel this session has touched and not fully returned. */
+  get touchedVoxels(): VoxelExtraction[] {
+    const all: VoxelExtraction[] = [];
+    for (const byVoxel of this.extractionByChunk.values()) all.push(...byVoxel.values());
+    return all;
   }
 
   /**
-   * Mines whatever the current raycast hit points at, if anything. Returns
-   * `true` iff a voxel was actually mined.
+   * Runs ONE extraction cycle against whatever the current raycast hit points
+   * at. Returns the cycle's result, or `null` if nothing was extracted.
    *
    * Silently no-ops for a null hit, a hit against something that isn't a
-   * chunk-voxel mesh (the Phase 1 `?synthetic=1` field has no `chunkId` in
-   * its userData), or a voxel that's already mined — unlike Phase 3, a mined
-   * voxel stays raycastable, so this check is load-bearing now, not just
-   * defensive.
+   * chunk-voxel mesh (the Phase 1 `?synthetic=1` field has no `chunkId` in its
+   * userData), a voxel whose chunk isn't resident, or a voxel that is already
+   * fully drained — a drained voxel stays raycastable, so that last check is
+   * load-bearing, not defensive.
    */
-  mine(hit: VoxelHit | null): boolean {
+  extract(hit: VoxelHit | null): ExtractionCycle | null {
+    if (!hit) return null;
+    const userData = hit.mesh.userData as Partial<ChunkMeshUserData>;
+    if (userData.chunkId === undefined || !userData.instanceToLocalVoxelId) return null;
+
+    const chunkId = userData.chunkId;
+    const localVoxelId = userData.instanceToLocalVoxelId[hit.instanceId];
+    if (localVoxelId === undefined) return null;
+
+    const chunk = this.chunkStore.chunk(chunkId);
+    if (!chunk) return null;
+
+    const total = chunk.meta.count[localVoxelId];
+    if (total === 0) return null;
+
+    const state = this.stateFor(chunkId, localVoxelId, total);
+    if (state.extracted.size >= state.total) return null;
+
+    const batch = extractionBatchSize(state.total);
+    const offset = chunk.meta.pointOffset[localVoxelId];
+    const taken: number[] = [];
+    // Scan the voxel's own point list in file order and take the first `batch`
+    // row_ids that aren't already out. Deliberately a scan rather than a stored
+    // cursor: returns from the inventory can put arbitrary points back at any
+    // time, which a monotonic cursor would either skip over or re-extract. The
+    // scan is O(points in this voxel) — under a millisecond even for BL's
+    // densest 167,700-point voxel, and it runs at most twice a second.
+    for (let i = 0; i < total && taken.length < batch; i++) {
+      const rowId = chunk.meta.pointIds[offset + i];
+      if (state.extracted.has(rowId)) continue;
+      state.extracted.add(rowId);
+      taken.push(rowId);
+    }
+    if (taken.length === 0) return null;
+
+    const stackId = voxelStackId(chunkId, localVoxelId);
+    this.inventory.extractInto(
+      {
+        id: stackId,
+        chunkId,
+        localVoxelId,
+        totalPoints: state.total,
+        reprRowId: chunk.meta.reprRowId[localVoxelId],
+      },
+      taken,
+    );
+
+    ensureTransparentMaterial(hit.mesh);
+    hit.mesh.setOpacityAt(
+      hit.instanceId,
+      combinedVoxelOpacity(state.extracted.size / state.total, this.isXrayActive()),
+    );
+
+    return {
+      chunkId,
+      localVoxelId,
+      stackId,
+      rowIds: taken,
+      leadRowId: taken[0],
+      extractedCount: state.extracted.size,
+      total: state.total,
+      fraction: state.extracted.size / state.total,
+      complete: state.extracted.size >= state.total,
+    };
+  }
+
+  /**
+   * Pushes a fully-drained voxel's ENTIRE stack back into it: opacity back to
+   * normal, the per-voxel record dropped (so eviction/reload doesn't resurrect
+   * a drained state), and its inventory stack removed. Returns `true` iff a
+   * voxel was actually restored.
+   *
+   * Deliberately gated on FULLY drained rather than "partially drained too":
+   * the same gesture (hold) means "keep extracting" on a partially drained
+   * voxel, so allowing bulk-restore there would make one hold ambiguous. The
+   * inventory panel's per-item and per-stack returns cover the partial case
+   * without needing a second 3D binding.
+   */
+  restoreAll(hit: VoxelHit | null): boolean {
     if (!hit) return false;
     const userData = hit.mesh.userData as Partial<ChunkMeshUserData>;
     if (userData.chunkId === undefined || !userData.instanceToLocalVoxelId) return false;
 
     const chunkId = userData.chunkId;
     const localVoxelId = userData.instanceToLocalVoxelId[hit.instanceId];
-    if (localVoxelId === undefined || this.isMined(chunkId, localVoxelId)) return false;
+    if (localVoxelId === undefined || !this.isFullyExtracted(chunkId, localVoxelId)) return false;
 
-    const chunk = this.chunkStore.chunk(chunkId);
-    if (!chunk) return false;
-
-    this.markMined(chunkId, localVoxelId);
-    ensureTransparentMaterial(hit.mesh);
-    hit.mesh.setOpacityAt(hit.instanceId, combinedVoxelOpacity(true, this.isXrayActive()));
-    this.snapshotStack(chunk, localVoxelId);
+    this.clearState(chunkId, localVoxelId);
+    // NOT a bare `1` — if X-Ray is still equipped, a restored voxel must land
+    // back on XRAY_OPACITY (still see-through, per that item's global effect),
+    // not snap to fully opaque just because its extraction state cleared.
+    hit.mesh.setOpacityAt(hit.instanceId, combinedVoxelOpacity(0, this.isXrayActive()));
+    this.inventory.removeStack(voxelStackId(chunkId, localVoxelId));
     return true;
   }
 
   /**
-   * Reverses `mine()` for whatever the current raycast hit points at: opacity
-   * back to normal, cleared from the persisted mined-set (so eviction/reload
-   * doesn't bring it back mined), and its inventory stack removed. Returns
-   * `true` iff a voxel was actually restored.
+   * Sends ONE specific point back into its source voxel, from the inventory
+   * panel. Returns `true` iff that row was actually extracted from that stack.
+   *
+   * Works whether or not the voxel's chunk is currently resident: the
+   * authoritative state is the extracted set here, and the visual (opacity)
+   * is re-derived either immediately (resident) or on the next
+   * `onChunkResident` (not resident).
    */
-  restore(hit: VoxelHit | null): boolean {
-    if (!hit) return false;
-    const userData = hit.mesh.userData as Partial<ChunkMeshUserData>;
-    if (userData.chunkId === undefined || !userData.instanceToLocalVoxelId) return false;
+  returnRow(stackId: string, rowId: number): boolean {
+    const stack = this.inventory.stack(stackId);
+    if (!stack) return false;
+    const { chunkId, localVoxelId } = stack;
+    const state = this.extractionByChunk.get(chunkId)?.get(localVoxelId);
+    if (!state?.extracted.delete(rowId)) return false;
 
-    const chunkId = userData.chunkId;
-    const localVoxelId = userData.instanceToLocalVoxelId[hit.instanceId];
-    if (localVoxelId === undefined || !this.isMined(chunkId, localVoxelId)) return false;
+    this.inventory.returnRow(stackId, rowId);
+    if (state.extracted.size === 0) this.clearState(chunkId, localVoxelId);
+    this.applyToResidentVoxel(chunkId, localVoxelId);
+    return true;
+  }
 
-    this.unmark(chunkId, localVoxelId);
-    // NOT a bare `1` — if X-Ray is still equipped, a restored voxel must
-    // land back on XRAY_OPACITY (still see-through, per that item's global
-    // effect), not snap to fully opaque just because mining's own state
-    // cleared. See this class's doc comment.
-    hit.mesh.setOpacityAt(hit.instanceId, combinedVoxelOpacity(false, this.isXrayActive()));
-    this.inventory.removeStack(voxelKey(chunkId, localVoxelId));
+  /**
+   * Sends an entire stack back into its source voxel, from the inventory panel
+   * — the partial-drain counterpart to `restoreAll`'s hold gesture (that one
+   * only offers itself once a voxel is completely drained, so this is the only
+   * way to undo a half-drain in one action).
+   *
+   * Deliberately NOT a loop over `returnRow`: both the extracted `Set` and the
+   * stack's `rowIds` array would be walked per point, and a 167,700-point
+   * stack would make that ~2.8e10 operations — a hung tab. Clearing the whole
+   * state and dropping the whole stack is O(1) bookkeeping for the same
+   * outcome.
+   */
+  returnStack(stackId: string): boolean {
+    const stack = this.inventory.stack(stackId);
+    if (!stack) return false;
+    const { chunkId, localVoxelId } = stack;
+    if (!this.extractionByChunk.get(chunkId)?.has(localVoxelId)) return false;
+
+    this.clearState(chunkId, localVoxelId);
+    this.inventory.removeStack(stackId);
+    this.applyToResidentVoxel(chunkId, localVoxelId);
     return true;
   }
 
   /**
    * Called (via `ChunkStore`'s `onResidencyChanged` hook) whenever a chunk
-   * becomes resident. Re-applies mined opacity to any voxel this session
-   * already mined in it — restored voxels are, by construction, no longer in
-   * `minedByChunk` (see `restore()`), so they correctly come back normal
-   * rather than re-mined.
+   * becomes resident. Re-applies extraction-derived opacity to every voxel in
+   * it this session has drained — fully-returned voxels are, by construction,
+   * no longer tracked (see `clearState`), so they correctly come back normal
+   * rather than stuck faded.
    *
    * `chunk.meta.occupied[instanceId] === localVoxelId` is the same identity
    * `ChunkLoader.load`'s `addInstances` loop relies on (instance ids are
-   * assigned in ascending-`occupied`-index order), so scanning it once
-   * inverts instanceId↔localVoxelId without a persistent side table. Only
-   * done when this chunk actually has mined voxels to reapply.
+   * assigned in ascending-`occupied`-index order), so scanning it once inverts
+   * instanceId↔localVoxelId without a persistent side table. Only done when
+   * this chunk actually has drained voxels to reapply.
    */
   onChunkResident(chunkId: number): void {
-    const mined = this.minedByChunk.get(chunkId);
-    if (!mined || mined.size === 0) return;
+    const byVoxel = this.extractionByChunk.get(chunkId);
+    if (!byVoxel || byVoxel.size === 0) return;
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk) return;
 
@@ -145,43 +318,70 @@ export class MiningController {
     const xrayActive = this.isXrayActive();
     const occupied = chunk.meta.occupied;
     for (let instanceId = 0; instanceId < occupied.length; instanceId++) {
-      if (mined.has(occupied[instanceId])) {
-        chunk.mesh.setOpacityAt(instanceId, combinedVoxelOpacity(true, xrayActive));
-      }
+      const state = byVoxel.get(occupied[instanceId]);
+      if (!state) continue;
+      chunk.mesh.setOpacityAt(
+        instanceId,
+        combinedVoxelOpacity(state.extracted.size / state.total, xrayActive),
+      );
     }
   }
 
-  private markMined(chunkId: number, localVoxelId: number): void {
-    let set = this.minedByChunk.get(chunkId);
-    if (!set) {
-      set = new Set();
-      this.minedByChunk.set(chunkId, set);
+  private stateFor(chunkId: number, localVoxelId: number, total: number): VoxelExtraction {
+    let byVoxel = this.extractionByChunk.get(chunkId);
+    if (!byVoxel) {
+      byVoxel = new Map();
+      this.extractionByChunk.set(chunkId, byVoxel);
     }
-    set.add(localVoxelId);
+    let state = byVoxel.get(localVoxelId);
+    if (!state) {
+      state = { chunkId, localVoxelId, total, extracted: new Set() };
+      byVoxel.set(localVoxelId, state);
+    }
+    return state;
   }
 
-  private unmark(chunkId: number, localVoxelId: number): void {
-    this.minedByChunk.get(chunkId)?.delete(localVoxelId);
+  private clearState(chunkId: number, localVoxelId: number): void {
+    const byVoxel = this.extractionByChunk.get(chunkId);
+    if (!byVoxel) return;
+    byVoxel.delete(localVoxelId);
+    if (byVoxel.size === 0) this.extractionByChunk.delete(chunkId);
   }
 
-  private snapshotStack(chunk: LoadedChunk, localVoxelId: number): void {
-    const { meta } = chunk;
-    const count = meta.count[localVoxelId];
-    const offset = meta.pointOffset[localVoxelId];
-    // .slice() copies rather than views: `meta.pointIds` backs the WHOLE
-    // chunk's point list (up to ~167K for a dense BL chunk) off one shared
-    // ArrayBuffer, and holding a strided view over it would keep that entire
-    // buffer alive in the inventory for the life of the session. The stack
-    // itself is at most a few hundred/thousand row_ids — a real copy is
-    // cheap and lets the rest of the chunk's memory go on eviction.
-    const rowIds = meta.pointIds.slice(offset, offset + count);
-    this.inventory.addStack({
-      id: voxelKey(chunk.entry.chunk_id, localVoxelId),
-      chunkId: chunk.entry.chunk_id,
-      localVoxelId,
-      rowIds,
-      reprRowId: meta.reprRowId[localVoxelId],
-      minedAt: Date.now(),
-    });
+  /** Re-derives one voxel's opacity from its current state, if its chunk
+   * happens to be resident. A no-op otherwise — `onChunkResident` will do it
+   * when the chunk comes back. */
+  private applyToResidentVoxel(chunkId: number, localVoxelId: number): void {
+    const chunk = this.chunkStore.chunk(chunkId);
+    if (!chunk) return;
+    const instanceId = instanceIdOf(chunk, localVoxelId);
+    if (instanceId < 0) return;
+    ensureTransparentMaterial(chunk.mesh);
+    chunk.mesh.setOpacityAt(
+      instanceId,
+      combinedVoxelOpacity(this.extractedFraction(chunkId, localVoxelId), this.isXrayActive()),
+    );
   }
+}
+
+/**
+ * instanceId for a localVoxelId within a loaded chunk, or -1.
+ *
+ * `meta.occupied` is built by scanning voxel records in ascending index order
+ * (`ChunkLoader.parseChunkMeta`), so it is sorted — a binary search is exact,
+ * not a heuristic. Worth it over `indexOf`: this runs once per returned point,
+ * and a chunk can carry up to 4,096 occupied voxels.
+ */
+function instanceIdOf(chunk: LoadedChunk, localVoxelId: number): number {
+  const occupied = chunk.meta.occupied;
+  let lo = 0;
+  let hi = occupied.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const value = occupied[mid];
+    if (value === localVoxelId) return mid;
+    if (value < localVoxelId) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return -1;
 }
