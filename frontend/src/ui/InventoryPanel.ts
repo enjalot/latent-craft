@@ -2,32 +2,27 @@ import type { Inventory, InventoryStack } from "../interaction/Inventory.ts";
 import { resolveThumbUrl, type PointIndex } from "../streaming/PointIndex.ts";
 import { INVENTORY_THUMBS_PAGE_SIZE } from "../config.ts";
 import { Lightbox } from "./Lightbox.ts";
+import { applyHudPanelChrome, applyHudTitle, HUD_CLASS } from "./hudPanel.ts";
 
 const PANEL_STYLE: Partial<CSSStyleDeclaration> = {
   position: "fixed",
-  top: "12px",
-  right: "12px",
+  top: "14px",
+  right: "14px",
   width: "300px",
-  maxHeight: "calc(100vh - 24px)",
+  maxHeight: "calc(100vh - 28px)",
   display: "flex",
   flexDirection: "column",
-  background: "rgba(5, 6, 10, 0.72)",
-  color: "#d7e2ff",
-  fontSize: "12px",
+  fontSize: "11px",
   lineHeight: "1.5",
-  fontFamily: "system-ui, sans-serif",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: "6px",
   zIndex: "10",
-  // Phase 3 scope is functional, not the late-90s cockpit skin (that's a
-  // later phase) — plain readable box, but it DOES need real pointer events
-  // (unlike Hud.ts, which is display-only), so this cannot inherit the app
-  // container's default pointer-events:none.
+  // Frame/ground/type all come from `applyHudPanelChrome` below, but this
+  // panel DOES need real pointer events (unlike Hud.ts, which is display-only),
+  // so it cannot inherit the app container's default pointer-events:none.
   pointerEvents: "auto",
 };
 
 /**
- * Unskinned mining inventory panel. Lists one row per mined voxel stack;
+ * Mining inventory panel. Lists one row per mined voxel stack;
  * clicking a row toggles an inline grid of that stack's full-resolution
  * thumbnails.
  *
@@ -51,6 +46,9 @@ const PANEL_STYLE: Partial<CSSStyleDeclaration> = {
 export class InventoryPanel {
   private readonly root: HTMLElement;
   private readonly headerEl: HTMLElement;
+  /** Right-hand half of the header strip — carries the live stack/point
+   * counts, so the (static) "Inventory" title next to it never reflows. */
+  private readonly headerCountEl: HTMLElement;
   private readonly listEl: HTMLElement;
   private readonly emptyEl: HTMLElement;
   private readonly lightbox: Lightbox;
@@ -71,25 +69,39 @@ export class InventoryPanel {
     this.root = document.createElement("div");
     this.root.className = "ls-inventory-panel";
     Object.assign(this.root.style, PANEL_STYLE);
+    applyHudPanelChrome(this.root);
 
     this.headerEl = document.createElement("div");
+    applyHudTitle(this.headerEl, { bar: true });
     Object.assign(this.headerEl.style, {
-      padding: "10px 12px",
-      borderBottom: "1px solid rgba(255,255,255,0.12)",
-      fontWeight: "600",
+      display: "flex",
+      alignItems: "baseline",
+      justifyContent: "space-between",
+      gap: "10px",
+      padding: "9px 12px 8px",
+      flex: "none",
     } satisfies Partial<CSSStyleDeclaration>);
+    const headerTitleEl = document.createElement("span");
+    headerTitleEl.textContent = "Inventory";
+    this.headerCountEl = document.createElement("span");
+    this.headerCountEl.classList.add(HUD_CLASS.dim);
+    // The counts run long ("12 STACKS · 123,456 PTS"); at the title's tracking
+    // that would wrap the header, so this half drops the letter-spacing.
+    this.headerCountEl.style.letterSpacing = "0.04em";
+    this.headerEl.append(headerTitleEl, this.headerCountEl);
     this.root.appendChild(this.headerEl);
 
     this.emptyEl = document.createElement("div");
     this.emptyEl.textContent = "Hold click on a voxel to mine it and fill your inventory.";
+    this.emptyEl.classList.add(HUD_CLASS.dim);
     Object.assign(this.emptyEl.style, {
       padding: "10px 12px",
-      opacity: "0.7",
-      fontStyle: "italic",
+      letterSpacing: "0.02em",
     } satisfies Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.emptyEl);
 
     this.listEl = document.createElement("div");
+    this.listEl.classList.add(HUD_CLASS.scroll);
     Object.assign(this.listEl.style, {
       overflowY: "auto",
     } satisfies Partial<CSSStyleDeclaration>);
@@ -104,7 +116,7 @@ export class InventoryPanel {
 
   private render(stacks: InventoryStack[]): void {
     const totalPoints = this.inventory.totalPoints;
-    this.headerEl.textContent = `Inventory — ${stacks.length} stack${stacks.length === 1 ? "" : "s"}, ${totalPoints.toLocaleString()} pts`;
+    this.headerCountEl.textContent = `${stacks.length} stack${stacks.length === 1 ? "" : "s"} · ${totalPoints.toLocaleString()} pts`;
     this.emptyEl.hidden = stacks.length > 0;
 
     for (const stack of stacks) {
@@ -119,11 +131,10 @@ export class InventoryPanel {
 
   private buildRow(stack: InventoryStack): HTMLElement {
     const row = document.createElement("div");
-    row.className = "ls-inventory-row";
+    row.className = `ls-inventory-row ${HUD_CLASS.row}`;
     row.dataset.stackId = stack.id;
     Object.assign(row.style, {
       padding: "8px 12px",
-      borderBottom: "1px solid rgba(255,255,255,0.08)",
       cursor: "pointer",
     } satisfies Partial<CSSStyleDeclaration>);
 
@@ -141,12 +152,11 @@ export class InventoryPanel {
     thumb.loading = "lazy";
     thumb.decoding = "async";
     thumb.alt = `row ${stack.reprRowId}`;
+    thumb.classList.add(HUD_CLASS.thumb);
     Object.assign(thumb.style, {
       width: "32px",
       height: "32px",
       objectFit: "cover",
-      background: "#1b1e28",
-      borderRadius: "3px",
       flex: "none",
     } satisfies Partial<CSSStyleDeclaration>);
     summary.appendChild(thumb);
@@ -160,13 +170,13 @@ export class InventoryPanel {
     const label = document.createElement("div");
     label.style.flex = "1";
     label.innerHTML =
-      `<div>${stack.rowIds.length.toLocaleString()} pts</div>` +
-      `<div style="opacity:0.6">chunk ${stack.chunkId} · voxel ${stack.localVoxelId}</div>`;
+      `<div class="${HUD_CLASS.readout}" style="letter-spacing:0.06em">${stack.rowIds.length.toLocaleString()} PTS</div>` +
+      `<div class="${HUD_CLASS.dim}" style="font-size:10px">chunk ${stack.chunkId} · voxel ${stack.localVoxelId}</div>`;
     summary.appendChild(label);
 
     const caret = document.createElement("span");
     caret.textContent = "▸";
-    caret.style.opacity = "0.6";
+    caret.classList.add(HUD_CLASS.dim);
     summary.appendChild(caret);
 
     const grid = document.createElement("div");
@@ -186,16 +196,11 @@ export class InventoryPanel {
 
     const showMoreBtn = document.createElement("button");
     showMoreBtn.type = "button";
+    showMoreBtn.classList.add(HUD_CLASS.button);
     Object.assign(showMoreBtn.style, {
       gridColumn: "1 / -1",
-      marginTop: "4px",
-      padding: "4px",
-      background: "rgba(255,255,255,0.08)",
-      border: "1px solid rgba(255,255,255,0.15)",
-      borderRadius: "3px",
-      color: "inherit",
-      cursor: "pointer",
-      font: "inherit",
+      marginTop: "5px",
+      padding: "5px 4px",
     } satisfies Partial<CSSStyleDeclaration>);
 
     const appendBatch = async () => {
@@ -214,12 +219,11 @@ export class InventoryPanel {
         img.loading = "lazy";
         img.decoding = "async";
         img.alt = `row ${rowId}`;
+        img.classList.add(HUD_CLASS.thumb);
         Object.assign(img.style, {
           width: "100%",
           aspectRatio: "1",
           objectFit: "cover",
-          background: "#1b1e28",
-          borderRadius: "2px",
           cursor: "zoom-in",
         } satisfies Partial<CSSStyleDeclaration>);
         // Clicking a grid thumbnail opens it enlarged (Lightbox), rather

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { applyHudPanelChrome, applyHudTitle, HUD_CLASS } from "./hudPanel.ts";
 
 export interface HudStreamingState {
   /** Dataset label from the config registry. */
@@ -40,16 +41,17 @@ function formatBytes(bytes: number): string {
 }
 
 /**
- * Minimal plain-DOM perf/debug HUD — no framework, no VDOM. Phase 2 scope:
- * FPS, residency/streaming counters, camera position, and whatever the
- * raycaster currently has under the crosshair. The skinned late-90s cockpit
- * HUD (theme.css, hudPanel() wrapper, lit-html panels) is Phase 6; this is
- * deliberately throwaway-simple until then.
+ * Plain-DOM perf/telemetry HUD — no framework, no VDOM. Scope: FPS,
+ * residency/streaming counters, camera position, and whatever the raycaster
+ * currently has under the cursor.
  *
  * Collapsible (Phase 4): the whole panel is `pointer-events: none` so the
  * flight controls' drag-to-look still works when the cursor happens to be
  * over the top-left corner — only the small header strip opts back into
  * `pointer-events: auto` so it can be clicked to fold/unfold the body.
+ *
+ * Phase 6: frame/ground/CRT texture all come from `applyHudPanelChrome`; the
+ * only styling left inline here is layout (position, padding, flex).
  */
 const COLLAPSE_STORAGE_KEY = "lsv-hud-collapsed";
 
@@ -65,25 +67,22 @@ export class Hud {
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       position: "fixed",
-      top: "12px",
-      left: "12px",
-      background: "rgba(5, 6, 10, 0.65)",
-      color: "#d7e2ff",
-      fontSize: "12px",
-      lineHeight: "1.6",
-      borderRadius: "6px",
-      border: "1px solid rgba(255,255,255,0.12)",
+      top: "14px",
+      left: "14px",
+      fontSize: "11px",
+      lineHeight: "1.65",
       pointerEvents: "none",
       zIndex: "10",
     } satisfies Partial<CSSStyleDeclaration>);
+    applyHudPanelChrome(this.root);
 
     this.header = document.createElement("div");
     Object.assign(this.header.style, {
       display: "flex",
       alignItems: "center",
       justifyContent: "space-between",
-      gap: "16px",
-      padding: "4px 8px",
+      gap: "20px",
+      padding: "5px 10px",
       cursor: "pointer",
       pointerEvents: "auto",
       userSelect: "none",
@@ -91,23 +90,23 @@ export class Hud {
     this.header.title = "Toggle HUD";
 
     const label = document.createElement("span");
-    label.textContent = "HUD";
-    Object.assign(label.style, {
-      opacity: "0.75",
-      letterSpacing: "0.06em",
-      fontSize: "11px",
-    } satisfies Partial<CSSStyleDeclaration>);
+    label.textContent = "Telemetry";
+    applyHudTitle(label);
 
     this.toggleGlyph = document.createElement("span");
+    this.toggleGlyph.classList.add(HUD_CLASS.title);
+    this.toggleGlyph.style.letterSpacing = "0";
 
     this.header.appendChild(label);
     this.header.appendChild(this.toggleGlyph);
     this.header.addEventListener("click", () => this.setCollapsed(!this.collapsed));
 
     this.body = document.createElement("div");
+    this.body.classList.add(HUD_CLASS.readout);
     Object.assign(this.body.style, {
-      padding: "0 14px 10px",
+      padding: "7px 14px 11px",
       whiteSpace: "pre",
+      letterSpacing: "0.02em",
     } satisfies Partial<CSSStyleDeclaration>);
 
     this.root.appendChild(this.header);
@@ -130,10 +129,10 @@ export class Hud {
   private setCollapsed(collapsed: boolean): void {
     this.collapsed = collapsed;
     this.body.style.display = collapsed ? "none" : "block";
-    this.header.style.borderBottom = collapsed
-      ? "none"
-      : "1px solid rgba(255,255,255,0.12)";
-    this.header.style.padding = collapsed ? "4px 8px" : "4px 8px 3px";
+    // The header rule is part of the skin, so it's a class toggle rather than
+    // an inline border write (see theme.css `.hud-title-bar`).
+    this.header.classList.toggle(HUD_CLASS.titleBar, !collapsed);
+    this.header.style.padding = collapsed ? "5px 10px" : "5px 10px 4px";
     this.toggleGlyph.textContent = collapsed ? "[+]" : "[-]";
     try {
       localStorage.setItem(COLLAPSE_STORAGE_KEY, collapsed ? "1" : "0");

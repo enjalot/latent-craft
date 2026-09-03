@@ -1,3 +1,4 @@
+import { applyHudPanelChrome, applyHudTitle, HUD_CLASS } from "../ui/hudPanel.ts";
 import { composeDensityBase, type DensityBase } from "./DensityBase.ts";
 import type { MinimapPack } from "./Manifest.ts";
 import {
@@ -89,36 +90,37 @@ export class MinimapRenderer {
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       position: "fixed",
-      right: "12px",
-      bottom: "12px",
-      background: "rgba(5, 6, 10, 0.72)",
-      border: "1px solid rgba(255,255,255,0.12)",
-      borderRadius: "6px",
-      color: "#d7e2ff",
+      right: "14px",
+      bottom: "14px",
       fontSize: "11px",
       lineHeight: "1.4",
-      padding: "4px 6px 6px",
+      padding: "5px 7px 6px",
       zIndex: "10",
       userSelect: "none",
       // The map area opts back into pointer events below; the chrome around it
       // stays inert so it can't swallow a look-drag that starts near the edge.
       pointerEvents: "none",
     } satisfies Partial<CSSStyleDeclaration>);
+    // Frame only. The scanline layer sits at z-index:-1 (see hudPanel.ts), so
+    // it textures the panel gutter WITHOUT overlaying the density image — the
+    // map has to render exactly as the pipeline drew it.
+    applyHudPanelChrome(this.root);
 
     const header = document.createElement("div");
+    applyHudTitle(header, { bar: true });
     Object.assign(header.style, {
       display: "flex",
       justifyContent: "space-between",
+      alignItems: "baseline",
       gap: "10px",
-      padding: "0 2px 4px",
-      opacity: "0.75",
-      letterSpacing: "0.05em",
-      fontSize: "10px",
+      padding: "1px 2px 4px",
     } satisfies Partial<CSSStyleDeclaration>);
     const title = document.createElement("span");
-    title.textContent = "MAP · 2D UMAP";
+    title.textContent = "Map · 2D UMAP";
     const count = document.createElement("span");
     count.textContent = `${pack.nPoints.toLocaleString()} pts`;
+    count.classList.add(HUD_CLASS.dim);
+    count.style.letterSpacing = "0.04em";
     header.append(title, count);
 
     this.mapWrap = document.createElement("div");
@@ -127,9 +129,10 @@ export class MinimapRenderer {
       width: `${this.sizePx}px`,
       height: `${this.sizePx}px`,
       // Slightly lighter than the panel so the extent of the 2D frame is
-      // legible even where the embedding has no points.
-      background: "#0a0e18",
-      border: "1px solid rgba(255,255,255,0.10)",
+      // legible even where the embedding has no points. Opaque on purpose —
+      // it's what keeps the panel's CRT scanline layer off the density image.
+      background: "#04141b",
+      border: "1px solid var(--hud-line)",
       cursor: "crosshair",
       pointerEvents: "auto",
       overflow: "hidden",
@@ -143,16 +146,22 @@ export class MinimapRenderer {
     this.mapWrap.append(this.baseCanvas, this.overlayCanvas);
 
     this.captionEl = document.createElement("div");
+    this.captionEl.classList.add(HUD_CLASS.dim);
     Object.assign(this.captionEl.style, {
       width: `${this.sizePx}px`,
       // Fixed two-line box: the readouts here change on every pointer move,
       // and a caption that grows/shrinks would jitter the whole panel (which
       // is anchored bottom-right, so it would move the MAP, not just the text).
+      // The 26px/13px geometry is load-bearing — the Phase 6 skin only changes
+      // color and tracking here, never the box.
       height: "26px",
       padding: "4px 1px 0",
-      color: "#9fb3e0",
       fontSize: "10px",
       lineHeight: "13px",
+      // No extra tracking here, unlike the rest of the skin: the readout lines
+      // are already sized to fill this fixed 220px box, and letter-spacing
+      // pushed the longest one ("… in loaded chunks") past the clip edge.
+      letterSpacing: "0",
       whiteSpace: "pre",
       overflow: "hidden",
     } satisfies Partial<CSSStyleDeclaration>);

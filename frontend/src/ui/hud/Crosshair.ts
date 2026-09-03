@@ -25,15 +25,25 @@ export interface HoldProgressRing {
   setPosition(xPx: number, yPx: number): void;
 }
 
-const SIZE = 30;
-const RADIUS = 11;
+const SIZE = 34;
+const RADIUS = 12;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 const RING_COLORS: Record<"mine" | "restore", string> = {
-  // Matches the existing hover-highlight teal used elsewhere in the HUD.
+  // FUNCTIONAL colors, not chrome: the teal is the same hover-highlight teal
+  // the 3D wireframe uses, and the amber is the same amber as the minimap
+  // flashlight. Phase 6's cyan skin deliberately does not touch these — the
+  // ring's whole job is to say *which* action is arming.
   mine: "#7fffe0",
   restore: "#ffb15c",
 };
+
+/** Chrome (static parts of the reticle) — dim cyan so the functional arc
+ * above always wins the eye. Mirrors `--hud-accent` / `--hud-line` from
+ * `ui/theme.css`; kept as literals here because these are SVG paint
+ * attributes, not CSS properties on a themed element. */
+const RETICLE_LINE = "rgba(70, 200, 224, 0.38)";
+const RETICLE_BRACKET = "rgba(143, 233, 247, 0.72)";
 
 export function createHoldProgressRing(container: HTMLElement): HoldProgressRing {
   const root = document.createElement("div");
@@ -60,14 +70,55 @@ export function createHoldProgressRing(container: HTMLElement): HoldProgressRing
 
   const center = SIZE / 2;
 
+  // Four L-shaped corner ticks: the same targeting-bracket motif the panels
+  // use, at reticle scale. Static chrome — never recolored per action.
+  const bracketArm = 5;
+  const bracketInset = 1.5;
+  for (const [sx, sy] of [
+    [1, 1],
+    [-1, 1],
+    [1, -1],
+    [-1, -1],
+  ] as const) {
+    const x = sx > 0 ? bracketInset : SIZE - bracketInset;
+    const y = sy > 0 ? bracketInset : SIZE - bracketInset;
+    const bracket = document.createElementNS(svgNs, "path");
+    bracket.setAttribute(
+      "d",
+      `M ${x + sx * bracketArm} ${y} L ${x} ${y} L ${x} ${y + sy * bracketArm}`,
+    );
+    bracket.setAttribute("fill", "none");
+    bracket.setAttribute("stroke", RETICLE_BRACKET);
+    bracket.setAttribute("stroke-width", "1");
+    svg.appendChild(bracket);
+  }
+
   const track = document.createElementNS(svgNs, "circle");
   track.setAttribute("cx", String(center));
   track.setAttribute("cy", String(center));
   track.setAttribute("r", String(RADIUS));
-  track.setAttribute("fill", "none");
-  track.setAttribute("stroke", "rgba(255,255,255,0.28)");
+  track.setAttribute("fill", "rgba(3, 11, 16, 0.35)");
+  track.setAttribute("stroke", RETICLE_LINE);
   track.setAttribute("stroke-width", "2.5");
   svg.appendChild(track);
+
+  // Four cardinal ticks around the track — a graduated dial, the cheapest way
+  // to make a plain circle read as instrumentation rather than a spinner.
+  for (const [dx, dy] of [
+    [0, -1],
+    [1, 0],
+    [0, 1],
+    [-1, 0],
+  ] as const) {
+    const tick = document.createElementNS(svgNs, "line");
+    tick.setAttribute("x1", String(center + dx * (RADIUS + 2)));
+    tick.setAttribute("y1", String(center + dy * (RADIUS + 2)));
+    tick.setAttribute("x2", String(center + dx * (RADIUS + 4.5)));
+    tick.setAttribute("y2", String(center + dy * (RADIUS + 4.5)));
+    tick.setAttribute("stroke", RETICLE_LINE);
+    tick.setAttribute("stroke-width", "1");
+    svg.appendChild(tick);
+  }
 
   const progress = document.createElementNS(svgNs, "circle");
   progress.setAttribute("cx", String(center));
@@ -87,7 +138,7 @@ export function createHoldProgressRing(container: HTMLElement): HoldProgressRing
   dot.setAttribute("cx", String(center));
   dot.setAttribute("cy", String(center));
   dot.setAttribute("r", "1.6");
-  dot.setAttribute("fill", "rgba(255,255,255,0.9)");
+  dot.setAttribute("fill", "rgba(223, 251, 255, 0.92)");
   svg.appendChild(dot);
 
   container.appendChild(root);
@@ -95,6 +146,9 @@ export function createHoldProgressRing(container: HTMLElement): HoldProgressRing
   return {
     show(kind) {
       progress.setAttribute("stroke", RING_COLORS[kind]);
+      // Phosphor bloom in the action's own color, so the arc reads as lit
+      // instrumentation against the dim chrome track underneath it.
+      progress.style.filter = `drop-shadow(0 0 3px ${RING_COLORS[kind]})`;
       progress.setAttribute("stroke-dashoffset", String(CIRCUMFERENCE));
       root.style.display = "block";
     },

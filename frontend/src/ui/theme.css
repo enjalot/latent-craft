@@ -1,0 +1,281 @@
+/**
+ * theme.css — the one and only skin asset for the HUD (Phase 6).
+ *
+ * Genre reference: late-90s space-combat cockpit HUDs (Wing Commander,
+ * TIE Fighter, Descent) — a cyan tactical glow etched onto near-black glass,
+ * everything monospaced, everything angular. Deliberately NOT modern UI:
+ * no rounded corners, no soft shadows, no sans-serif.
+ *
+ * Every panel in `ui/` and `minimap/` composes through `ui/hudPanel.ts`,
+ * which is the only module that touches these class names — so the skin is
+ * one token set here, not per-component CSS scattered across the panels.
+ *
+ * Two color families live here and they mean different things:
+ *
+ * 1. CHROME (`--hud-accent*`, `--hud-line*`, `--hud-ground*`, `--hud-text*`)
+ *    — panel frames, backgrounds, titles, static labels. Purely decorative;
+ *    carries no state.
+ * 2. SIGNALS (`--hud-signal-*`) — mirrors of the functional colors already
+ *    defined in `config.ts` / `main.ts` (hover-highlight teal, flashlight and
+ *    restore amber, effector-field violet). These are NOT part of the skin's
+ *    palette; they are quoted here so panel chrome can be tuned to stay OUT
+ *    of their way. Never repaint a signal to match the chrome — the chrome is
+ *    what gets dimmed so a signal reads.
+ */
+
+:root {
+  /* Monospace everywhere; system stack only — this project loads no webfonts. */
+  --hud-font: ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace;
+
+  /* --- chrome ------------------------------------------------------------ */
+  /* Blue-cyan, deliberately a step bluer/duller than the teal signal color
+   * (#7fffe0) so an equipped hotbar slot or a hover highlight still reads as
+   * "lit up" rather than blending into the frame it sits in. */
+  --hud-accent: #46c8e0;
+  --hud-accent-bright: #8fe9f7;
+  --hud-line: rgba(70, 200, 224, 0.42);
+  --hud-line-soft: rgba(70, 200, 224, 0.16);
+  --hud-glow: rgba(70, 200, 224, 0.18);
+
+  /* Panel grounds stay translucent: the 3D world has to survive behind them. */
+  --hud-ground: rgba(3, 11, 16, 0.82);
+  --hud-ground-inset: rgba(2, 8, 12, 0.72);
+  --hud-well: rgba(2, 7, 11, 0.55);
+
+  --hud-text: #b9dfe9;
+  --hud-text-dim: #6f9aa8;
+  --hud-title: #8fe9f7;
+
+  /* --- functional signals (mirrored, never overridden) ------------------- */
+  --hud-signal-teal: #7fffe0; /* hover wireframe, mine ring, minimap crosshair */
+  --hud-signal-amber: #ffb347; /* minimap flashlight, restore ring */
+  --hud-signal-violet: #9d7bff; /* effector-field gizmo */
+
+  /* --- CRT texture ------------------------------------------------------- */
+  --hud-scanline-dark: rgba(0, 0, 0, 0.30);
+  --hud-scanline-lit: rgba(70, 200, 224, 0.045);
+  --hud-scanline-period: 3px;
+}
+
+/* --------------------------------------------------------------------------
+ * Panel frame
+ * ------------------------------------------------------------------------ */
+
+.hud-panel {
+  font-family: var(--hud-font);
+  color: var(--hud-text);
+  /* Square corners are the whole point — a radius here would read as 2020s UI. */
+  border-radius: 0;
+  border: 1px solid var(--hud-line);
+  background:
+    linear-gradient(180deg, rgba(70, 200, 224, 0.07), rgba(70, 200, 224, 0) 46px),
+    var(--hud-ground);
+  box-shadow:
+    /* hard black keyline outside the glow so the frame stays legible against
+       a bright (paper-white) part of the voxel field */
+    0 0 0 1px rgba(0, 0, 0, 0.6),
+    /* the "etched glass" top highlight */ inset 0 1px 0 rgba(143, 233, 247, 0.22),
+    inset 0 0 0 1px rgba(70, 200, 224, 0.06),
+    0 0 14px var(--hud-glow);
+  backdrop-filter: blur(2px) saturate(0.85);
+  /* Forces a stacking context so the z-index:-1 scanline layer paints ABOVE
+   * this element's own background but BELOW its content (see hudPanel.ts). */
+  isolation: isolate;
+}
+
+/* Smaller sub-frame: hotbar status strip, lightbox frame. Same language, less
+ * ceremony — no top gradient, tighter glow. */
+.hud-panel--inset {
+  background: var(--hud-ground-inset);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(143, 233, 247, 0.14),
+    0 0 10px rgba(70, 200, 224, 0.12);
+}
+
+/* CRT scanlines + a faint top-down phosphor falloff. Sits at z-index:-1 so it
+ * textures the panel ground without ever covering panel content (notably the
+ * minimap's density image, which must render exactly as the pipeline drew it). */
+.hud-panel__scan {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(70, 200, 224, 0.05), rgba(0, 0, 0, 0) 60%),
+    repeating-linear-gradient(
+      to bottom,
+      var(--hud-scanline-dark) 0 1px,
+      var(--hud-scanline-lit) 1px 2px,
+      transparent 2px var(--hud-scanline-period)
+    );
+}
+
+/* Targeting-reticle corner marks: four L-shaped ticks sitting just OUTSIDE the
+ * frame, so they never collide with panel content no matter how tight its
+ * padding is. Purely decorative, always inert. */
+.hud-panel__corner {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  z-index: 2;
+  pointer-events: none;
+  border: 0 solid var(--hud-accent-bright);
+  opacity: 0.9;
+}
+.hud-panel__corner--tl {
+  top: -3px;
+  left: -3px;
+  border-top-width: 1px;
+  border-left-width: 1px;
+}
+.hud-panel__corner--tr {
+  top: -3px;
+  right: -3px;
+  border-top-width: 1px;
+  border-right-width: 1px;
+}
+.hud-panel__corner--bl {
+  bottom: -3px;
+  left: -3px;
+  border-bottom-width: 1px;
+  border-left-width: 1px;
+}
+.hud-panel__corner--br {
+  bottom: -3px;
+  right: -3px;
+  border-bottom-width: 1px;
+  border-right-width: 1px;
+}
+
+/* --------------------------------------------------------------------------
+ * Type
+ * ------------------------------------------------------------------------ */
+
+.hud-title {
+  font-family: var(--hud-font);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--hud-title);
+  text-shadow: 0 0 6px rgba(143, 233, 247, 0.4);
+}
+
+/* Header strip across the top of a panel: rule underneath that fades out to
+ * the right, like a readout header etched on glass. */
+.hud-title-bar {
+  border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, var(--hud-line), rgba(70, 200, 224, 0.05)) 1;
+}
+
+.hud-dim {
+  color: var(--hud-text-dim);
+}
+
+.hud-readout {
+  font-family: var(--hud-font);
+  color: var(--hud-text);
+  text-shadow: 0 0 5px rgba(70, 200, 224, 0.22);
+}
+
+/* --------------------------------------------------------------------------
+ * Controls
+ * ------------------------------------------------------------------------ */
+
+.hud-button {
+  font-family: var(--hud-font);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--hud-title);
+  background: rgba(70, 200, 224, 0.09);
+  border: 1px solid var(--hud-line);
+  border-radius: 0;
+  cursor: pointer;
+}
+.hud-button:hover {
+  background: rgba(70, 200, 224, 0.2);
+  border-color: var(--hud-accent);
+  color: #dffbff;
+}
+
+/* Hotbar cell. The equipped state uses the SIGNAL teal at full strength — the
+ * chrome around it is deliberately dim so this reads instantly. */
+.hud-slot {
+  border: 1px solid var(--hud-line-soft);
+  border-radius: 0;
+  background: var(--hud-well);
+  color: var(--hud-text-dim);
+  box-shadow: inset 0 1px 0 rgba(143, 233, 247, 0.1);
+}
+.hud-slot:hover {
+  border-color: var(--hud-line);
+  color: var(--hud-text);
+  background: rgba(70, 200, 224, 0.08);
+}
+.hud-slot.is-equipped {
+  border-color: var(--hud-signal-teal);
+  background: rgba(127, 255, 224, 0.16);
+  color: #eafff8;
+  box-shadow:
+    0 0 10px rgba(127, 255, 224, 0.45),
+    inset 0 0 14px rgba(127, 255, 224, 0.16);
+}
+.hud-slot.is-equipped .hud-slot__key {
+  color: var(--hud-signal-teal);
+  opacity: 1;
+}
+
+.hud-slot__key {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  opacity: 0.55;
+}
+.hud-slot__label {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  /* Slot width is sized for the longest label on one line ("EFFECTOR FIELD");
+   * a wrap here would make one cell taller than the rest of the rack. */
+  white-space: nowrap;
+}
+
+/* Inventory list rows — hairline separators in the chrome color, plus a hover
+ * wash so an expandable row reads as clickable. */
+.hud-row {
+  border-bottom: 1px solid var(--hud-line-soft);
+}
+.hud-row:hover {
+  background: rgba(70, 200, 224, 0.06);
+}
+
+/* Thumbnails: square, keylined, no radius. */
+.hud-thumb {
+  border: 1px solid var(--hud-line-soft);
+  border-radius: 0;
+  background: #04141b;
+}
+.hud-thumb:hover {
+  border-color: var(--hud-accent);
+}
+
+/* Scrollable list wells inside a panel (inventory) — a thin cyan bar rather
+ * than the platform default, which reads very much like a 2020s web page. */
+.hud-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(70, 200, 224, 0.45) rgba(2, 7, 11, 0.5);
+}
+.hud-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.hud-scroll::-webkit-scrollbar-track {
+  background: rgba(2, 7, 11, 0.5);
+}
+.hud-scroll::-webkit-scrollbar-thumb {
+  background: rgba(70, 200, 224, 0.4);
+  border-radius: 0;
+}
+.hud-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(70, 200, 224, 0.65);
+}

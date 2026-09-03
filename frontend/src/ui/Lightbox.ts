@@ -1,3 +1,5 @@
+import { applyHudPanelChrome, HUD_CLASS } from "./hudPanel.ts";
+
 /**
  * Minimal "view bigger" modal for inventory thumbnails.
  *
@@ -26,37 +28,56 @@ export class Lightbox {
       justifyContent: "center",
       flexDirection: "column",
       gap: "10px",
-      background: "rgba(2, 3, 6, 0.82)",
+      // Cyan-tinted blackout rather than neutral: the whole HUD is one cool
+      // phosphor palette, and a neutral scrim reads as a different app.
+      background: "rgba(2, 9, 13, 0.86)",
       zIndex: "50",
       cursor: "zoom-out",
       pointerEvents: "auto",
     } satisfies Partial<CSSStyleDeclaration>);
-    // Click anywhere in the overlay (backdrop or image) to close — the
-    // simplest, most discoverable dismissal for an unskinned Phase 3.5 modal.
+    // Click anywhere in the overlay (backdrop, frame, or image) to close — the
+    // simplest, most discoverable dismissal for this modal. The frame added
+    // below is a plain container that stops nothing, so this still holds.
     this.root.addEventListener("click", () => this.close());
+
+    // Frame wrapper so the image + caption sit inside one piece of cockpit
+    // chrome (the shared `hudPanel` frame) instead of floating on the scrim.
+    const frame = document.createElement("div");
+    Object.assign(frame.style, {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      gap: "8px",
+      padding: "12px 12px 9px",
+      maxWidth: "min(92vw, 680px)",
+    } satisfies Partial<CSSStyleDeclaration>);
+    applyHudPanelChrome(frame, { variant: "inset" });
 
     this.img = document.createElement("img");
     Object.assign(this.img.style, {
       // Deliberately allowed to exceed the source's native ~256px — that IS
       // "bigger," honestly achieved by upscaled display, not a claim of more
       // detail (see class doc).
-      maxWidth: "min(90vw, 640px)",
-      maxHeight: "75vh",
+      maxWidth: "min(88vw, 640px)",
+      maxHeight: "72vh",
       objectFit: "contain",
-      background: "#1b1e28",
-      borderRadius: "4px",
-      boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
+      background: "#04141b",
+      border: "1px solid var(--hud-line)",
+      borderRadius: "0",
     } satisfies Partial<CSSStyleDeclaration>);
-    this.root.appendChild(this.img);
+    frame.appendChild(this.img);
 
     this.caption = document.createElement("div");
+    this.caption.classList.add(HUD_CLASS.dim);
     Object.assign(this.caption.style, {
-      color: "#9fb0d8",
-      fontSize: "12px",
-      fontFamily: "system-ui, sans-serif",
+      fontSize: "10px",
+      letterSpacing: "0.08em",
+      textTransform: "uppercase",
+      fontFamily: "var(--hud-font)",
     } satisfies Partial<CSSStyleDeclaration>);
-    this.root.appendChild(this.caption);
+    frame.appendChild(this.caption);
 
+    this.root.appendChild(frame);
     container.appendChild(this.root);
 
     window.addEventListener("keydown", (event) => {
