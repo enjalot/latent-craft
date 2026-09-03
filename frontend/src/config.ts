@@ -247,50 +247,28 @@ export const LOOK_DRAG_THRESHOLD_PX = 6;
 export const EXTRACTION_CYCLE_MS = 533;
 
 /**
- * Roughly how many extraction cycles it should take to fully drain ANY voxel,
- * regardless of how many points it holds. See `extractionBatchSize()`.
+ * How many points one extraction cycle pulls out of a voxel. Always **1**.
  *
- * This is the constant that resolves the user's two asks (shorter holds AND a
- * rate/spinner that scales with the block's point count), which pull against
- * each other. The BL num_voxels=96 pack holds 5,917 occupied voxels spanning
- * 1 to 7,098 points each (densest: chunk 116, voxel 2746 — counted straight
- * off the pack's `meta.bin` files, not sampled), a spread of nearly four
- * orders of magnitude. A literal "one point per cycle" rate would empty a
- * 3-point voxel in 1.6s and that one in 63 MINUTES of unbroken holding, and a
- * denser pack only widens the gap.
+ * The first pass at this made the batch scale with a voxel's total point
+ * count (up to ~710/cycle for the densest BL voxel), aimed at keeping any
+ * voxel's full-drain time roughly constant. Overridden by more specific
+ * follow-up feedback: extraction should grab exactly one thumbnail at a
+ * time, full stop, even for a voxel with thousands of points — "even for
+ * lots and lots its ok as we are creating a human scale interface to this
+ * large dataset." A big voxel taking a long time to fully empty one hold at
+ * a time is the intended feel, not a problem to engineer around; you're not
+ * expected to fully drain the densest voxel in one sitting.
  *
- * Making the BATCH scale with the voxel's size, instead of making the CYCLE
- * scale with it, keeps a fixed legible tempo — one visible pulse of extraction
- * every ~half second, whatever you are standing in front of — while the yield
- * per pulse scales. Measured end-to-end on the live build: 1 point/cycle out
- * of a 3-point voxel (3 cycles), 351/cycle out of a 3,501-point one, and
- * 710/cycle out of the 7,098-point densest one, which drained in exactly 10
- * cycles with the opacity stepping 1.00 → 0.93 → 0.86 → … → 0.30, a dead-even
- * 0.07 per pulse.
- *
- * 10 was picked by feel after timing both extremes against the live build: a
- * full drain is ~10 * 533ms ≈ 5.3s of continuous holding, which is long enough
- * to read as a deliberate "draining" action with visible intermediate states
- * (0.07 of fade per pulse is plainly visible, so you can stop anywhere and get
- * a partial) and short enough that emptying a block never becomes a chore. 5
- * felt close to 3.5's one-shot pop; 20 turned a full drain into an 11-second
- * hold.
+ * Kept as a function (not a bare constant) so call sites don't care that the
+ * batch is fixed — and because the "communicates size" property the earlier
+ * scaling formula was solving for still holds, just via a different
+ * mechanism: each cycle now fades a voxel by `(1 - EXTRACTION_FLOOR_OPACITY)
+ * / totalPoints`, which is already imperceptibly small for a huge voxel and
+ * clearly visible for a small one — size is still legible from how fast the
+ * fade moves, without batching.
  */
-export const EXTRACTION_TARGET_CYCLES = 10;
-
-/**
- * How many points one extraction cycle pulls out of a voxel holding
- * `totalPoints`. Ceil (not round) so the batch is never 0, and `max(1, …)` as
- * a second belt-and-braces guard.
- *
- * Consequence worth stating explicitly, since it's the whole point: the number
- * of cycles to fully drain is `ceil(total / batch)`, which is
- * `min(total, EXTRACTION_TARGET_CYCLES)` — so a 4-point voxel takes 4 cycles
- * (one point each), and anything with at least `EXTRACTION_TARGET_CYCLES`
- * points takes exactly that many cycles no matter how big it is.
- */
-export function extractionBatchSize(totalPoints: number): number {
-  return Math.max(1, Math.ceil(totalPoints / EXTRACTION_TARGET_CYCLES));
+export function extractionBatchSize(_totalPoints: number): number {
+  return 1;
 }
 
 /**

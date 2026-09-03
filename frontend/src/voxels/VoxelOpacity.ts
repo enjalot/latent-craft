@@ -10,8 +10,11 @@ import { EXTRACTION_FLOOR_OPACITY, XRAY_OPACITY } from "../config.ts";
  * (every point pulled out). Linear rather than eased on purpose: the fade IS
  * the readout for "how much is left in here", so the mapping from fraction to
  * dimness should be the one a viewer can invert by eye without knowing a
- * curve. With `EXTRACTION_TARGET_CYCLES = 10` each extraction pulse steps the
- * opacity down by a visible, even 0.07.
+ * curve. Extraction pulls exactly one point per cycle (`extractionBatchSize`
+ * in config.ts), so each pulse steps the opacity down by `(1 -
+ * EXTRACTION_FLOOR_OPACITY) / totalPoints` — a small voxel fades in a few
+ * visible steps, a huge one fades almost imperceptibly per pulse, which is
+ * itself a legible size cue.
  */
 export function extractionOpacity(extractedFraction: number): number {
   const clamped = Math.max(0, Math.min(1, extractedFraction));

@@ -81,9 +81,11 @@ export interface ExtractionCycle {
  * - a voxel's state is a FRACTION (0 = untouched … 1 = fully drained), not a
  *   boolean, and its opacity is `lerp(1, EXTRACTION_FLOOR_OPACITY, fraction)`
  *   via the same `combinedVoxelOpacity()` X-Ray composes through;
- * - batch size scales with the voxel's own point count
- *   (`config.ts#extractionBatchSize`), so draining any voxel takes about the
- *   same number of pulses whether it holds 4 points or 167,700;
+ * - each cycle pulls exactly ONE point (`config.ts#extractionBatchSize` is
+ *   always 1, by deliberate design — "human scale interface to this large
+ *   dataset" — not a batch scaled to the voxel's size, which an earlier pass
+ *   at this used), so draining a several-thousand-point voxel one hold at a
+ *   time genuinely takes a long time. That's intended, not a bug;
  * - the per-voxel record is a real `VoxelExtraction` (see above) keyed by
  *   `${chunkId}:${localVoxelId}`, re-applied via `onChunkResident` exactly the
  *   way 3.5's boolean set was. A voxel drained 40%, evicted, and re-streamed

@@ -26,7 +26,6 @@ import {
   DEFAULT_DATASET,
   EXTRACTION_CYCLE_MS,
   RESTORE_HOLD_DURATION_MS,
-  extractionBatchSize,
   WORLD_HALF_EXTENT,
   WORLD_SCALE,
   XRAY_OPACITY,
@@ -522,16 +521,20 @@ engine.start((dt) => {
   //
   // Phase 6.5: a hold no longer performs ONE action and end. While the button
   // is down on a voxel that still has points in it, this runs an
-  // `EXTRACTION_CYCLE_MS` timer over and over, pulling one batch out per
-  // cycle, so the voxel drains continuously for as long as you keep holding.
+  // `EXTRACTION_CYCLE_MS` timer over and over, pulling exactly one point out
+  // per cycle (`extractionBatchSize` is always 1 — see config.ts for why),
+  // so the voxel drains continuously, one thumbnail at a time, for as long as
+  // you keep holding.
   //
-  // The ring deliberately shows the VOXEL's total extraction progress rather
-  // than the current cycle's — that's the plan's explicit ask ("the spinner
-  // should visibly communicate how much of this voxel is left, scaled by its
-  // size"). Because the batch size scales with the voxel's point count, the
-  // ring advances at the same visual rate (~1/EXTRACTION_TARGET_CYCLES per
-  // cycle) whether the block holds 4 points or 167,700, and it lands exactly
-  // on full at the moment the voxel empties.
+  // The ring shows THIS CYCLE's own fill-and-pop progress (resets every
+  // ~533ms), not the voxel's overall drain fraction. It used to show overall
+  // fraction back when batch size scaled with voxel size, which made the
+  // ring advance at a size-independent visual rate — but with a fixed
+  // one-point batch, overall fraction would be imperceptible for a
+  // many-thousand-point voxel (1/7,098 of a ring per hold-cycle reads as a
+  // ring that never moves). The voxel's own fade is what communicates
+  // overall "how much is left" now; the ring's job is just per-pulse
+  // tactile feedback, same in every voxel regardless of size.
   const holdTarget = pointerController.holdTarget;
   if (holdTarget) {
     const stillHovering =
@@ -547,19 +550,10 @@ engine.start((dt) => {
       holdElapsedSeconds += dt;
 
       const cycleFraction = Math.min(1, holdElapsedSeconds / durationSeconds);
-      if (restoring) {
-        holdRing.setProgress(cycleFraction);
-      } else {
-        // Voxel-level progress: what's already out, plus the share of this
-        // in-flight cycle's batch.
-        const state = miningController?.extractionState(holdTarget.chunkId, holdTarget.localVoxelId);
-        const totalPoints = state?.total ?? chunkStore?.chunk(holdTarget.chunkId)?.meta.count[holdTarget.localVoxelId] ?? 0;
-        const already = state?.extracted.size ?? 0;
-        const inFlight = totalPoints > 0 ? Math.min(extractionBatchSize(totalPoints), totalPoints - already) : 0;
-        holdRing.setProgress(
-          totalPoints > 0 ? (already + cycleFraction * inFlight) / totalPoints : cycleFraction,
-        );
-      }
+      // Restoring and extracting both just show the current cycle's own
+      // fill — see the comment above on why this no longer tracks the
+      // voxel's overall fraction for extraction.
+      holdRing.setProgress(cycleFraction);
 
       if (holdElapsedSeconds >= durationSeconds) {
         if (restoring) {
