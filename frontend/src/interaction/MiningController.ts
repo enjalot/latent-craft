@@ -107,6 +107,13 @@ export interface ExtractionCycle {
  * reference) to avoid a two-way constructor dependency — `XRayController`
  * itself needs `MiningController.extractedFraction` to do the same combination
  * in reverse. See main.ts's bootstrap-order comment.
+ *
+ * Phase 6.7 hangs a second readout off the very same fraction: the voxel's
+ * greeble layer (`voxels/VoxelGreebles.ts`), whose pieces break off as it
+ * drains. Every place below that writes `setOpacityAt` writes
+ * `greebles.setExtractedFraction` beside it — one fraction, two renderings of
+ * it, updated at the same four moments (extract, restore-all, per-item return,
+ * chunk becomes resident) rather than polled from the frame loop.
  */
 export class MiningController {
   readonly inventory = new Inventory();
@@ -207,6 +214,10 @@ export class MiningController {
       hit.instanceId,
       combinedVoxelOpacity(state.extracted.size / state.total, this.isXrayActive()),
     );
+    // The voxel's edge detail is driven off the SAME fraction as its fade (see
+    // `voxels/VoxelGreebles.ts`), so it is updated here rather than polled:
+    // there is no other way for a voxel's extraction state to change.
+    chunk.greebles?.setExtractedFraction(hit.instanceId, state.extracted.size / state.total);
 
     return {
       chunkId,
@@ -247,6 +258,8 @@ export class MiningController {
     // back on XRAY_OPACITY (still see-through, per that item's global effect),
     // not snap to fully opaque just because its extraction state cleared.
     hit.mesh.setOpacityAt(hit.instanceId, combinedVoxelOpacity(0, this.isXrayActive()));
+    // Fraction 0 == every broken-off greeble reattaches, in one write.
+    this.chunkStore.chunk(chunkId)?.greebles?.setExtractedFraction(hit.instanceId, 0);
     this.inventory.removeStack(voxelStackId(chunkId, localVoxelId));
     return true;
   }
@@ -326,6 +339,11 @@ export class MiningController {
         instanceId,
         combinedVoxelOpacity(state.extracted.size / state.total, xrayActive),
       );
+      // A reloaded chunk's greebles are rebuilt intact (and deterministically —
+      // same seed, same pieces in the same places), so re-breaking exactly the
+      // ones this voxel's fraction calls for is all that's needed to make the
+      // layer as persistent across an evict/reload as the fade it accompanies.
+      chunk.greebles?.setExtractedFraction(instanceId, state.extracted.size / state.total);
     }
   }
 
@@ -363,6 +381,7 @@ export class MiningController {
       instanceId,
       combinedVoxelOpacity(this.extractedFraction(chunkId, localVoxelId), this.isXrayActive()),
     );
+    chunk.greebles?.setExtractedFraction(instanceId, this.extractedFraction(chunkId, localVoxelId));
   }
 }
 

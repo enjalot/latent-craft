@@ -43,6 +43,10 @@ const params = new URLSearchParams(window.location.search);
 const useSynthetic = params.get("synthetic") === "1";
 /** `?dataset=bl-160` switches chunk-packs; the registry lives in config.ts. */
 const datasetKey = params.get("dataset") ?? DEFAULT_DATASET;
+/** `?greebles=0` loads chunks without their edge-detail layer (Phase 6.7) —
+ * the A/B control for measuring what that layer actually costs, from the same
+ * pose on the same data rather than from an estimate. */
+const enableGreebles = params.get("greebles") !== "0";
 
 const engine = new Engine(app);
 
@@ -220,7 +224,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
     engine.scene.add(proxyCloud.mesh);
 
     const atlasCache = new AtlasCache(engine.renderer);
-    const chunkLoader = new ChunkLoader(manifest, atlasCache, engine.renderer);
+    const chunkLoader = new ChunkLoader(manifest, atlasCache, engine.renderer, enableGreebles);
     chunkStore = new ChunkStore(manifest, chunkLoader, {
       onResidencyChanged: (chunkId, resident) => {
         proxyCloud?.setChunkResident(chunkId, resident);
@@ -627,11 +631,36 @@ engine.start((dt) => {
   });
 });
 
+/**
+ * Resident greeble totals (Phase 6.7) — how many edge-detail instances exist
+ * across the streamed world right now and how many of those are actually drawn
+ * (extraction breaks pieces off; the Effector Field hides them with their
+ * voxel). Not on the HUD; it exists for the headless verification harness and
+ * for console spelunking, the same role `ChunkStore.stats()` plays.
+ */
+function greebleStats(): { chunks: number; instances: number; visible: number } {
+  let chunks = 0;
+  let instances = 0;
+  let visible = 0;
+  if (chunkStore) {
+    for (const chunkId of chunkStore.residentChunkIds) {
+      const greebles = chunkStore.chunk(chunkId)?.greebles;
+      if (!greebles) continue;
+      chunks++;
+      instances += greebles.instanceCount;
+      visible += greebles.visibleInstanceCount;
+    }
+  }
+  return { chunks, instances, visible };
+}
+
 // Handy for poking at the world from the devtools console (and for the
 // headless verification harness, which reads counters off it).
 Object.assign(window as unknown as Record<string, unknown>, {
   lsv: {
     engine,
+    greebleStats,
+    greeblesEnabled: enableGreebles,
     get manifest() {
       return manifest;
     },

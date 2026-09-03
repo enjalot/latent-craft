@@ -279,6 +279,12 @@ export class EffectorFieldController {
         const localVoxelId = occupied[instanceId];
         if (prevSet.has(localVoxelId) && !nextSet?.has(localVoxelId)) {
           chunk.mesh.setVisibilityAt(instanceId, true);
+          // Phase 6.7: a voxel's edge greebles are a separate mesh, so hiding
+          // the cube alone would leave its trim floating in the hole the field
+          // just opened. Suppression is tracked separately from extraction
+          // inside VoxelGreebles, so un-suppressing restores exactly the pieces
+          // that were still attached — not the mined-off ones.
+          chunk.greebles?.setSuppressed(instanceId, false);
         }
       }
     }
@@ -292,6 +298,7 @@ export class EffectorFieldController {
         const localVoxelId = occupied[instanceId];
         if (nextSet.has(localVoxelId) && !prevSet?.has(localVoxelId)) {
           chunk.mesh.setVisibilityAt(instanceId, false);
+          chunk.greebles?.setSuppressed(instanceId, true);
         }
       }
     }
@@ -306,7 +313,9 @@ export class EffectorFieldController {
       if (!chunk) continue;
       const occupied = chunk.meta.occupied;
       for (let instanceId = 0; instanceId < occupied.length; instanceId++) {
-        if (set.has(occupied[instanceId])) chunk.mesh.setVisibilityAt(instanceId, true);
+        if (!set.has(occupied[instanceId])) continue;
+        chunk.mesh.setVisibilityAt(instanceId, true);
+        chunk.greebles?.setSuppressed(instanceId, false);
       }
     }
     this.suppressed.clear();
