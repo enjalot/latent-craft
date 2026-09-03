@@ -10,6 +10,7 @@ dependencies = [
   "pillow>=10.0",
   "fsspec>=2024.6",
   "huggingface_hub>=0.24",
+  "matplotlib>=3.8",
 ]
 
 [project.optional-dependencies]
