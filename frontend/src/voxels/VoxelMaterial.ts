@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { InstancedMesh2 } from "@three.ez/instanced-mesh";
-import { ATLAS_TILE_INSET_TEXELS } from "../config.ts";
+import { ATLAS_TILE_INSET_TEXELS, VOXEL_UNDERLIGHT } from "../config.ts";
 
 /**
  * Per-instance uniform schema every voxel chunk mesh declares. `tileIndex` is
@@ -41,6 +41,43 @@ const ATLAS_MAP_FRAGMENT = /* glsl */ `
 #endif
 `;
 
+/**
+ * Ground-bounce fill, injected just before three's `<opaque_fragment>` (which
+ * is where `outgoingLight` has been assembled but not yet written out).
+ *
+ * The bug this fixes: the scene's lighting is one directional sun from above
+ * plus a hemisphere light whose ground color is near-black, and nothing else —
+ * no ambient term, and no ground to bounce off, because the world is a cube of
+ * blocks floating in a void. A face pointing straight down therefore gets
+ * `max(dot(n, sunDir), 0) == 0` from the sun and the pure ground color from the
+ * hemisphere, i.e. essentially zero light. Measured on a real voxel before this
+ * fix: the -Y face read luminance 6/255 (visually black) while the +X face read
+ * 133 and the +Y face 165 — the underside of every voxel was a black square
+ * instead of the thumbnail its other five faces show.
+ *
+ * `lsDownFacing` is the ground half of a hemisphere light's weighting (1 when
+ * the face points straight down, 0.5 side-on, 0 straight up), so this only
+ * fills in the faces the existing lights can't reach and leaves the sunlit top
+ * face exactly as it was.
+ *
+ * Why it lives in the material and not as a brighter `HemisphereLight` ground
+ * color in `main.ts`: "every face of a voxel shows its thumbnail" is a property
+ * of the voxel material's own contract (one tile, six faces), not of whatever
+ * lighting rig the scene happens to have. Keeping it here means the atlas stays
+ * legible if the scene's lights are ever retuned, and it doesn't silently
+ * brighten the translucent proxy cloud or the effector gizmo along with it.
+ *
+ * `normal` (view-space, already normalized by `<normal_fragment_begin>`) and
+ * `viewMatrix` (declared in three's own fragment prefix) are both in scope
+ * here; `viewMatrix * vec4(worldUp, 0)` is the world Y axis in view space.
+ */
+const VOXEL_UNDERLIGHT_FRAGMENT = /* glsl */ `
+	vec3 lsUpView = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );
+	float lsDownFacing = 0.5 - 0.5 * clamp( dot( normal, lsUpView ), -1.0, 1.0 );
+	outgoingLight += diffuseColor.rgb * uUnderlight * lsDownFacing;
+	#include <opaque_fragment>
+`;
+
 export interface VoxelMaterialParams {
   /** The chunk's KTX2 atlas. */
   atlas: THREE.Texture;
@@ -76,6 +113,7 @@ export function createVoxelMaterial(params: VoxelMaterialParams): THREE.MeshStan
 
   const tilesPerSideUniform = { value: tilesPerSide };
   const tileInsetUniform = { value: ATLAS_TILE_INSET_TEXELS / tilePx };
+  const underlightUniform = { value: VOXEL_UNDERLIGHT };
 
   // Set BEFORE the material is ever rendered: InstancedMesh2 saves whatever
   // `onBeforeCompile` it finds as its "base" and calls it first, then layers
@@ -84,16 +122,21 @@ export function createVoxelMaterial(params: VoxelMaterialParams): THREE.MeshStan
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uTilesPerSide = tilesPerSideUniform;
     shader.uniforms.uTileInset = tileInsetUniform;
+    shader.uniforms.uUnderlight = underlightUniform;
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <map_pars_fragment>",
-        "#include <map_pars_fragment>\nuniform float uTilesPerSide;\nuniform float uTileInset;",
+        "#include <map_pars_fragment>\nuniform float uTilesPerSide;\nuniform float uTileInset;\nuniform float uUnderlight;",
       )
-      .replace("#include <map_fragment>", ATLAS_MAP_FRAGMENT);
+      .replace("#include <map_fragment>", ATLAS_MAP_FRAGMENT)
+      .replace("#include <opaque_fragment>", VOXEL_UNDERLIGHT_FRAGMENT);
   };
   // Every chunk compiles byte-identical shader source, so a constant key lets
-  // all of them share one GL program instead of one per chunk.
-  material.customProgramCacheKey = () => "ls-voxel-atlas-v1";
+  // all of them share one GL program instead of one per chunk. Bumped to v2
+  // when the underlight patch was added — the key is what three's program
+  // cache dedupes on, so a stale v1 entry would keep serving the old,
+  // black-bottomed shader within a session that had already compiled one.
+  material.customProgramCacheKey = () => "ls-voxel-atlas-v2";
 
   return material;
 }

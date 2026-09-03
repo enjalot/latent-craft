@@ -1,11 +1,20 @@
 import * as THREE from "three";
 import {
-  FLIGHT_BOOST_MULTIPLIER,
   FLIGHT_SPEED,
   FLIGHT_VERTICAL_SPEED,
   LOOK_PITCH_LIMIT_RAD,
   LOOK_SENSITIVITY_RAD_PER_PX,
 } from "../config.ts";
+
+/** True if a keystroke is headed for something that legitimately wants raw
+ * text (nothing in the app does today — this only exists so the Space
+ * preventDefault below can never eat a keystroke a future HUD input needs). */
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  if (!element || typeof element.tagName !== "string") return false;
+  const tag = element.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || element.isContentEditable === true;
+}
 
 /**
  * Spectator-style 6-DOF flight: no gravity, no collision, nothing to stand
@@ -33,8 +42,24 @@ import {
  * `applyLookDelta()` composes from the right baseline instead of snapping.
  *
  * Key bindings: WASD = forward/back/strafe (full 3D, follows look pitch),
- * Q/E = down/up (world-space, not camera-relative — keeps vertical control
- * predictable regardless of where you're looking), Shift = speed boost.
+ * Space = ascend, Shift = descend (world-space, not camera-relative — keeps
+ * vertical control predictable regardless of where you're looking). E/Q stay
+ * bound to up/down as a legacy alternate.
+ *
+ * Vertical moved from Q/E to Space/Shift per user feedback after flying the
+ * real dataset: that's the binding anyone arriving from Minecraft creative
+ * already has in their hands. Two deliberate decisions came with it:
+ *
+ *  1. Shift was previously a speed-boost modifier, which now collides. Rather
+ *     than rebinding boost to another key (Ctrl, as some Minecraft versions
+ *     use for sprint) the boost is GONE, folded into a higher baseline
+ *     `FLIGHT_SPEED` — the same feedback round also asked for flight to be
+ *     generally faster, so one faster speed satisfies both asks and leaves the
+ *     control scheme with one fewer modifier to remember. See `config.ts`.
+ *  2. Q/E are KEPT as an alternate vertical binding rather than dropped. They
+ *     cost nothing (no other feature wants those keys), they keep every
+ *     screenshot/note from Phases 1-5 accurate, and a left hand already parked
+ *     on WASD can reach E/Q without the thumb+pinky stretch.
  */
 export class FlightControls {
   private readonly camera: THREE.Camera;
@@ -58,7 +83,18 @@ export class FlightControls {
     // view to some unrelated zeroed baseline.
     this.syncFromCamera();
 
-    window.addEventListener("keydown", (event) => this.keys.add(event.code));
+    window.addEventListener("keydown", (event) => {
+      // Space's default action scrolls the page, and activates the focused
+      // control if there is one (a <button> treats Space as a click). Neither
+      // is wanted now that Space means "ascend" and gets held down for
+      // seconds at a time. Today's HUD controls are all click-handling
+      // <div>s, so nothing takes focus and only the scroll case can bite —
+      // but that's an implementation detail of panels this file doesn't own,
+      // so suppress both. Guarded on the event target so a future text field
+      // in the HUD would still receive spaces normally.
+      if (event.code === "Space" && !isTextEntryTarget(event.target)) event.preventDefault();
+      this.keys.add(event.code);
+    });
     window.addEventListener("keyup", (event) => this.keys.delete(event.code));
     // Don't let movement keys get "stuck" held down if the tab loses focus
     // (alt-tab etc.) without a matching keyup.
@@ -107,10 +143,8 @@ export class FlightControls {
    * unchanged").
    */
   update(deltaSeconds: number): void {
-    const boosted = this.keys.has("ShiftLeft") || this.keys.has("ShiftRight");
-    const speed = (boosted ? FLIGHT_SPEED * FLIGHT_BOOST_MULTIPLIER : FLIGHT_SPEED) * deltaSeconds;
-    const verticalSpeed =
-      (boosted ? FLIGHT_VERTICAL_SPEED * FLIGHT_BOOST_MULTIPLIER : FLIGHT_VERTICAL_SPEED) * deltaSeconds;
+    const speed = FLIGHT_SPEED * deltaSeconds;
+    const verticalSpeed = FLIGHT_VERTICAL_SPEED * deltaSeconds;
 
     // Full 3D look direction (includes pitch) so W/S fly exactly where
     // you're looking, like Minecraft spectator / a space-sim, not an
@@ -127,9 +161,14 @@ export class FlightControls {
     if (this.keys.has("KeyS")) this.moveVec.addScaledVector(this.forward, -speed);
     if (this.keys.has("KeyD")) this.moveVec.addScaledVector(this.right, speed);
     if (this.keys.has("KeyA")) this.moveVec.addScaledVector(this.right, -speed);
-    // Q/E are world-space vertical, independent of camera pitch/roll.
-    if (this.keys.has("KeyE")) this.moveVec.addScaledVector(this.up, verticalSpeed);
-    if (this.keys.has("KeyQ")) this.moveVec.addScaledVector(this.up, -verticalSpeed);
+    // Vertical is world-space, independent of camera pitch/roll. Space/Shift
+    // is the primary (Minecraft creative) binding; E/Q the legacy alternate.
+    if (this.keys.has("Space") || this.keys.has("KeyE")) {
+      this.moveVec.addScaledVector(this.up, verticalSpeed);
+    }
+    if (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || this.keys.has("KeyQ")) {
+      this.moveVec.addScaledVector(this.up, -verticalSpeed);
+    }
 
     this.camera.position.add(this.moveVec);
   }

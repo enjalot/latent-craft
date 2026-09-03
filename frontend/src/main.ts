@@ -378,7 +378,7 @@ function computeHotbarStatus(): string {
     return (
       `Effector Field — radius ${effectorField.currentRadius.toFixed(2)} · ` +
       `distance ${effectorField.currentDistance.toFixed(2)} · suppressing ${effectorField.suppressedCount} voxels\n` +
-      `scroll = move · shift+scroll = resize · [ / ] = move · - / = = resize`
+      `scroll = resize · - / = = resize · [ / ] = move closer/farther`
     );
   }
   return "";

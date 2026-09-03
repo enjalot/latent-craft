@@ -2,7 +2,7 @@ import * as THREE from "three";
 import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
 import {
-  EFFECTOR_DEFAULT_DISTANCE_CHUNKS,
+  EFFECTOR_DEFAULT_DISTANCE_VOXELS,
   EFFECTOR_DEFAULT_RADIUS_VOXELS,
   EFFECTOR_DISTANCE_STEP_VOXELS,
   EFFECTOR_GIZMO_COLOR,
@@ -70,12 +70,18 @@ function buildGizmo(): THREE.Group {
  * Position control: the field is anchored at `distance` world units
  * directly in front of the camera (`camera.position + forward * distance`),
  * so flying/looking around moves the field with you — that's the "movable"
- * half of the ask. `distance` itself is a separate, explicit control: plain
- * mouse wheel (or `[`/`]` keys) pushes it farther/closer along the view
- * axis. Size is a SEPARATE control again — shift+wheel (or `-`/`=` keys)
+ * half of the ask. `distance` itself is a separate, explicit control: the
+ * `[`/`]` keys push it closer/farther along the view axis. Size is a
+ * SEPARATE control again — the mouse wheel (or the `-`/`=` keys)
  * grows/shrinks `radius` — so resizing can never be confused with
- * repositioning under the same input. All four bindings only do anything
- * while this item is actually equipped (`active`).
+ * repositioning under the same input. All bindings only do anything while
+ * this item is actually equipped (`active`).
+ *
+ * The wheel used to drive distance and shift+wheel drive radius; that pair
+ * was swapped per user feedback (see `handleWheel`), and the default radius
+ * and standoff were both reduced (see `config.ts`) so the field starts
+ * small and close enough to be obviously useful before the player has
+ * learned any of these keys.
  *
  * Suppression is recomputed from scratch every time it's needed (a
  * throttled per-frame `update()`, plus a forced pass from `onChunkResident`)
@@ -119,7 +125,7 @@ export class EffectorFieldController {
     scene: THREE.Scene,
   ) {
     this.radius = manifest.voxelWorldSize * EFFECTOR_DEFAULT_RADIUS_VOXELS;
-    this.distance = manifest.chunkWorldSize * EFFECTOR_DEFAULT_DISTANCE_CHUNKS;
+    this.distance = manifest.voxelWorldSize * EFFECTOR_DEFAULT_DISTANCE_VOXELS;
     this.minRadius = manifest.voxelWorldSize * EFFECTOR_MIN_RADIUS_VOXELS;
     this.maxRadius = manifest.chunkWorldSize * EFFECTOR_MAX_RADIUS_CHUNKS;
     this.radiusStep = manifest.voxelWorldSize * EFFECTOR_RADIUS_STEP_VOXELS;
@@ -309,13 +315,16 @@ export class EffectorFieldController {
   private handleWheel = (event: WheelEvent): void => {
     if (!this.active) return;
     event.preventDefault();
-    // Scroll up (negative deltaY) = grow / move closer; scroll down =
-    // shrink / move away. Shift held selects the resize axis instead of the
-    // default reposition axis, so the two controls can never be triggered
-    // by the same gesture.
-    const step = event.deltaY > 0 ? -1 : 1;
-    if (event.shiftKey) this.adjustRadius(step);
-    else this.adjustDistance(step);
+    // Scroll up (negative deltaY) = grow, scroll down = shrink.
+    //
+    // Swapped from "wheel repositions, shift+wheel resizes" per user
+    // feedback: resizing is the control you reach for constantly (the field
+    // needs to match the cluster you're digging into), repositioning is the
+    // one you touch occasionally, so the frictionless gesture belongs to
+    // resize. There is deliberately no shift+wheel branch anymore either —
+    // Shift is now "descend" in `FlightControls`, so a shift+wheel binding
+    // would fire while the player is flying downward.
+    this.adjustRadius(event.deltaY > 0 ? -1 : 1);
   };
 
   private handleKeydown = (event: KeyboardEvent): void => {

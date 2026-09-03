@@ -74,6 +74,29 @@ export const VOXEL_FILL = 0.92;
  * bilinear filtering from bleeding in the neighbouring tile's edge texels. */
 export const ATLAS_TILE_INSET_TEXELS = 0.5;
 
+/**
+ * Strength of the voxel material's ground-bounce fill light, as a fraction of
+ * a face's own sampled albedo (0 = off, the pre-fix behaviour).
+ *
+ * Why this exists: the scene lights voxels with one directional sun from above
+ * plus a hemisphere light whose ground color is near-black (`main.ts`), so a
+ * face whose normal points straight DOWN receives zero direct light and zero
+ * hemisphere sky — it rendered as a black square instead of the voxel's
+ * thumbnail (measured: luminance 6/255 on the -Y face vs 133 on a side face
+ * and 165 on the top face). This term fills that in, weighted by how far the
+ * face points downward, so the bottom face gets the full fraction, side faces
+ * get half, and the already-well-lit top face gets none.
+ *
+ * 0.34 was picked by measuring, not by eye. On a real voxel, sampled with
+ * `gl.readPixels` at the face center: the -Y face goes 6 -> 127, side faces go
+ * 133 -> 157, and the sun-lit +Y face stays bit-identical at 165 (it is
+ * weighted out entirely). So the underside lands about where an unlit side
+ * face used to sit — plainly legible — and the top > side > bottom ordering
+ * survives, which is what keeps the cubes reading as cubes rather than
+ * flattening into unshaded sprites.
+ */
+export const VOXEL_UNDERLIGHT = 0.34;
+
 // ---------------------------------------------------------------------------
 // Streaming rings
 // ---------------------------------------------------------------------------
@@ -141,14 +164,27 @@ export const SYNTHETIC_INSTANCE_COUNT = 150_000;
 // Camera / controls
 // ---------------------------------------------------------------------------
 
-/** Camera flight speed, world units / second. */
-export const FLIGHT_SPEED = 12;
+/**
+ * Camera flight speed, world units / second.
+ *
+ * Raised from 12 to 30 per user feedback after flying the real dataset ("make
+ * it faster, closer to Minecraft creative"). This single constant also absorbs
+ * the old `FLIGHT_BOOST_MULTIPLIER` (4x, held with Shift), which had to go
+ * when Shift became "descend" — see `FlightControls`' key-binding comment. 30
+ * is deliberately between the old baseline (12) and the old boosted max (48):
+ * fast enough that crossing the whole 2 * WORLD_SCALE = 50-unit world takes
+ * ~1.7s instead of ~4s, slow enough that you can still stop on a specific
+ * voxel (a voxel cell is ~0.52 units at num_voxels=96, so this is ~58
+ * cells/second) and that chunk streaming's R0 ring (3 chunks ≈ 25 units) still
+ * has time to resolve ahead of the camera.
+ */
+export const FLIGHT_SPEED = 30;
 
-/** Shift-boost multiplier applied to FLIGHT_SPEED. */
-export const FLIGHT_BOOST_MULTIPLIER = 4;
-
-/** Vertical (Q/E) speed, world units / second. */
-export const FLIGHT_VERTICAL_SPEED = 12;
+/** Vertical (Space/Shift, or the legacy E/Q) speed, world units / second.
+ * Matched to `FLIGHT_SPEED` on purpose: with vertical bound to the same hand
+ * position as in Minecraft creative, a slower climb than cruise reads as the
+ * controls sticking rather than as a deliberate axis difference. */
+export const FLIGHT_VERTICAL_SPEED = 30;
 
 /** Camera near/far planes and FOV. */
 export const CAMERA_FOV_DEG = 70;
@@ -245,17 +281,26 @@ export const XRAY_OPACITY = 0.4;
  * Position model: the field is a sphere anchored at `distance` world units
  * directly in front of the camera (`camera.position + forward * distance`),
  * so flying/looking around moves it with you — that's the "movable" part.
- * `distance` alone is what "grow/shrink the standoff" controls adjust
- * (mouse wheel, or `[`/`]` keys); `radius` is the separate "grow/shrink the
- * field itself" control (shift+wheel, or `-`/`=` keys) — see
- * `EffectorFieldController`'s doc comment for the exact bindings.
+ * `distance` alone is what "push it further out / pull it in" adjusts (`[`/`]`
+ * keys); `radius` is the separate "grow/shrink the field itself" control
+ * (mouse wheel, or `-`/`=` keys) — see `EffectorFieldController`'s doc comment
+ * for the exact bindings.
+ *
+ * Defaults tuned down per user feedback ("too big and too far away to be
+ * immediately useful"): radius 5 -> 3 voxels and standoff 1.2 chunks (≈19
+ * voxels) -> 8 voxels. At the default camera FOV that puts a sphere spanning
+ * roughly half the viewport height right in front of you the moment the item
+ * is equipped, so the tool is obviously doing something without the player
+ * having to already know the resize/move keys. The standoff is now expressed
+ * in VOXELS rather than chunks because at this size a chunk (16 voxels) is far
+ * too coarse a unit to express "just in front of your face" in.
  */
-export const EFFECTOR_DEFAULT_RADIUS_VOXELS = 5;
+export const EFFECTOR_DEFAULT_RADIUS_VOXELS = 3;
 export const EFFECTOR_MIN_RADIUS_VOXELS = 1;
 export const EFFECTOR_MAX_RADIUS_CHUNKS = 3;
 export const EFFECTOR_RADIUS_STEP_VOXELS = 0.75;
 
-export const EFFECTOR_DEFAULT_DISTANCE_CHUNKS = 1.2;
+export const EFFECTOR_DEFAULT_DISTANCE_VOXELS = 8;
 export const EFFECTOR_MIN_DISTANCE_VOXELS = 2;
 export const EFFECTOR_MAX_DISTANCE_CHUNKS = 8;
 export const EFFECTOR_DISTANCE_STEP_VOXELS = 2;
