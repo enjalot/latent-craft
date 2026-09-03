@@ -57,18 +57,60 @@ export const CHUNK_SERVER_ORIGIN: string | null = null;
 /**
  * Half-extent of the rendered world, in world units. The manifest's frame is a
  * normalized `[-1,1]^3` cube, so `worldPos = normalizedPos * WORLD_SCALE` and
- * the full world spans 2 * WORLD_SCALE units per axis. 25 keeps the real data
- * the same physical size as Phase 1's synthetic 50-unit cube, so the flight
- * speeds below still feel right.
+ * the full world spans 2 * WORLD_SCALE units per axis.
+ *
+ * 25 (Phases 1-6) -> 50, from direct feedback: "i kind of want smaller voxels
+ * and to be smaller, as in i have to fly farther to get across the map."
+ *
+ * Read the pair `WORLD_SCALE` / `VOXEL_FILL` together — they are NOT the same
+ * knob, and each one alone does the wrong thing:
+ *
+ *  - A voxel cell is `(2 * WORLD_SCALE) / num_voxels` world units, so raising
+ *    WORLD_SCALE alone makes the world bigger AND every voxel proportionally
+ *    bigger with it. Nothing about the view changes; only the flight time
+ *    across the map does (`FLIGHT_SPEED` is an absolute unit/s rate).
+ *  - `VOXEL_FILL` is what actually sets how big a cube looks against its
+ *    neighbours and against the cluster, at any framing — WORLD_SCALE cancels
+ *    out of that ratio entirely.
+ *
+ * So: WORLD_SCALE == "how long it takes to cross the map", VOXEL_FILL == "how
+ * small a voxel reads". Both moved together here, which is what produces small
+ * specks adrift in a large volume rather than the same picture at a different
+ * zoom.
+ *
+ * At 50 the world spans 100 units per axis (173 on the diagonal); at the
+ * unchanged `FLIGHT_SPEED` of 16 that is ~6.3s to cross an axis and ~11s
+ * corner-to-corner, up from ~3.1s/5.4s. That slower crossing IS the ask, so
+ * `FLIGHT_SPEED` deliberately was NOT raised to compensate — see its doc
+ * comment. Going much beyond 2x would start to make the empty stretches dead
+ * time rather than a sense of scale.
  */
-export const WORLD_SCALE = 25;
+export const WORLD_SCALE = 50;
 
 /**
- * Fraction of a voxel cell the rendered cube fills. Slightly under 1 so
- * neighbouring voxels read as separate blocks with a visible seam rather than
- * fusing into one solid mass.
+ * Fraction of a voxel cell the rendered cube fills — i.e. cube edge =
+ * `manifest.voxelWorldSize * VOXEL_FILL`.
+ *
+ * 0.92 (Phases 1-6) -> 0.32, i.e. a third of the old edge length and ~4% of the
+ * old cube volume. At 0.92 neighbouring cubes very nearly touched, so any
+ * occupied region rendered as a solid fused wall of thumbnails whose structure
+ * was only readable at its silhouette. At 0.32 a cube occupies about a third of
+ * its cell along each axis, so a cluster reads as thousands of discrete
+ * floating blocks with real void between them and you can see *through* it into
+ * the shape of the embedding behind — which is the whole point of a 3D map.
+ *
+ * Swept against real screenshots from two fixed vantages (a whole-map wide shot
+ * and a browsing-distance shot inside the densest region), not picked in
+ * isolation:
+ *
+ *   0.22 — too far. From the wide vantage the data degrades into faint dust and
+ *          the always-resident proxy cubes visually outweigh it.
+ *   0.32 — chosen. Discrete at every distance, cluster shape still legible from
+ *          across the map, thumbnails plainly readable up close.
+ *   0.42 — the dense core starts fusing back into a solid mass from the wide
+ *          vantage, i.e. the old problem returning.
  */
-export const VOXEL_FILL = 0.92;
+export const VOXEL_FILL = 0.32;
 
 /** Half-texel inset applied inside each atlas tile (in tile-local UV) to keep
  * bilinear filtering from bleeding in the neighbouring tile's edge texels. */
@@ -135,13 +177,112 @@ export const CHUNK_UPDATE_MOVE_EPSILON = 1.5;
 // Proxy cloud
 // ---------------------------------------------------------------------------
 
-/** Opacity of the always-resident coarse proxy cubes. */
-export const PROXY_OPACITY = 0.3;
+/**
+ * Opacity of the always-resident coarse proxy cubes.
+ *
+ * 0.3 -> 0.18, purely as a consequence of the `VOXEL_FILL` 0.92 -> 0.32 change.
+ * The proxy layer's sizing needed nothing (it is chunk-scale, and
+ * `manifest.chunkWorldSize` scales with `WORLD_SCALE` on its own), but its
+ * relative visual WEIGHT inverted: 0.3 read as a light haze behind a solid wall
+ * of thumbnails, and against the new sparse specks the same cubes became the
+ * heaviest thing on screen — the coarse placeholder outshouting the real data
+ * it stands in for. 0.18 restores the hierarchy while still drawing a clearly
+ * readable silhouette of the un-streamed world from across the map (verified on
+ * the same wide screenshot vantage used to pick VOXEL_FILL).
+ */
+export const PROXY_OPACITY = 0.18;
 /** Proxy cube edge as a fraction of a chunk edge, at min and max density. */
 export const PROXY_MIN_FILL = 0.3;
 export const PROXY_MAX_FILL = 0.94;
 /** `density_log2` value treated as "fully dense" when scaling proxy cubes. */
 export const PROXY_DENSITY_LOG2_MAX = 18;
+
+// ---------------------------------------------------------------------------
+// Environment — depth cues (Phase 6.6)
+// ---------------------------------------------------------------------------
+//
+// Direct feedback: judging distance in an otherwise-black void is hard, and the
+// reference is space-flight games (Descent; more recently Elite Dangerous / No
+// Man's Sky). Both knobs below are the two cheapest, most standard cues from
+// that genre — atmospheric attenuation with distance, and a fixed backdrop to
+// move against. Both are deliberately near the threshold of noticing: the ask
+// was explicitly "some fog (but keep it subtle)".
+
+/**
+ * Fog color. Identical to the renderer's clear color (`Engine`'s
+ * `setClearColor(0x05060a)`) on purpose — fog that doesn't match the background
+ * reads as a visible grey wall hanging in space at the fade distance instead of
+ * as depth, because geometry fades toward one color while the void behind it
+ * stays another.
+ */
+export const FOG_COLOR = 0x05060a;
+
+/**
+ * `THREE.FogExp2` density. Exponential-squared rather than linear `THREE.Fog`:
+ * linear fog has a hard near plane where the effect switches on, which is
+ * exactly the "visible wall" artifact subtlety rules out, whereas exp2 starts
+ * attenuating immediately and ramps smoothly — the haze look this wants.
+ *
+ * Expressed as a fraction of `WORLD_SCALE` so it re-derives itself if the world
+ * is ever rescaled again (fog density is 1/length, so it must scale inversely
+ * with the world; a hardcoded value tuned at one WORLD_SCALE is silently wrong
+ * at another). The attenuation `f = 1 - exp(-(d * density)^2)` at
+ * 0.36/WORLD_SCALE = 0.0072 works out to:
+ *
+ *     d =  10 (arm's length)          -> 0.5% dimmed
+ *     d =  25 (a quarter world axis)  -> 3.2%
+ *     d =  50 (a world half-extent)   -> 12%
+ *     d = 100 (a full world axis)     -> 40%
+ *     d = 133 (the R2 residency edge) -> 60%
+ *     d = 173 (the world diagonal)    -> 79%
+ *
+ * So the voxel you're about to mine is untouched, a cluster on the far side of
+ * the map is plainly hazier than the one in front of you, and the edge of the
+ * streamed world sits back in the mist — with nothing actually vanishing at any
+ * distance you'd navigate at.
+ *
+ * Picked by measurement plus a density sweep from a fixed pose, not by eye:
+ * `gl.readPixels` on ~100 real voxel-face pixels (bucketed by their raycast
+ * distance) tracks the analytic curve above to within ~2 points, and comparing
+ * renders at 0.005 / 0.0072 / 0.010 showed 0.005 to be imperceptible at
+ * browsing distances (6% at 50 units) while 0.010 starts flattening the far
+ * field into grey. 0.0072 is the value where near-vs-far ordering is legible in
+ * a single frame and the effect still reads as air rather than as a filter.
+ */
+export const FOG_DENSITY = 0.36 / WORLD_SCALE;
+
+/**
+ * Radius of the starfield shell, in `WORLD_SCALE`s. 12 puts it at 600 units —
+ * far outside both the world (half-extent 50) and the R2 residency ring (133),
+ * so stars always read as "infinitely far away" and can never be flown into or
+ * mistaken for data. It has to stay comfortably inside `CAMERA_FAR` (1200) from
+ * wherever the camera is, including its own far side: 600 + 600 = 1200 exactly
+ * at the origin, so the shell's back half fades out right at the far plane
+ * rather than popping — which is fine (and invisible) because fog is disabled
+ * on the stars and they are drawn behind everything anyway.
+ *
+ * The shell is at FIXED world positions rather than pinned to the camera. A
+ * camera-pinned skybox gives rotation cues only; leaving it in the world means
+ * crossing the map sweeps the stars by a few degrees of real parallax, which is
+ * the half of the cue that tells you you're translating and how fast.
+ */
+export const STARFIELD_RADIUS_WORLD_SCALES = 12;
+
+/** Star count. Sparse on purpose — this is a depth cue, not a nebula. */
+export const STARFIELD_COUNT = 1400;
+
+/** On-screen star size in pixels (`sizeAttenuation` is off — at 600 units,
+ * perspective-attenuated points would be sub-pixel and alias into flicker). */
+export const STARFIELD_SIZE_PX = 1.6;
+
+/** Peak star opacity. Individual stars are additionally dimmed by a random
+ * per-star brightness (see `engine/Starfield.ts`), so this is the brightest any
+ * of them gets — dim enough that the field never competes with the data. */
+export const STARFIELD_OPACITY = 0.55;
+
+/** Star tint — the same cool blue-white the scene's hemisphere fill uses, so
+ * the backdrop belongs to the same lighting world as the voxels. */
+export const STARFIELD_COLOR = 0xbcd0ff;
 
 // ---------------------------------------------------------------------------
 // Phase 1 synthetic field (kept for the `?synthetic=1` fallback view)
@@ -175,8 +316,16 @@ export const SYNTHETIC_INSTANCE_COUNT = 150_000;
  * below (30 with easing might have been fine on its own), but the plan to
  * also shrink voxels / grow the effective world (making distances feel
  * bigger) means a modest speed suits that direction better than a fast one.
- * Revisit once that scale change lands — the "right" number is coupled to
- * world scale, not an absolute constant.
+ *
+ * That scale change has now landed (`WORLD_SCALE` 25 -> 50) and 16 is
+ * deliberately UNCHANGED. The feedback that motivated the bigger world was "i
+ * have to fly farther to get across the map" — i.e. more sense of distance, not
+ * the same trip at a higher speed, and raising the speed to compensate would
+ * cancel exactly the thing that was asked for. What the doubling actually costs
+ * is bounded and small: crossing a world axis goes ~3.1s -> ~6.3s, and the full
+ * corner-to-corner diagonal ~5.4s -> ~11s. That is a journey, not dead time,
+ * and the R2 residency ring (8 chunk edges, which scales with the world) still
+ * keeps two-thirds of an axis streamed in around you the whole way.
  */
 export const FLIGHT_SPEED = 16;
 
@@ -197,10 +346,22 @@ export const FLIGHT_VERTICAL_SPEED = 16;
  */
 export const FLIGHT_ACCEL_TAU_S = 0.15;
 
-/** Camera near/far planes and FOV. */
+/** Camera near/far planes and FOV.
+ *
+ * `CAMERA_FAR` 500 -> 1200 alongside the `WORLD_SCALE` 25 -> 50 change. The
+ * world now spans 100 units per axis / 173 on the diagonal, and the R2 keep-ring
+ * reaches 8 chunk edges = 133 units, so 500 was no longer the comfortable ~6x
+ * margin it used to be — and the starfield shell below deliberately sits far
+ * outside the play area, which needs the depth range to reach it from anywhere
+ * a player is likely to be (`STARFIELD_RADIUS_WORLD_SCALES * WORLD_SCALE` plus
+ * the distance they've strayed from the origin).
+ *
+ * Raising `far` costs essentially nothing in depth precision here: with a near
+ * plane of 0.05 the `1/near - 1/far` term is 20.0 at far=500 and 19.999 at
+ * far=1200, i.e. the near plane dominates by four orders of magnitude. */
 export const CAMERA_FOV_DEG = 70;
 export const CAMERA_NEAR = 0.05;
-export const CAMERA_FAR = 500;
+export const CAMERA_FAR = 1200;
 
 /** Raycast max distance from the camera, world units. */
 export const RAYCAST_MAX_DISTANCE = 200;

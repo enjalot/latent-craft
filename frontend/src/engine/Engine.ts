@@ -3,10 +3,13 @@ import {
   CAMERA_FAR,
   CAMERA_FOV_DEG,
   CAMERA_NEAR,
+  FOG_COLOR,
+  FOG_DENSITY,
   TELEPORT_MAX_MS,
   TELEPORT_MIN_MS,
   TELEPORT_MS_PER_WORLD_UNIT,
 } from "../config.ts";
+import { Starfield } from "./Starfield.ts";
 
 export type TickCallback = (deltaSeconds: number, elapsedSeconds: number) => void;
 
@@ -56,6 +59,10 @@ export class Engine {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
   readonly timer: THREE.Timer;
+  /** The backdrop shell (see `Starfield.ts`). Owned here because it is part of
+   * the scene's environment — the same category as the clear color and the fog
+   * — not part of any dataset's content. */
+  readonly starfield: Starfield;
 
   private container: HTMLElement;
   private onUpdate: TickCallback | null = null;
@@ -74,6 +81,19 @@ export class Engine {
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
+    // Depth cues for a black void (see config.ts's "Environment" section).
+    //
+    // Set here, in the constructor, rather than anywhere downstream: whether a
+    // scene has fog is baked into every material's compiled program as
+    // `USE_FOG`, and the voxel material additionally pins its own
+    // `customProgramCacheKey`. Establishing the fog before a single material
+    // exists means nothing has to depend on three noticing a later change (or
+    // on someone remembering a `needsUpdate` on every chunk material as it
+    // streams in), and no frame can render fogged proxy cubes against unfogged
+    // voxels.
+    this.scene.fog = new THREE.FogExp2(FOG_COLOR, FOG_DENSITY);
+    this.starfield = new Starfield();
+    this.scene.add(this.starfield.points);
 
     this.camera = new THREE.PerspectiveCamera(
       CAMERA_FOV_DEG,
@@ -201,6 +221,7 @@ export class Engine {
 
   dispose(): void {
     this.stop();
+    this.starfield.dispose();
     this.timer.dispose();
     window.removeEventListener("resize", this.handleResize);
     this.renderer.dispose();
