@@ -2,6 +2,12 @@ import * as THREE from "three";
 import type { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import { RAYCAST_MAX_DISTANCE } from "../config.ts";
 
+/** Fallback NDC when a caller doesn't have a real cursor position yet (e.g.
+ * before the first pointermove). Phase 1-3 always raycast from here, back
+ * when the pointer was locked/hidden behind a fixed crosshair; Phase 3.5's
+ * free-mouse scheme raycasts from the actual cursor instead (see
+ * `interaction/PointerController.ts#ndc`), so this is now just a sane
+ * default, not the primary behavior. */
 const SCREEN_CENTER = new THREE.Vector2(0, 0);
 
 export interface VoxelHit {
@@ -14,9 +20,11 @@ export interface VoxelHit {
 }
 
 /**
- * Center-screen raycaster: since the pointer is locked/hidden behind a
- * crosshair, hover targeting always fires from the middle of the viewport
- * rather than from a mouse position.
+ * Cursor-following raycaster: hover/mine targeting fires from wherever the
+ * mouse actually is (`ndc`, normalized device coordinates, -1..1 on each
+ * axis), not a fixed screen point — necessary now that the free-mouse
+ * control scheme (Phase 3.5) means "where the camera looks" and "where the
+ * cursor is" are no longer the same point by construction.
  *
  * Phase 2 raycasts against a whole `THREE.Group` of per-chunk
  * `InstancedMesh2`es rather than one mesh — each chunk carries its own BVH, so
@@ -34,9 +42,12 @@ export class VoxelRaycaster {
   /**
    * @param target A single mesh, an array of meshes, or a group to descend
    *   into (`recursive` must be true for the group case).
+   * @param ndc Normalized device coordinates (-1..1) to cast from — pass the
+   *   current mouse position (`PointerController#ndc`) for hover/mining;
+   *   defaults to screen center only for callers that don't track a cursor.
    */
-  raycast(target: THREE.Object3D | THREE.Object3D[], recursive = false): VoxelHit | null {
-    this.raycaster.setFromCamera(SCREEN_CENTER, this.camera);
+  raycast(target: THREE.Object3D | THREE.Object3D[], recursive = false, ndc: THREE.Vector2 = SCREEN_CENTER): VoxelHit | null {
+    this.raycaster.setFromCamera(ndc, this.camera);
     this.results.length = 0;
 
     if (Array.isArray(target)) {

@@ -27,6 +27,12 @@ export class Inventory {
     this.store.set((prev) => [stack, ...prev]);
   }
 
+  /** Removes a stack by id (see `restore()` in `MiningController`) — a
+   * no-op if the id isn't present, so callers don't need to check first. */
+  removeStack(id: string): void {
+    this.store.set((prev) => prev.filter((stack) => stack.id !== id));
+  }
+
   get stacks(): InventoryStack[] {
     return this.store.get();
   }

@@ -1,6 +1,7 @@
 import type { Inventory, InventoryStack } from "../interaction/Inventory.ts";
 import { resolveThumbUrl, type PointIndex } from "../streaming/PointIndex.ts";
 import { INVENTORY_THUMBS_PAGE_SIZE } from "../config.ts";
+import { Lightbox } from "./Lightbox.ts";
 
 const PANEL_STYLE: Partial<CSSStyleDeclaration> = {
   position: "fixed",
@@ -30,13 +31,11 @@ const PANEL_STYLE: Partial<CSSStyleDeclaration> = {
  * clicking a row toggles an inline grid of that stack's full-resolution
  * thumbnails.
  *
- * Click over hover, deliberately: with `PointerLockControls` engaged the
- * cursor is hidden and only relative movement deltas are available, so a
- * "hover" gesture over this on-screen panel isn't meaningfully available
- * until the player has already unlocked the pointer (Esc, which the
- * browser's Pointer Lock API always honors regardless of app code) — at
- * which point a normal visible-cursor click is available anyway and is a
- * more deliberate, more Playwright-testable gesture than hover-to-reveal.
+ * Click over hover, deliberately: even now that Phase 3.5 keeps the cursor
+ * free/visible at all times (no more `PointerLockControls`), a click is
+ * still a more deliberate, more Playwright-testable gesture than
+ * hover-to-reveal — and it means this panel's interaction model doesn't
+ * depend on whichever control scheme the 3D view happens to be using.
  *
  * Thumbnails are lazy on two axes: (1) a stack's grid is only built the
  * first time its row is expanded, not when it's mined or when the panel
@@ -44,12 +43,17 @@ const PANEL_STYLE: Partial<CSSStyleDeclaration> = {
  * `<img>`s up front with a "Show N more" button for the rest — a single
  * voxel can hold thousands of points, and rendering that many images at once
  * on click would visibly hang the tab.
+ *
+ * Phase 3.5: clicking a grid thumbnail opens it in `Lightbox`, a simple
+ * enlarge-on-click modal — see that class's doc comment for why "bigger"
+ * means upscaled display of the same 256px source, not a higher-res fetch.
  */
 export class InventoryPanel {
   private readonly root: HTMLElement;
   private readonly headerEl: HTMLElement;
   private readonly listEl: HTMLElement;
   private readonly emptyEl: HTMLElement;
+  private readonly lightbox: Lightbox;
 
   /** Built once per stack id and reused across store updates, so an
    * already-expanded stack's loaded thumbnails and open/closed state survive
@@ -92,6 +96,7 @@ export class InventoryPanel {
     this.root.appendChild(this.listEl);
 
     container.appendChild(this.root);
+    this.lightbox = new Lightbox(container);
 
     this.render(inventory.stacks);
     inventory.store.subscribe((stacks) => this.render(stacks));
@@ -215,7 +220,17 @@ export class InventoryPanel {
           objectFit: "cover",
           background: "#1b1e28",
           borderRadius: "2px",
+          cursor: "zoom-in",
         } satisfies Partial<CSSStyleDeclaration>);
+        // Clicking a grid thumbnail opens it enlarged (Lightbox), rather
+        // than toggling the row's expand/collapse — stopPropagation is
+        // defensive (the grid and the row's `summary` toggle are siblings,
+        // not ancestor/descendant, so this click wouldn't reach it anyway),
+        // matching the same defensiveness `showMoreBtn` already uses below.
+        img.addEventListener("click", (event) => {
+          event.stopPropagation();
+          this.lightbox.open(url, `row ${rowId} — chunk ${stack.chunkId} · voxel ${stack.localVoxelId}`);
+        });
         frag.appendChild(img);
       }
       shown = end;

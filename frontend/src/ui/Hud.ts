@@ -17,7 +17,10 @@ export interface HudState {
   visibleInstances: number;
   cameraPosition: THREE.Vector3;
   hoverLabel: string;
-  locked: boolean;
+  /** Whether a look-drag (click-and-drag rotate) is currently in progress —
+   * shown for debugging only; nothing gates on it the way the old
+   * `PointerLockControls`-driven `locked` flag used to. */
+  dragging: boolean;
   /** Absent in the Phase 1 synthetic view, which streams nothing. */
   streaming?: HudStreamingState;
   /** Shown in place of everything else while the manifest/proxy load. */
@@ -86,7 +89,13 @@ export class Hud {
     lines.push(`pos: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`);
     lines.push(`hover: ${state.hoverLabel}`);
     if (state.status) lines.push(state.status);
-    if (!state.locked) lines.push("click to look / WASD+QE to fly, Shift = boost");
+    // Free-mouse scheme (Phase 3.5): always-on reference line, since there's
+    // no more "click to engage" moment to hide it after.
+    lines.push(
+      state.dragging
+        ? "dragging to look…"
+        : "drag to look · WASD/QE fly, Shift = boost · hold a voxel to mine/restore",
+    );
 
     // The HUD text changes at most a few characters per frame; skipping the
     // DOM write when nothing changed keeps it off the layout path entirely.

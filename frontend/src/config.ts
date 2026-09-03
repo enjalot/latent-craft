@@ -148,8 +148,49 @@ export const CAMERA_FAR = 500;
 export const RAYCAST_MAX_DISTANCE = 200;
 
 // ---------------------------------------------------------------------------
-// Mining / inventory (Phase 3)
+// Free-mouse look (Phase 3.5) — click-and-drag rotates the camera instead of
+// PointerLockControls' full-capture mouse-look. See `FlightControls.ts` and
+// the new `interaction/PointerController.ts`, which owns the raw pointer
+// stream and decides drag-to-look vs. hold-to-mine.
 // ---------------------------------------------------------------------------
+
+/** Radians of yaw/pitch per pixel of mouse-drag delta. Tuned by feel against
+ * a 1920px-wide viewport; a plain constant rather than DPI-aware since
+ * `movementX/Y` is already reported in CSS pixels by the browser. */
+export const LOOK_SENSITIVITY_RAD_PER_PX = 0.0028;
+
+/** Pitch clamp, symmetric around the horizon — stops just short of ±90° to
+ * avoid the yaw axis becoming degenerate (straight up/down) under the 'YXZ'
+ * Euler order FlightControls composes yaw/pitch with. */
+export const LOOK_PITCH_LIMIT_RAD = Math.PI / 2 - 0.02;
+
+/** How far the pointer must move from its mousedown position, in CSS pixels,
+ * before a candidate mine/restore hold is abandoned and reinterpreted as a
+ * look-drag instead. Small enough to not feel laggy, big enough to absorb
+ * sub-pixel jitter from an otherwise-still hand. */
+export const LOOK_DRAG_THRESHOLD_PX = 6;
+
+// ---------------------------------------------------------------------------
+// Mining / inventory (Phase 3, extended Phase 3.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * How long a click-and-hold must be sustained to mine (or restore) a voxel,
+ * in milliseconds. Same constant drives both directions — the UX is
+ * symmetric, just the opposite visual outcome. Named/exported so it's a
+ * one-line retune rather than a hunt through main.ts.
+ */
+export const MINE_HOLD_DURATION_MS = 1600;
+
+/** Opacity a mined-but-not-yet-restored voxel renders at (1 = fully opaque,
+ * matching a normal untouched voxel). Verified by eye against a real
+ * screenshot, not just picked from the addendum's suggested 0.25-0.4 range
+ * in the abstract: against this scene's near-black void background and dim
+ * lighting (most BL book pages are dark ink on paper to begin with — see
+ * `main.ts`'s lighting comment), anything in that range reads as
+ * indistinguishable from fully gone. 0.55 is the value that actually stayed
+ * legible as "translucent, still there" in a headless screenshot. */
+export const MINED_OPACITY = 0.55;
 
 /**
  * Base path for full-resolution per-point thumbnails, proxied same-origin

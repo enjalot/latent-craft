@@ -10,12 +10,14 @@ import { ChunkLoader, type ChunkMeshUserData } from "./streaming/ChunkLoader.ts"
 import { ChunkStore } from "./streaming/ChunkStore.ts";
 import { loadPointIndex, type PointIndex } from "./streaming/PointIndex.ts";
 import { MiningController } from "./interaction/MiningController.ts";
+import { PointerController, type VoxelTarget } from "./interaction/PointerController.ts";
 import { Hud, type HudStreamingState } from "./ui/Hud.ts";
-import { createCrosshair } from "./ui/hud/Crosshair.ts";
+import { createHoldProgressRing } from "./ui/hud/Crosshair.ts";
 import { InventoryPanel } from "./ui/InventoryPanel.ts";
 import {
   DATASETS,
   DEFAULT_DATASET,
+  MINE_HOLD_DURATION_MS,
   WORLD_HALF_EXTENT,
   WORLD_SCALE,
   resolveDatasetBaseUrl,
@@ -46,8 +48,29 @@ const sunLight = new THREE.DirectionalLight(0xfff2e0, 1.55);
 sunLight.position.set(1, 1.4, 0.8);
 engine.scene.add(sunLight);
 
-const flightControls = new FlightControls(engine.camera, engine.renderer.domElement);
+const flightControls = new FlightControls(engine.camera);
 const raycaster = new VoxelRaycaster(engine.camera);
+
+/** Resolves a raycast hit back to its chunk/voxel identity, or `null` if the
+ * hit isn't against a chunk-voxel mesh (e.g. the Phase 1 `?synthetic=1`
+ * field, whose userData carries no `chunkId`). Shared by the per-frame hover
+ * logic below and `PointerController`'s mousedown-time hit test, so the two
+ * never disagree about what counts as "a voxel." */
+function resolveVoxelTarget(hit: VoxelHit | null): VoxelTarget | null {
+  if (!hit) return null;
+  const userData = hit.mesh.userData as Partial<ChunkMeshUserData>;
+  if (userData.chunkId === undefined || !userData.instanceToLocalVoxelId) return null;
+  const localVoxelId = userData.instanceToLocalVoxelId[hit.instanceId];
+  if (localVoxelId === undefined) return null;
+  return { chunkId: userData.chunkId, localVoxelId };
+}
+
+/** Raycasts from an arbitrary NDC position against whatever the world's
+ * current raycast target is (`raycastTarget`/`raycastRecursive`, set once
+ * the streamed world or the synthetic field is up). */
+function raycastAt(ndc: THREE.Vector2): VoxelHit | null {
+  return raycastTarget ? raycaster.raycast(raycastTarget, raycastRecursive, ndc) : null;
+}
 
 // Hover highlight: a separate wireframe box repositioned to match the
 // hovered instance's transform each frame.
@@ -58,7 +81,7 @@ highlightBox.visible = false;
 engine.scene.add(highlightBox);
 
 const hud = new Hud(app);
-createCrosshair(app);
+const holdRing = createHoldProgressRing(app);
 
 // scratch objects reused every frame to avoid per-frame allocation
 const hitMatrix = new THREE.Matrix4();
@@ -78,6 +101,28 @@ let chunkStore: ChunkStore | null = null;
 let proxyCloud: ProxyCloud | null = null;
 let syntheticInstances = 0;
 let miningController: MiningController | null = null;
+
+// --- pointer: click-and-drag to look, click-and-HOLD to mine/restore --------
+//
+// `PointerController` owns the raw pointer stream and the drag-vs-hold
+// ambiguity; this module only supplies the hit-test and reacts to hold
+// lifecycle events. Hold *progress* is duration-based (needs `dt`), so it's
+// driven from the per-frame loop below rather than from PointerController's
+// event callbacks — see that class's doc comment.
+let holdElapsedSeconds = 0;
+
+const pointerController = new PointerController(engine.renderer.domElement, flightControls, {
+  hitTestVoxel: (ndc) => resolveVoxelTarget(raycastAt(ndc)),
+  onHoldStart: (target) => {
+    holdElapsedSeconds = 0;
+    const restoring = miningController?.isMined(target.chunkId, target.localVoxelId) ?? false;
+    holdRing.show(restoring ? "restore" : "mine");
+  },
+  onHoldCancel: () => {
+    holdElapsedSeconds = 0;
+    holdRing.hide();
+  },
+});
 
 // point_index.bin (whole-dataset row_id → thumbnail lookup) is only needed
 // once the inventory panel actually wants to render a thumbnail, so it's
@@ -179,28 +224,15 @@ function frameDensestChunk(m: Manifest): void {
   // would spawn the camera *inside* the densest cluster, nose against a voxel.
   const back = Math.max(m.chunkWorldSize * 1.6, m.worldScale * 0.5);
   engine.camera.position.set(center.x + back * 0.55, center.y + back * 0.45, center.z + back);
-  engine.camera.lookAt(center);
-  // PointerLockControls drives yaw/pitch off the camera's own quaternion, so
-  // a plain lookAt here is picked up cleanly the moment the pointer locks.
+  // Go through FlightControls so its yaw/pitch stay in sync with the
+  // quaternion this sets — see `FlightControls.lookAt`'s doc comment.
+  flightControls.lookAt(center);
 }
 
-// --- mining -------------------------------------------------------------
-
-/** The raycast hit as of the most recent frame — read by the click listener
- * below rather than re-raycasting on click, since the crosshair already
- * raycasts every frame from the same screen center. */
+/** The raycast hit as of the most recent frame, from the current cursor
+ * position — read by the hold-completion logic below rather than
+ * re-raycasting, since the frame loop already raycasts every frame. */
 let currentHit: VoxelHit | null = null;
-
-// A click both (a) requests pointer lock, via FlightControls' own listener
-// on the same element, and (b) — this listener — mines whatever's under the
-// crosshair. `isLocked` is what keeps those from colliding: the very first
-// click on a fresh page has `isLocked === false` right up until the browser
-// grants the lock (an async step), so that click only locks and never mines;
-// every click after that is a real mine attempt.
-engine.renderer.domElement.addEventListener("click", () => {
-  if (!flightControls.isLocked) return;
-  miningController?.mine(currentHit);
-});
 
 // --- per-frame loop ---------------------------------------------------------
 
@@ -214,13 +246,28 @@ const streamingState: HudStreamingState = {
   atlasBytes: 0,
 };
 
+/** Tracks the canvas's CSS `cursor` value so we only touch the DOM when it
+ * actually changes (same "skip unchanged writes" discipline `Hud.ts` uses
+ * for its text). Idle hover-state feedback (is anything targetable here?)
+ * is deliberately handled this way — via the native cursor — rather than a
+ * second on-screen indicator; see `Crosshair.ts`'s doc comment. */
+let lastCursorStyle = "";
+function setCursorStyle(value: string): void {
+  if (value === lastCursorStyle) return;
+  lastCursorStyle = value;
+  engine.renderer.domElement.style.cursor = value;
+}
+
 engine.start((dt) => {
   flightControls.update(dt);
   chunkStore?.updateCamera(engine.camera);
 
   let hoverLabel = "none";
-  const hit = raycastTarget ? raycaster.raycast(raycastTarget, raycastRecursive) : null;
+  const hit = raycastAt(pointerController.ndc);
   currentHit = hit;
+  const target = resolveVoxelTarget(hit);
+  const hoveredMined = target ? (miningController?.isMined(target.chunkId, target.localVoxelId) ?? false) : false;
+
   if (hit) {
     hit.mesh.getMatrixAt(hit.instanceId, hitMatrix);
     hitMatrix.decompose(hitPosition, hitQuaternion, hitScale);
@@ -229,21 +276,61 @@ engine.start((dt) => {
     highlightBox.scale.copy(hitScale).multiplyScalar(1.06);
     highlightBox.visible = true;
 
-    const userData = hit.mesh.userData as Partial<ChunkMeshUserData>;
-    if (userData.instanceToLocalVoxelId && userData.chunkId !== undefined) {
-      const localVoxelId = userData.instanceToLocalVoxelId[hit.instanceId];
-      const chunk = chunkStore?.chunk(userData.chunkId);
-      const points = chunk ? chunk.meta.count[localVoxelId] : 0;
-      const reprRowId = chunk ? chunk.meta.reprRowId[localVoxelId] : -1;
-      const mineHint = miningController && flightControls.isLocked ? " · click to mine" : "";
+    if (target) {
+      const chunk = chunkStore?.chunk(target.chunkId);
+      const points = chunk ? chunk.meta.count[target.localVoxelId] : 0;
+      const reprRowId = chunk ? chunk.meta.reprRowId[target.localVoxelId] : -1;
+      const actionHint = miningController ? (hoveredMined ? " · hold to restore" : " · hold to mine") : "";
       hoverLabel =
-        `chunk ${userData.chunkId} voxel ${localVoxelId} · ${points} pts · row ${reprRowId} · ` +
-        `${hitPosition.x.toFixed(1)}, ${hitPosition.y.toFixed(1)}, ${hitPosition.z.toFixed(1)}${mineHint}`;
+        `chunk ${target.chunkId} voxel ${target.localVoxelId} · ${points} pts · row ${reprRowId} · ` +
+        `${hitPosition.x.toFixed(1)}, ${hitPosition.y.toFixed(1)}, ${hitPosition.z.toFixed(1)}${actionHint}`;
     } else {
       hoverLabel = `instance #${hit.instanceId}`;
     }
   } else {
     highlightBox.visible = false;
+  }
+
+  // --- hold-to-mine / hold-to-restore progress -------------------------
+  const holdTarget = pointerController.holdTarget;
+  if (holdTarget) {
+    const stillHovering =
+      !!target && target.chunkId === holdTarget.chunkId && target.localVoxelId === holdTarget.localVoxelId;
+    if (!stillHovering) {
+      // Hover target changed out from under an armed hold (e.g. WASD flight
+      // moved the world under an otherwise-still cursor) — cancel without
+      // banking any progress, per the plan's explicit requirement.
+      pointerController.cancelHold();
+    } else {
+      holdElapsedSeconds += dt;
+      const durationSeconds = MINE_HOLD_DURATION_MS / 1000;
+      holdRing.setProgress(holdElapsedSeconds / durationSeconds);
+      if (holdElapsedSeconds >= durationSeconds) {
+        const restoring = miningController?.isMined(holdTarget.chunkId, holdTarget.localVoxelId) ?? false;
+        if (restoring) miningController?.restore(hit);
+        else miningController?.mine(hit);
+        // Consumed, not canceled — requires a fresh mousedown to arm the
+        // next hold, so a completed mine can't auto-chain into a restore
+        // while the button is still physically down.
+        pointerController.consumeHold();
+        holdElapsedSeconds = 0;
+        holdRing.hide();
+      }
+    }
+  }
+
+  // --- cursor position/state feedback -----------------------------------
+  if (holdTarget) {
+    const xPx = (pointerController.ndc.x * 0.5 + 0.5) * window.innerWidth;
+    const yPx = (1 - (pointerController.ndc.y * 0.5 + 0.5)) * window.innerHeight;
+    holdRing.setPosition(xPx, yPx);
+  }
+  if (pointerController.isDragging) {
+    setCursorStyle("grabbing");
+  } else if (target) {
+    setCursorStyle(hoveredMined ? "pointer" : "crosshair");
+  } else {
+    setCursorStyle("default");
   }
 
   const instantFps = dt > 0 ? 1 / dt : fpsEma;
@@ -270,7 +357,7 @@ engine.start((dt) => {
     visibleInstances,
     cameraPosition: engine.camera.position,
     hoverLabel,
-    locked: flightControls.isLocked,
+    dragging: pointerController.isDragging,
     streaming: useSynthetic ? undefined : streamingState,
     status,
   });
@@ -298,6 +385,10 @@ Object.assign(window as unknown as Record<string, unknown>, {
     },
     raycaster,
     flightControls,
+    pointerController,
+    get holdElapsedSeconds() {
+      return holdElapsedSeconds;
+    },
     get status() {
       return status;
     },
