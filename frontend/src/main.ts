@@ -31,6 +31,7 @@ import {
   XRAY_OPACITY,
   resolveDatasetBaseUrl,
   resolveMinimapBaseUrl,
+  resolveThumbsBaseUrl,
 } from "./config.ts";
 
 const app = document.getElementById("app");
@@ -174,7 +175,7 @@ let pointIndexReady: PointIndex | null = null;
 function loadPointIndexOnce(): Promise<PointIndex> {
   if (!manifest) return Promise.reject(new Error("point_index: manifest not loaded yet"));
   if (!pointIndexPromise) {
-    pointIndexPromise = loadPointIndex(manifest)
+    pointIndexPromise = loadPointIndex(manifest, resolveThumbsBaseUrl(datasetKey))
       .then((index) => {
         pointIndexReady = index;
         return index;

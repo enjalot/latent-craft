@@ -42,9 +42,20 @@ def build_chunk_atlas_png(
     thumb_source: ThumbnailSource,
     tile_px: int = 32,
     atlas_px: int = 2048,
-) -> Image.Image:
+) -> tuple[Image.Image, int]:
     """occupied_local_ids and representative_row_ids are parallel arrays (same length,
-    one entry per occupied voxel in this chunk)."""
+    one entry per occupied voxel in this chunk).
+
+    Returns `(atlas, n_blank)`. A `ThumbnailSource` is allowed to return empty bytes
+    for a point whose image isn't available — MONET's packed store does that for a
+    shard that hasn't been pulled yet and for a row whose source image failed to
+    decode (BL's never does; its thumbnails are always present). Those tiles are
+    SKIPPED, keeping the atlas background color, and counted: a build against a
+    partially-populated thumbnail store should report how many voxels came out blank,
+    not silently look successful. Everything else about the chunk (voxel records,
+    point ids, mean tile color) stays correct, so such a pack is usable and can be
+    rebuilt once the store completes.
+    """
     if len(occupied_local_ids) != len(representative_row_ids):
         raise ValueError("occupied_local_ids and representative_row_ids must be parallel")
 
@@ -53,13 +64,17 @@ def build_chunk_atlas_png(
         raise ValueError(f"atlas_px={atlas_px} must be an exact multiple of tile_px={tile_px}")
 
     atlas = Image.new("RGB", (atlas_px, atlas_px), BACKGROUND_RGB)
+    n_blank = 0
     for local_id, row_id in zip(occupied_local_ids.tolist(), representative_row_ids.tolist()):
+        raw = thumb_source.open(row_id)
+        if not raw:
+            n_blank += 1
+            continue
         col = local_id % tiles_per_side
         row = local_id // tiles_per_side
-        raw = thumb_source.open(row_id)
         tile = _square_crop_resize(raw, tile_px)
         atlas.paste(tile, (col * tile_px, row * tile_px))
-    return atlas
+    return atlas, n_blank
 
 
 def mean_tile_color(atlas: Image.Image, local_id: int, tile_px: int, tiles_per_side: int) -> tuple[int, int, int]:

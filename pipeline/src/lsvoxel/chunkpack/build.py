@@ -87,6 +87,11 @@ def assign_and_build(
     reps_by_chunk = {int(cid): g for cid, g in reps.groupby("chunk_id", sort=False)}
 
     chunk_entries: list[dict] = []
+    # Voxels whose representative point had no thumbnail bytes — see
+    # atlas.build_chunk_atlas_png. Always 0 for a dataset whose thumbnails are all
+    # present (BL); nonzero means the pack was built over a partially-populated
+    # store (MONET mid-pull) and those voxels render as flat background tiles.
+    n_blank_tiles = 0
     proxy_chunk_ids: list[int] = []
     proxy_colors: list[np.ndarray] = []
     proxy_n_points: list[int] = []
@@ -120,9 +125,10 @@ def assign_and_build(
             voxel_records[lid]["repr_row_id"] = repr_row
             voxel_records[lid]["flags"] = metablob.FLAG_HAS_ATLAS_TILE
 
-        atlas_img = atlas_mod.build_chunk_atlas_png(
+        atlas_img, n_blank = atlas_mod.build_chunk_atlas_png(
             occ_local_ids, occ_repr_row_ids, thumb_source, tile_px=tile_px, atlas_px=atlas_px
         )
+        n_blank_tiles += n_blank
         for lid in occ_local_ids.tolist():
             voxel_records[lid]["color_rgb"] = atlas_mod.mean_tile_color(
                 atlas_img, lid, tile_px, tiles_per_side
@@ -181,7 +187,16 @@ def assign_and_build(
         proxy_n_occ.append(len(occ_local_ids))
 
         if (ci + 1) % 25 == 0 or ci + 1 == n_chunks_total:
-            print(f"[build] chunk {ci + 1}/{n_chunks_total} done", flush=True)
+            blank_note = f", {n_blank_tiles:,} blank tiles so far" if n_blank_tiles else ""
+            print(f"[build] chunk {ci + 1}/{n_chunks_total} done{blank_note}", flush=True)
+
+    if n_blank_tiles:
+        print(
+            f"[build] WARNING: {n_blank_tiles:,} of {len(reps):,} occupied voxels "
+            f"({100 * n_blank_tiles / max(len(reps), 1):.1f}%) got a blank atlas tile — "
+            "their representative point's thumbnail wasn't available",
+            flush=True,
+        )
 
     print("[build] writing whole-dataset artifacts ...", flush=True)
     proxy_records = proxy_mod.build_proxy_records(
@@ -228,6 +243,7 @@ def assign_and_build(
         "n_chunks": len(chunk_entries),
         "n_occupied_voxels": len(reps),
         "n_points": n,
+        "n_blank_tiles": n_blank_tiles,
     }
 
 

@@ -23,10 +23,12 @@ export default defineConfig({
       "/chunks": "http://localhost:8802",
       // Per-point full-resolution thumbnails (mining/inventory) — resolve a
       // row_id to a URL via point_index.bin (subset_code/local_idx) + the
-      // manifest's thumb_url_template, then fetch it at /thumbs/<dataset
-      // family>/<that path>. Currently only the BL family is symlinked in on
-      // the data-server side (/data/latent-scope-3d/thumbs/bl ->
-      // /data/images/british-library-book-images/thumbs).
+      // manifest's thumb_url_template, then fetch it at /thumbs/<that path>.
+      // Two families share this one proxy rule: BL is static files (a symlink
+      // on the data-server side, /data/latent-scope-3d/thumbs/bl ->
+      // /data/images/british-library-book-images/thumbs); MONET is a dynamic
+      // route in data_server.py (/thumbs/monet/<packed>.webp) that slices one
+      // thumbnail out of the packed per-shard blobs.
       "/thumbs": "http://localhost:8802",
       // 2D minimap pack (Phase 5) — same static data server, same proxy reason
       // as /chunks and /thumbs above (Chrome Private/Local Network Access).

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .config import DATASET_SPECS, points_table_path
+from .config import DATASET_SPECS, monet_dataset_id, points_table_path
 
 
 def cmd_build_points(args: argparse.Namespace) -> int:
@@ -12,6 +12,14 @@ def cmd_build_points(args: argparse.Namespace) -> int:
 
         out_path = points_table_path("bl")
         df = build_points_table(out_path)
+        print(f"wrote {out_path} ({len(df):,} rows)")
+        return 0
+    if args.dataset.startswith("monet-"):
+        from .datasets.monet import build_points_table as build_monet_points_table
+
+        arm = args.dataset[len("monet-") :]
+        out_path = points_table_path(monet_dataset_id(arm))
+        df = build_monet_points_table(arm, out_path)
         print(f"wrote {out_path} ({len(df):,} rows)")
         return 0
     print(f"unknown dataset {args.dataset!r}", file=sys.stderr)

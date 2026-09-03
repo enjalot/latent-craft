@@ -35,11 +35,50 @@ export interface DatasetConfig {
    * resolution a chunk-pack was binned at.
    */
   minimapPath?: string;
+  /**
+   * Where this dataset's thumbnails are rooted on the chunk server. The
+   * manifest's own `thumb_url_template` supplies everything after it, so the
+   * two together are the full URL (see `streaming/PointIndex.ts`'s
+   * `resolveThumbUrl`). Defaults to `THUMBS_BASE_PATH` (`/thumbs`).
+   *
+   * BL sets it to `/thumbs/bl` because BL's already-built packs carry a
+   * template with no dataset-family segment (`{subset_name}/{local_idx:08d}
+   * .webp`) — the family lives in the base for those. MONET's template carries
+   * its own `monet/` segment, so it takes the default.
+   */
+  thumbsBasePath?: string;
 }
 
 export const DATASETS: Record<string, DatasetConfig> = {
-  bl: { path: "/chunks/bl", label: "BL · num_voxels=96", minimapPath: "/minimap/bl" },
-  "bl-160": { path: "/chunks/bl-160", label: "BL · num_voxels=160", minimapPath: "/minimap/bl" },
+  bl: {
+    path: "/chunks/bl",
+    label: "BL · num_voxels=96",
+    minimapPath: "/minimap/bl",
+    thumbsBasePath: "/thumbs/bl",
+  },
+  "bl-160": {
+    path: "/chunks/bl-160",
+    label: "BL · num_voxels=160",
+    minimapPath: "/minimap/bl",
+    thumbsBasePath: "/thumbs/bl",
+  },
+  // MONET draw arms (jasperai/monet, 2M points each). Each arm is a different
+  // sampling of the same 19.3M-row pool, so they are separate packs end to end
+  // — separate points table, UMAP fit, chunk pack and minimap pack. Thumbnails
+  // are served by the data server's dynamic `/thumbs/monet/<packed>.webp`
+  // route (MONET's are byte ranges inside packed blobs, not files), which the
+  // pack's own `thumb_url_template` addresses — hence no `thumbsBasePath`
+  // override here.
+  "monet-random": {
+    path: "/chunks/monet-random",
+    label: "MONET · random draw",
+    minimapPath: "/minimap/monet-random",
+  },
+  "monet-sscd": {
+    path: "/chunks/monet-sscd",
+    label: "MONET · sscd draw",
+    minimapPath: "/minimap/monet-sscd",
+  },
 };
 
 /** Which entry of `DATASETS` to load when no `?dataset=` param is given. */
@@ -638,15 +677,21 @@ export const EXTRACTION_FLOOR_OPACITY = 0.3;
 export const EXTRACTION_FLIGHT_MS = 620;
 
 /**
- * Base path for full-resolution per-point thumbnails, proxied same-origin
- * exactly like the chunk-pack paths above (see `vite.config.ts`'s
- * `server.proxy["/thumbs"]`). Hardcoded to the `bl` family rather than
- * derived from the active dataset key: both the `bl` and `bl-160`
- * chunk-packs (different voxel resolutions) index the same underlying
- * 1,080,814-point British Library thumbnail set, so there's only one thumbs
- * tree regardless of which chunk-pack is loaded.
+ * Default base path for full-resolution per-point thumbnails, proxied
+ * same-origin exactly like the chunk-pack paths above (see `vite.config.ts`'s
+ * `server.proxy["/thumbs"]`). A dataset overrides it with
+ * `DatasetConfig.thumbsBasePath`; the rest of each URL comes from that
+ * dataset's chunk-pack manifest `thumb_url_template`, applied in
+ * `streaming/PointIndex.ts`.
+ *
+ * Datasets differ in how their thumbnails are stored, and the split between
+ * this base and the template is what absorbs that: BL is one webp file per
+ * point under `/thumbs/bl/<subset>/…` (a static tree, symlinked in on the data
+ * server), MONET is byte ranges inside packed per-shard blobs served by the
+ * data server's dynamic `/thumbs/monet/<packed_ref>.webp` route. Both stay
+ * under `/thumbs`, so one Vite proxy rule covers both.
  */
-export const THUMBS_BASE_PATH = "/thumbs/bl";
+export const THUMBS_BASE_PATH = "/thumbs";
 
 /** How many thumbnails an expanded inventory stack renders up front, and how
  * many more each "show more" click reveals — keeps a stack of thousands of
@@ -837,4 +882,16 @@ export function resolveMinimapBaseUrl(datasetKey: string): string | null {
   if (!dataset?.minimapPath) return null;
   const origin = CHUNK_SERVER_ORIGIN ?? "";
   return `${origin}${dataset.minimapPath}`;
+}
+
+/**
+ * Base URL this dataset's thumbnails hang off — `DatasetConfig.thumbsBasePath`
+ * if it sets one, else `THUMBS_BASE_PATH`. Same same-origin/Vite-proxy
+ * reasoning as `resolveDatasetBaseUrl` (see `vite.config.ts`'s `/thumbs`
+ * route). What gets appended comes from the manifest's `thumb_url_template`.
+ */
+export function resolveThumbsBaseUrl(datasetKey: string): string {
+  const dataset = DATASETS[datasetKey];
+  const origin = CHUNK_SERVER_ORIGIN ?? "";
+  return `${origin}${dataset?.thumbsBasePath ?? THUMBS_BASE_PATH}`;
 }
