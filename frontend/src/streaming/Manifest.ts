@@ -83,16 +83,29 @@ export class Manifest {
    * `proxy.bin` covers but `manifest.chunks` omits.
    */
   chunkCenterWorld(chunkId: number, target: THREE.Vector3): THREE.Vector3 {
-    const n = this.chunksPerAxis;
-    const cx = chunkId % n;
-    const cy = Math.floor(chunkId / n) % n;
-    const cz = Math.floor(chunkId / (n * n));
-    const cell = 2 / n;
+    const { cx, cy, cz } = this.chunkGridCoords(chunkId);
+    const cell = 2 / this.chunksPerAxis;
     return target.set(
       (-1 + (cx + 0.5) * cell) * this.worldScale,
       (-1 + (cy + 0.5) * cell) * this.worldScale,
       (-1 + (cz + 0.5) * cell) * this.worldScale,
     );
+  }
+
+  /**
+   * Chunk grid coords for a chunk_id (row-major, x-fastest — the pipeline's
+   * own ordering). Occupied chunks also carry these as `cx`/`cy`/`cz` in the
+   * manifest, but this works for the empty slots too, and is what lets
+   * anything holding only a bare chunk_id (`row_to_voxel.bin`, `proxy.bin`)
+   * get to a world position without a manifest lookup.
+   */
+  chunkGridCoords(chunkId: number): { cx: number; cy: number; cz: number } {
+    const n = this.chunksPerAxis;
+    return {
+      cx: chunkId % n,
+      cy: Math.floor(chunkId / n) % n,
+      cz: Math.floor(chunkId / (n * n)),
+    };
   }
 
   /**
@@ -125,6 +138,21 @@ export class Manifest {
       (-1 + (vy + 0.5) * cell) * this.worldScale,
       (-1 + (vz + 0.5) * cell) * this.worldScale,
     );
+  }
+
+  /**
+   * World-space center of one voxel cell addressed the way
+   * `row_to_voxel.bin` addresses it — by `(chunk_id, local_voxel_id)` — so a
+   * `row_id` can be turned into a place in the world without the caller
+   * re-deriving any of the grid math. Thin wrapper over `voxelCenterWorld`.
+   */
+  voxelCenterWorldById(
+    chunkId: number,
+    localVoxelId: number,
+    target: THREE.Vector3,
+  ): THREE.Vector3 {
+    const { cx, cy, cz } = this.chunkGridCoords(chunkId);
+    return this.voxelCenterWorld(cx, cy, cz, localVoxelId, target);
   }
 
   /** The occupied chunk holding the most points — a good place to spawn. */

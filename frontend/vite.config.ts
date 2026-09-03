@@ -28,6 +28,9 @@ export default defineConfig({
       // the data-server side (/data/latent-scope-3d/thumbs/bl ->
       // /data/images/british-library-book-images/thumbs).
       "/thumbs": "http://localhost:8802",
+      // 2D minimap pack (Phase 5) — same static data server, same proxy reason
+      // as /chunks and /thumbs above (Chrome Private/Local Network Access).
+      "/minimap": "http://localhost:8802",
     },
   },
 });

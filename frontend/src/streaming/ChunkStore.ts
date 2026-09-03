@@ -22,6 +22,9 @@ export interface ChunkStoreStats {
   instances: number;
   bytes: number;
   candidates: number;
+  /** Chunks currently pulled into a fetching ring by a teleport destination
+   * rather than by the camera (see `prioritizeTeleport`). */
+  teleportPinned: number;
 }
 
 export interface ChunkStoreEvents {
@@ -78,6 +81,11 @@ export class ChunkStore {
   private disposed = false;
   private warnedOverBudget = false;
 
+  /** Destination of an in-flight teleport, or null. Acts as a SECOND camera
+   * for ring classification while set — see `prioritizeTeleport`. */
+  private teleportTarget: THREE.Vector3 | null = null;
+  private teleportPinned = 0;
+
   constructor(
     private readonly manifest: Manifest,
     private readonly loader: ChunkLoader,
@@ -114,7 +122,44 @@ export class ChunkStore {
       instances,
       bytes: this.residentBytes,
       candidates: this.candidates.length,
+      teleportPinned: this.teleportPinned,
     };
+  }
+
+  /**
+   * Pins a teleport destination so its neighbourhood starts streaming NOW,
+   * in parallel with the camera flight rather than after it.
+   *
+   * Call this *synchronously before* `Engine.teleportTo`. The mechanism is
+   * deliberately not a separate fetch queue: the destination is registered as
+   * a second origin for the existing ring classification, so a chunk gets the
+   * better (lower) of its camera-derived and target-derived ring, and
+   * target-driven chunks sort ahead of everything else within that ring. That
+   * matters for correctness as much as for priority — `evictOutOfRange()`
+   * aborts in-flight fetches for chunks that are not in ANY current ring, so
+   * without the pin the very next `updateCamera()` pass (still at the old
+   * camera position, since the flight hasn't finished) would cancel exactly
+   * the fetches this is trying to start.
+   *
+   * The pin clears itself once the camera actually reaches the destination's
+   * R0, so a teleport that is interrupted mid-flight doesn't leave a
+   * permanently pinned neighbourhood behind.
+   *
+   * @returns how many chunks the destination pulled into a fetching ring that
+   *   the camera alone would not have — i.e. the real work this saved.
+   */
+  prioritizeTeleport(target: THREE.Vector3, camera: THREE.Camera): number {
+    if (this.disposed) return 0;
+    this.teleportTarget = (this.teleportTarget ?? new THREE.Vector3()).copy(target);
+    this.teleportPinned = 0;
+    this.updateCamera(camera, true);
+    return this.teleportPinned;
+  }
+
+  /** Drops the teleport pin (safe to call when none is set). */
+  clearTeleportTarget(): void {
+    this.teleportTarget = null;
+    this.teleportPinned = 0;
   }
 
   /**
@@ -145,20 +190,36 @@ export class ChunkStore {
 
   private classify(cameraPosition: THREE.Vector3): void {
     const chunkSize = this.manifest.chunkWorldSize;
+    // A teleport destination close enough that the camera's own rings already
+    // cover it isn't worth pinning; drop it so the pin can't outlive its use.
+    if (this.teleportTarget && cameraPosition.distanceTo(this.teleportTarget) / chunkSize <= this.radii.r0) {
+      this.clearTeleportTarget();
+    }
+    const target = this.teleportTarget;
     this.candidates.length = 0;
+    this.teleportPinned = 0;
     for (const entry of this.manifest.chunks) {
       const center = this.centers.get(entry.chunk_id)!;
       const distance = center.distanceTo(cameraPosition) / chunkSize;
-      const ring = ringFor(distance, this.radii);
+      let ring = ringFor(distance, this.radii);
       this.toChunk.subVectors(center, cameraPosition);
       if (this.toChunk.lengthSq() > 0) this.toChunk.normalize();
-      this.candidates.push({
-        entry,
-        center,
-        distance,
-        ring,
-        priority: chunkPriority(distance, this.toChunk, this.forward),
-      });
+      let priority = chunkPriority(distance, this.toChunk, this.forward);
+
+      if (target) {
+        const targetDistance = center.distanceTo(target) / chunkSize;
+        const targetRing = ringFor(targetDistance, this.radii);
+        if (targetRing < ring) {
+          ring = targetRing;
+          // Negative priorities sort ahead of every camera-derived one (which
+          // are distances, so always >= 0), ordered among themselves by
+          // closeness to the destination.
+          priority = targetDistance - 1000;
+          if (targetRing !== Ring.Keep && !this.resident.has(entry.chunk_id)) this.teleportPinned++;
+        }
+      }
+
+      this.candidates.push({ entry, center, distance, ring, priority });
     }
   }
 
@@ -274,6 +335,7 @@ export class ChunkStore {
 
   dispose(): void {
     this.disposed = true;
+    this.clearTeleportTarget();
     for (const controller of this.loading.values()) controller.abort();
     this.loading.clear();
     for (const chunkId of [...this.resident.keys()]) this.evict(chunkId);

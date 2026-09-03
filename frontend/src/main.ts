@@ -9,6 +9,9 @@ import { loadManifest, type Manifest } from "./streaming/Manifest.ts";
 import { ChunkLoader, type ChunkMeshUserData } from "./streaming/ChunkLoader.ts";
 import { ChunkStore } from "./streaming/ChunkStore.ts";
 import { loadPointIndex, type PointIndex } from "./streaming/PointIndex.ts";
+import { loadRowToVoxel } from "./streaming/RowToVoxel.ts";
+import { loadMinimapPack } from "./minimap/Manifest.ts";
+import { MinimapBridge } from "./interaction/MinimapBridge.ts";
 import { MiningController } from "./interaction/MiningController.ts";
 import { PointerController, type VoxelTarget } from "./interaction/PointerController.ts";
 import { XRayController } from "./interaction/XRayController.ts";
@@ -25,6 +28,7 @@ import {
   WORLD_SCALE,
   XRAY_OPACITY,
   resolveDatasetBaseUrl,
+  resolveMinimapBaseUrl,
 } from "./config.ts";
 
 const app = document.getElementById("app");
@@ -117,6 +121,7 @@ let syntheticInstances = 0;
 let miningController: MiningController | null = null;
 let xrayController: XRayController | null = null;
 let effectorField: EffectorFieldController | null = null;
+let minimap: MinimapBridge | null = null;
 
 // --- pointer: click-and-drag to look, click-and-HOLD to mine/restore --------
 //
@@ -250,9 +255,65 @@ async function bootstrapStreamedWorld(): Promise<void> {
 
     status = undefined;
     chunkStore.updateCamera(engine.camera, true);
+
+    // Phase 5's minimap comes up last and in the background: it needs ~17 MB
+    // of lookup tables (the 2D pack's xy_id.bin + the chunk pack's
+    // row_to_voxel.bin) that nothing else in the app depends on, so awaiting
+    // it here would delay the world for a panel. A dataset with no minimap
+    // pack configured simply runs without one.
+    void bootstrapMinimap(manifest, chunkStore);
   } catch (error) {
     console.error("[latent-scope-3d] failed to load dataset", error);
     status = `ERROR: ${(error as Error).message}`;
+  }
+}
+
+/**
+ * Phase 5: the 2D minimap. Loads the minimap pack (its own manifest +
+ * `points/xy_id.bin`) and the chunk pack's `row_to_voxel.bin` in parallel,
+ * then stands up the panel and its 2D↔3D bridge. The density base image
+ * composites after that, so the panel appears (with live markers) before its
+ * background picture does.
+ */
+async function bootstrapMinimap(m: Manifest, store: ChunkStore): Promise<void> {
+  const minimapBaseUrl = resolveMinimapBaseUrl(datasetKey);
+  if (!minimapBaseUrl) {
+    console.info(`[latent-scope-3d] dataset ${datasetKey} has no minimap pack — panel disabled`);
+    return;
+  }
+  try {
+    const [pack, rowToVoxel] = await Promise.all([
+      loadMinimapPack(minimapBaseUrl),
+      loadRowToVoxel(m),
+    ]);
+    if (pack.nPoints !== m.totalPoints) {
+      // Both packs index the same points table by row_id; if they disagree on
+      // its size they were built from different runs and every cross-reference
+      // would be silently wrong.
+      throw new Error(
+        `minimap pack has ${pack.nPoints} points, chunk pack has ${m.totalPoints} — ` +
+          `these packs are not from the same points table`,
+      );
+    }
+    minimap = new MinimapBridge({
+      // Non-null assertion: same module-scope `throw` narrowing limitation as
+      // the InventoryPanel construction above.
+      container: app!,
+      pack,
+      manifest: m,
+      chunkStore: store,
+      rowToVoxel,
+      engine,
+      flightControls,
+    });
+    await minimap.loadBase();
+    console.info(
+      `[latent-scope-3d] minimap ready: ${pack.datasetId}, ${pack.nPoints.toLocaleString()} 2D points, ` +
+        `base z${minimap.panel.densityBase?.zoom} ` +
+        `(${minimap.panel.densityBase?.tilesDrawn}/${minimap.panel.densityBase?.tilesExpected} tiles)`,
+    );
+  } catch (error) {
+    console.error("[latent-scope-3d] minimap failed to load", error);
   }
 }
 
@@ -324,9 +385,14 @@ function computeHotbarStatus(): string {
 }
 
 engine.start((dt) => {
-  flightControls.update(dt);
+  // Flight input stands down during a teleport flight: `Engine.stepTeleport`
+  // (which already ran this frame, before this callback) interpolates the
+  // camera from a fixed start snapshot, so anything WASD added here would be
+  // silently discarded next frame rather than composed.
+  if (!engine.isTeleporting) flightControls.update(dt);
   chunkStore?.updateCamera(engine.camera);
   effectorField?.update(engine.camera);
+  minimap?.update(engine.camera, dt);
   hotbar.setStatusLine(computeHotbarStatus());
 
   let hoverLabel = "none";
@@ -334,6 +400,10 @@ engine.start((dt) => {
   currentHit = hit;
   const target = resolveVoxelTarget(hit);
   const hoveredMined = target ? (miningController?.isMined(target.chunkId, target.localVoxelId) ?? false) : false;
+
+  /** The hovered voxel's representative row_id — the ONLY handle the minimap
+   * has on "where is this voxel in the 2D fit" (see MinimapBridge). */
+  let hoveredRowId: number | null = null;
 
   if (hit) {
     hit.mesh.getMatrixAt(hit.instanceId, hitMatrix);
@@ -347,6 +417,7 @@ engine.start((dt) => {
       const chunk = chunkStore?.chunk(target.chunkId);
       const points = chunk ? chunk.meta.count[target.localVoxelId] : 0;
       const reprRowId = chunk ? chunk.meta.reprRowId[target.localVoxelId] : -1;
+      hoveredRowId = reprRowId >= 0 ? reprRowId : null;
       const actionHint = miningController ? (hoveredMined ? " · hold to restore" : " · hold to mine") : "";
       hoverLabel =
         `chunk ${target.chunkId} voxel ${target.localVoxelId} · ${points} pts · row ${reprRowId} · ` +
@@ -357,6 +428,8 @@ engine.start((dt) => {
   } else {
     highlightBox.visible = false;
   }
+
+  minimap?.setHoveredRow(hoveredRowId);
 
   // --- hold-to-mine / hold-to-restore progress -------------------------
   const holdTarget = pointerController.holdTarget;
@@ -452,6 +525,9 @@ Object.assign(window as unknown as Record<string, unknown>, {
     },
     get effectorField() {
       return effectorField;
+    },
+    get minimap() {
+      return minimap;
     },
     hotbar,
     get currentHit() {

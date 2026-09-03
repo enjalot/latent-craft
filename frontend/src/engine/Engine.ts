@@ -1,7 +1,43 @@
 import * as THREE from "three";
-import { CAMERA_FAR, CAMERA_FOV_DEG, CAMERA_NEAR } from "../config.ts";
+import {
+  CAMERA_FAR,
+  CAMERA_FOV_DEG,
+  CAMERA_NEAR,
+  TELEPORT_MAX_MS,
+  TELEPORT_MIN_MS,
+  TELEPORT_MS_PER_WORLD_UNIT,
+} from "../config.ts";
 
 export type TickCallback = (deltaSeconds: number, elapsedSeconds: number) => void;
+
+export interface TeleportOptions {
+  /** Point to face on arrival. Orientation is slerped toward it during the
+   * flight; if omitted the camera keeps its current orientation. */
+  lookAt?: THREE.Vector3;
+  /** Override the distance-derived duration. */
+  durationMs?: number;
+  /** Fired once, on the frame the flight completes. */
+  onArrive?: () => void;
+}
+
+/** In-flight teleport state. Position and orientation are both interpolated
+ * from a fixed start snapshot, which is why flight/look input has to stand
+ * down for the duration (see `isTeleporting`). */
+interface TeleportState {
+  fromPosition: THREE.Vector3;
+  toPosition: THREE.Vector3;
+  fromQuaternion: THREE.Quaternion;
+  toQuaternion: THREE.Quaternion;
+  elapsedMs: number;
+  durationMs: number;
+  onArrive?: () => void;
+}
+
+/** Smooth acceleration out and deceleration in — the cheapest easing that
+ * reads as "flew there" rather than "was dragged there". */
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
 
 /**
  * Owns the renderer, scene, camera, and the continuous requestAnimationFrame
@@ -24,6 +60,9 @@ export class Engine {
   private container: HTMLElement;
   private onUpdate: TickCallback | null = null;
   private rafHandle = 0;
+  private teleport: TeleportState | null = null;
+  private readonly teleportScratch = new THREE.Matrix4();
+  private readonly worldUp = new THREE.Vector3(0, 1, 0);
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -71,6 +110,80 @@ export class Engine {
     cancelAnimationFrame(this.rafHandle);
   }
 
+  /**
+   * Flies the camera to `destination` over a short eased animation.
+   *
+   * Deliberately does NOT itself prefetch anything — the caller is expected to
+   * kick off streaming for the destination *before* calling this (see
+   * `ChunkStore.prioritizeTeleport`), so the fetches overlap the flight
+   * instead of starting when it ends. Nor does it touch `FlightControls`:
+   * Engine stays free of any controls dependency, so the caller passes an
+   * `onArrive` that re-syncs whatever owns yaw/pitch (`FlightControls.lookAt`)
+   * from the final pose.
+   *
+   * A second call replaces an in-flight teleport (the previous one's
+   * `onArrive` does not fire — it never arrived).
+   */
+  teleportTo(destination: THREE.Vector3, options: TeleportOptions = {}): void {
+    const fromPosition = this.camera.position.clone();
+    const toPosition = destination.clone();
+    const fromQuaternion = this.camera.quaternion.clone();
+    let toQuaternion = fromQuaternion.clone();
+    if (options.lookAt) {
+      // Matrix4.lookAt with a world up gives a roll-free orientation, matching
+      // what `Object3D.lookAt` (and therefore `FlightControls.lookAt`) will
+      // produce at the destination — so the slerp lands exactly where the
+      // arrival re-sync puts it, with no snap on the last frame.
+      this.teleportScratch.lookAt(toPosition, options.lookAt, this.worldUp);
+      toQuaternion = new THREE.Quaternion().setFromRotationMatrix(this.teleportScratch);
+    }
+
+    const distance = fromPosition.distanceTo(toPosition);
+    const durationMs =
+      options.durationMs ??
+      Math.min(TELEPORT_MAX_MS, Math.max(TELEPORT_MIN_MS, distance * TELEPORT_MS_PER_WORLD_UNIT));
+
+    this.teleport = {
+      fromPosition,
+      toPosition,
+      fromQuaternion,
+      toQuaternion,
+      elapsedMs: 0,
+      durationMs,
+      onArrive: options.onArrive,
+    };
+  }
+
+  /**
+   * True while a teleport flight is in progress. Callers driving the camera
+   * (flight controls, look-drag) must stand down while this is set: the
+   * animation interpolates from a fixed start snapshot every frame, so any
+   * input applied in between is silently discarded rather than composed.
+   */
+  get isTeleporting(): boolean {
+    return this.teleport !== null;
+  }
+
+  /** Abandons an in-flight teleport where it currently is; `onArrive` does
+   * not fire. */
+  cancelTeleport(): void {
+    this.teleport = null;
+  }
+
+  private stepTeleport(dt: number): void {
+    const state = this.teleport;
+    if (!state) return;
+    state.elapsedMs += dt * 1000;
+    const raw = Math.min(1, state.elapsedMs / state.durationMs);
+    const t = easeInOutCubic(raw);
+    this.camera.position.lerpVectors(state.fromPosition, state.toPosition, t);
+    this.camera.quaternion.slerpQuaternions(state.fromQuaternion, state.toQuaternion, t);
+    if (raw >= 1) {
+      this.teleport = null;
+      state.onArrive?.();
+    }
+  }
+
   private loop = (timestamp: number) => {
     this.rafHandle = requestAnimationFrame(this.loop);
     this.timer.update(timestamp);
@@ -78,6 +191,10 @@ export class Engine {
     // hidden-tab case, but not e.g. a slow synchronous stall while visible.
     const dt = Math.min(this.timer.getDelta(), 0.1);
     const elapsed = this.timer.getElapsed();
+    // Teleport advances BEFORE onUpdate so everything the tick callback does
+    // with the camera this frame — chunk ring classification, hover raycast,
+    // HUD readout — sees the pose the frame will actually be rendered from.
+    this.stepTeleport(dt);
     this.onUpdate?.(dt, elapsed);
     this.renderer.render(this.scene, this.camera);
   };

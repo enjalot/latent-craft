@@ -24,11 +24,22 @@ export interface DatasetConfig {
   path: string;
   /** Human-readable label for the HUD. */
   label: string;
+  /**
+   * Path to this dataset's 2D minimap pack (Phase 5), or absent for a dataset
+   * that has no 2D pack built yet — in which case the app simply runs without
+   * a minimap panel rather than failing.
+   *
+   * Note both BL chunk-packs point at the SAME minimap pack: the 2D pack is
+   * built from the 2-component UMAP fit of the points table, which is
+   * independent of the 3D fit and completely independent of the voxel
+   * resolution a chunk-pack was binned at.
+   */
+  minimapPath?: string;
 }
 
 export const DATASETS: Record<string, DatasetConfig> = {
-  bl: { path: "/chunks/bl", label: "BL · num_voxels=96" },
-  "bl-160": { path: "/chunks/bl-160", label: "BL · num_voxels=160" },
+  bl: { path: "/chunks/bl", label: "BL · num_voxels=96", minimapPath: "/minimap/bl" },
+  "bl-160": { path: "/chunks/bl-160", label: "BL · num_voxels=160", minimapPath: "/minimap/bl" },
 };
 
 /** Which entry of `DATASETS` to load when no `?dataset=` param is given. */
@@ -267,6 +278,94 @@ export const EFFECTOR_UPDATE_MOVE_EPSILON_VOXEL_FRAC = 0.25;
  * its own thing rather than blending into existing HUD accents. */
 export const EFFECTOR_GIZMO_COLOR = 0x9d7bff;
 
+// ---------------------------------------------------------------------------
+// 2D minimap (Phase 5)
+// ---------------------------------------------------------------------------
+
+/** On-screen edge of the square minimap panel, CSS pixels. Small and
+ * unobtrusive by design — it's an overview, not a second viewport. */
+export const MINIMAP_SIZE_PX = 220;
+
+/**
+ * Which density zoom level to composite the static base image from.
+ *
+ * z1 is 2x2 tiles = 512x512 bins, which at a 220px panel on a 2x-DPR display
+ * (440 device px) is a slight, clean downscale — sharp with nothing wasted.
+ * z0 (256px) would be upscaled and visibly blocky at 2x DPR; z2 (1024px, 16
+ * tiles) is 4x the pixels and 4x the fetches to then throw away in a 2.3x
+ * downscale. Nothing here depends on the choice beyond image sharpness: the
+ * pyramid tiles the same quantized coordinate space at every level, so all
+ * the panel-pixel↔q math is level-independent.
+ */
+export const MINIMAP_BASE_ZOOM = 1;
+
+/** Flashlight query radius around the cursor, in panel pixels. Converted to
+ * the pack's quantized units by the panel (which knows its own size), so this
+ * stays "how big does the lit spot look" rather than a magic q value. Tuned
+ * by feel: big enough to reliably catch points in the sparse outskirts, small
+ * enough that a dense region still lights up a readable handful of voxels
+ * rather than half the world. */
+export const MINIMAP_FLASHLIGHT_RADIUS_PX = 5;
+
+/** Caps on one flashlight query: how many row_ids the linear scan collects,
+ * and how many DISTINCT voxels get glow boxes. The row cap only bounds work
+ * (the rows are deduped down to voxels immediately); the voxel cap bounds
+ * both the glow-box pool and how legible the highlight is — lighting up
+ * thousands of cubes at once conveys nothing. */
+export const MINIMAP_FLASHLIGHT_MAX_ROWS = 60_000;
+export const MINIMAP_FLASHLIGHT_MAX_VOXELS = 384;
+
+/** Glow-box edge as a multiple of a voxel cell, and its additive opacity.
+ * Slightly larger than `VOXEL_FILL` so the glow reads as a halo around the
+ * voxel rather than a re-tint of it.
+ *
+ * The opacity was tuned down from a first pass at 0.45 after looking at a real
+ * screenshot: additive blending compounds, so where the lit voxels happen to
+ * be adjacent (which is common — a small 2D neighbourhood often maps to a
+ * contiguous 3D blob) a dozen overlapping boxes saturated to flat white and
+ * lost both the amber identity and any sense of individual cubes. 0.32 keeps
+ * a lone lit voxel obvious while a cluster still reads as cubes. */
+export const MINIMAP_FLASHLIGHT_CUBE_FILL = 1.35;
+export const MINIMAP_FLASHLIGHT_CUBE_OPACITY = 0.32;
+
+/** Marker colors. The flashlight's amber is shared by the 2D circle and the
+ * 3D glow boxes on purpose — same color, both ends of the same link. The
+ * crosshair reuses the 3D hover box's teal for the same reason, in the other
+ * direction. */
+export const MINIMAP_FLASHLIGHT_COLOR = "#ffb347";
+export const MINIMAP_FLASHLIGHT_COLOR_3D = 0xffb347;
+export const MINIMAP_CROSSHAIR_COLOR = "#7fffe0";
+export const MINIMAP_AVATAR_COLOR = "#ffffff";
+
+/** How often the avatar's "nearest resident voxel to the camera" search runs.
+ * A few times a second is plenty for a 220px panel — the marker moves less
+ * than a pixel for most of a second's worth of flight — and it keeps an
+ * O(occupied voxels in the nearest chunks) search well off the frame budget. */
+export const MINIMAP_AVATAR_UPDATE_MS = 250;
+
+/** Don't redo the avatar search at all until the camera has moved this far
+ * (world units) — hovering in place shouldn't spend anything. */
+export const MINIMAP_AVATAR_MOVE_EPSILON = 0.75;
+
+// ---------------------------------------------------------------------------
+// Teleport (Phase 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * How far back from the target voxel the camera comes to rest, as a multiple
+ * of a chunk edge. The camera arrives looking AT the voxel from this distance
+ * rather than inside it — landing exactly on a voxel center would put the
+ * near plane inside a textured cube.
+ */
+export const TELEPORT_STANDOFF_CHUNKS = 0.45;
+
+/** Teleport flight duration, derived from distance and clamped: long enough
+ * to read as movement (and to give the destination's chunks time to arrive),
+ * short enough not to feel like a cutscene. */
+export const TELEPORT_MS_PER_WORLD_UNIT = 9;
+export const TELEPORT_MIN_MS = 260;
+export const TELEPORT_MAX_MS = 800;
+
 /**
  * Resolves the chunk-pack base URL for a dataset key, honouring
  * `CHUNK_SERVER_ORIGIN` and falling back to the page's own hostname.
@@ -283,4 +382,16 @@ export function resolveDatasetBaseUrl(datasetKey: string): string {
   // cross-port request, which is what triggers the Private Network Access block.
   const origin = CHUNK_SERVER_ORIGIN ?? "";
   return `${origin}${dataset.path}`;
+}
+
+/**
+ * Resolves the 2D minimap-pack base URL for a dataset key, or `null` if that
+ * dataset has no minimap pack. Same same-origin/Vite-proxy reasoning as
+ * `resolveDatasetBaseUrl` (see `vite.config.ts`'s `/minimap` route).
+ */
+export function resolveMinimapBaseUrl(datasetKey: string): string | null {
+  const dataset = DATASETS[datasetKey];
+  if (!dataset?.minimapPath) return null;
+  const origin = CHUNK_SERVER_ORIGIN ?? "";
+  return `${origin}${dataset.minimapPath}`;
 }

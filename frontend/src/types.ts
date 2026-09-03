@@ -116,3 +116,56 @@ export interface ProxyData {
 
 export const FLAG_HAS_ATLAS_TILE = 1 << 0;
 export const EMPTY_REPR_ROW_ID = 0xffffffff;
+
+// ---------------------------------------------------------------------------
+// 2D minimap pack (Phase 5) — `pipeline/src/lsvoxel/minimap/build.py`
+//
+// A SEPARATE pack from the chunk pack above, built from a SEPARATE
+// (independent, 2-component) UMAP fit of the same points table. The only
+// field the two contracts share is `row_id`; nothing about the 2D frame,
+// extent, or quantization has any geometric relationship to the 3D
+// `[-1,1]^3` world frame. See `minimap/Manifest.ts`.
+// ---------------------------------------------------------------------------
+
+export interface MinimapTileLevel {
+  z: number;
+  tiles_per_side: number;
+  bins_per_side: number;
+  tiles_written: number;
+  planes_written: number;
+  png_log_peak: number;
+  total_count: number;
+}
+
+export interface MinimapManifestJson {
+  pack_format_version: string;
+  dataset_id: string;
+  built_at: string;
+  n_points: number;
+  /** corpus code (as a string key) → name. For BL these are the subsets. */
+  corpus_codes: Record<string, string>;
+  corpus_counts: Record<string, number>;
+  frame: {
+    /** `[x0, x1, y0, y1]` in the 2D fit's own raw UMAP units. */
+    extent: [number, number, number, number];
+    raw_extent: [number, number, number, number];
+    squared: boolean;
+  };
+  quantization: { levels: number; bits: number; formula: string };
+  tiles: {
+    tile_bins: number;
+    max_zoom: number;
+    levels: MinimapTileLevel[];
+  };
+  points: { record_bytes: number; n_points: number; packed: string };
+}
+
+/** One zoom level's `density/z{z}/index.json` — sparse; empty tiles absent. */
+export interface MinimapDensityIndexJson {
+  z: number;
+  tiles_per_side: number;
+  bin_bytes: number;
+  png_log_peak: number;
+  /** Keyed `"{tx}_{ty}"`. */
+  tiles: Record<string, { n: number; corpora: number[] }>;
+}
