@@ -8,11 +8,14 @@
  * one-line change to `DEFAULT_DATASET` (or a `?dataset=` query param at
  * runtime) — nothing downstream hardcodes "bl".
  *
- * `path` is resolved against the chunk server's origin, which defaults to the
- * page's own hostname on port 8802. Serving the page from `gsv.local:5300`
- * therefore fetches from `gsv.local:8802`, and from `localhost:5300` fetches
- * from `localhost:8802` — so it works from any device on the LAN without a
- * hardcoded host.
+ * `path` is fetched same-origin (relative to the page) and proxied by Vite's
+ * dev server (see `vite.config.ts`'s `server.proxy`) through to the static
+ * data server on port 8802. A direct cross-port browser fetch to :8802 was
+ * tried first and gets blocked by Chrome's Private/Local Network Access
+ * policy once the page is served over plain http from a LAN hostname like
+ * gsv.local — proxying through Vite's Node process sidesteps that entirely,
+ * and incidentally means the same build works unmodified from localhost, any
+ * LAN IP, or gsv.local.
  */
 export const CHUNK_SERVER_PORT = 8802;
 
@@ -31,7 +34,13 @@ export const DATASETS: Record<string, DatasetConfig> = {
 /** Which entry of `DATASETS` to load when no `?dataset=` param is given. */
 export const DEFAULT_DATASET = "bl";
 
-/** Explicit override for the chunk server origin; `null` = derive from `location`. */
+/**
+ * Explicit override for the chunk server origin; `null` (the default) means
+ * "same-origin, relative path" — i.e. let Vite's proxy handle it. Only set
+ * this to bypass the proxy (e.g. hitting the data server directly from a
+ * non-Vite-served context), which will hit the Private Network Access wall
+ * described above unless that context is a secure/localhost origin.
+ */
 export const CHUNK_SERVER_ORIGIN: string | null = null;
 
 /**
@@ -149,8 +158,9 @@ export function resolveDatasetBaseUrl(datasetKey: string): string {
       `Unknown dataset ${JSON.stringify(datasetKey)} — known: ${Object.keys(DATASETS).join(", ")}`,
     );
   }
-  const origin =
-    CHUNK_SERVER_ORIGIN ??
-    `${window.location.protocol}//${window.location.hostname}:${CHUNK_SERVER_PORT}`;
+  // Default: same-origin relative path, proxied by Vite (see vite.config.ts) to
+  // the data server on CHUNK_SERVER_PORT. This avoids the browser ever making a
+  // cross-port request, which is what triggers the Private Network Access block.
+  const origin = CHUNK_SERVER_ORIGIN ?? "";
   return `${origin}${dataset.path}`;
 }
