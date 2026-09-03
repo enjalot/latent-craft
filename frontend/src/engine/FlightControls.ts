@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import {
+  FLIGHT_ACCEL_TAU_S,
   FLIGHT_SPEED,
   FLIGHT_VERTICAL_SPEED,
   LOOK_PITCH_LIMIT_RAD,
@@ -68,11 +69,17 @@ export class FlightControls {
   private yaw = 0;
   private pitch = 0;
 
+  // Actual velocity eases toward the held-keys' target velocity each frame
+  // rather than snapping to it — see the class comment on FLIGHT_ACCEL_TAU_S.
+  // Persists across frames (unlike the scratch vectors below), so it's not
+  // reset at the top of update().
+  private readonly velocity = new THREE.Vector3();
+
   // scratch objects, reused per call to avoid allocation
   private readonly forward = new THREE.Vector3();
   private readonly right = new THREE.Vector3();
   private readonly up = new THREE.Vector3(0, 1, 0);
-  private readonly moveVec = new THREE.Vector3();
+  private readonly targetVelocity = new THREE.Vector3();
   private readonly scratchEuler = new THREE.Euler(0, 0, 0, "YXZ");
 
   constructor(camera: THREE.Camera) {
@@ -141,11 +148,15 @@ export class FlightControls {
    * gated on `isLocked`, but there's no "lock" concept anymore: WASD/Q/E
    * just always work, per the addendum ("WASD+Q/E flight movement is
    * unchanged").
+   *
+   * Eases toward the held-keys' target velocity rather than snapping to it
+   * (real user feedback: an instant on/off at speed read as sudden/jerky).
+   * `FLIGHT_ACCEL_TAU_S` is an exponential time constant, not a linear ramp —
+   * framerate-independent, and it decays on release the same way it ramps up
+   * on press, which also happens to suit this project's space-sim framing
+   * (thruster inertia) better than an instant stop.
    */
   update(deltaSeconds: number): void {
-    const speed = FLIGHT_SPEED * deltaSeconds;
-    const verticalSpeed = FLIGHT_VERTICAL_SPEED * deltaSeconds;
-
     // Full 3D look direction (includes pitch) so W/S fly exactly where
     // you're looking, like Minecraft spectator / a space-sim, not an
     // FPS-style XZ-locked walk.
@@ -156,21 +167,23 @@ export class FlightControls {
     // projection needed.
     this.right.set(1, 0, 0).applyQuaternion(this.camera.quaternion);
 
-    this.moveVec.set(0, 0, 0);
-    if (this.keys.has("KeyW")) this.moveVec.addScaledVector(this.forward, speed);
-    if (this.keys.has("KeyS")) this.moveVec.addScaledVector(this.forward, -speed);
-    if (this.keys.has("KeyD")) this.moveVec.addScaledVector(this.right, speed);
-    if (this.keys.has("KeyA")) this.moveVec.addScaledVector(this.right, -speed);
+    this.targetVelocity.set(0, 0, 0);
+    if (this.keys.has("KeyW")) this.targetVelocity.addScaledVector(this.forward, FLIGHT_SPEED);
+    if (this.keys.has("KeyS")) this.targetVelocity.addScaledVector(this.forward, -FLIGHT_SPEED);
+    if (this.keys.has("KeyD")) this.targetVelocity.addScaledVector(this.right, FLIGHT_SPEED);
+    if (this.keys.has("KeyA")) this.targetVelocity.addScaledVector(this.right, -FLIGHT_SPEED);
     // Vertical is world-space, independent of camera pitch/roll. Space/Shift
     // is the primary (Minecraft creative) binding; E/Q the legacy alternate.
     if (this.keys.has("Space") || this.keys.has("KeyE")) {
-      this.moveVec.addScaledVector(this.up, verticalSpeed);
+      this.targetVelocity.addScaledVector(this.up, FLIGHT_VERTICAL_SPEED);
     }
     if (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || this.keys.has("KeyQ")) {
-      this.moveVec.addScaledVector(this.up, -verticalSpeed);
+      this.targetVelocity.addScaledVector(this.up, -FLIGHT_VERTICAL_SPEED);
     }
 
-    this.camera.position.add(this.moveVec);
+    const blend = 1 - Math.exp(-deltaSeconds / FLIGHT_ACCEL_TAU_S);
+    this.velocity.lerp(this.targetVelocity, blend);
+    this.camera.position.addScaledVector(this.velocity, deltaSeconds);
   }
 
   dispose(): void {

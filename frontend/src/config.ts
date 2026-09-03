@@ -167,24 +167,35 @@ export const SYNTHETIC_INSTANCE_COUNT = 150_000;
 /**
  * Camera flight speed, world units / second.
  *
- * Raised from 12 to 30 per user feedback after flying the real dataset ("make
- * it faster, closer to Minecraft creative"). This single constant also absorbs
- * the old `FLIGHT_BOOST_MULTIPLIER` (4x, held with Shift), which had to go
- * when Shift became "descend" — see `FlightControls`' key-binding comment. 30
- * is deliberately between the old baseline (12) and the old boosted max (48):
- * fast enough that crossing the whole 2 * WORLD_SCALE = 50-unit world takes
- * ~1.7s instead of ~4s, slow enough that you can still stop on a specific
- * voxel (a voxel cell is ~0.52 units at num_voxels=96, so this is ~58
- * cells/second) and that chunk streaming's R0 ring (3 chunks ≈ 25 units) still
- * has time to resolve ahead of the camera.
+ * Round-tripped: 12 (Phase 1-3.5 baseline) -> 30 (first "make it faster"
+ * pass, which also absorbed the old Shift-boost multiplier when Shift became
+ * "descend") -> 16 (this value), after real feedback that 30 felt too
+ * fast/sudden. 16 sits closer to the original baseline than to 30 — the
+ * *sudden* half of that complaint is mostly addressed by `FLIGHT_ACCEL_TAU_S`
+ * below (30 with easing might have been fine on its own), but the plan to
+ * also shrink voxels / grow the effective world (making distances feel
+ * bigger) means a modest speed suits that direction better than a fast one.
+ * Revisit once that scale change lands — the "right" number is coupled to
+ * world scale, not an absolute constant.
  */
-export const FLIGHT_SPEED = 30;
+export const FLIGHT_SPEED = 16;
 
 /** Vertical (Space/Shift, or the legacy E/Q) speed, world units / second.
  * Matched to `FLIGHT_SPEED` on purpose: with vertical bound to the same hand
  * position as in Minecraft creative, a slower climb than cruise reads as the
  * controls sticking rather than as a deliberate axis difference. */
-export const FLIGHT_VERTICAL_SPEED = 30;
+export const FLIGHT_VERTICAL_SPEED = 16;
+
+/**
+ * Exponential time constant (seconds) the actual flight velocity takes to
+ * ease toward the held-keys' target velocity, in both directions (spin-up on
+ * press, spin-down on release) — see `FlightControls.update()`. 0.15s is
+ * short enough to still feel responsive (not floaty/laggy input) but long
+ * enough to round off the instant on/off snap that read as "sudden" in real
+ * feedback. Also doubles as a bit of space-sim-appropriate thruster inertia,
+ * matching this project's Descent-adjacent framing.
+ */
+export const FLIGHT_ACCEL_TAU_S = 0.15;
 
 /** Camera near/far planes and FOV. */
 export const CAMERA_FOV_DEG = 70;
