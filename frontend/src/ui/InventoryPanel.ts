@@ -81,7 +81,7 @@ export class InventoryPanel {
     this.root.appendChild(this.headerEl);
 
     this.emptyEl = document.createElement("div");
-    this.emptyEl.textContent = "Mine a voxel (click while flying) to fill your inventory.";
+    this.emptyEl.textContent = "Hold click on a voxel to mine it and fill your inventory.";
     Object.assign(this.emptyEl.style, {
       padding: "10px 12px",
       opacity: "0.7",

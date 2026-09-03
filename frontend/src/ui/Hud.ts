@@ -45,10 +45,21 @@ function formatBytes(bytes: number): string {
  * raycaster currently has under the crosshair. The skinned late-90s cockpit
  * HUD (theme.css, hudPanel() wrapper, lit-html panels) is Phase 6; this is
  * deliberately throwaway-simple until then.
+ *
+ * Collapsible (Phase 4): the whole panel is `pointer-events: none` so the
+ * flight controls' drag-to-look still works when the cursor happens to be
+ * over the top-left corner — only the small header strip opts back into
+ * `pointer-events: auto` so it can be clicked to fold/unfold the body.
  */
+const COLLAPSE_STORAGE_KEY = "lsv-hud-collapsed";
+
 export class Hud {
   private readonly root: HTMLElement;
+  private readonly header: HTMLElement;
+  private readonly toggleGlyph: HTMLElement;
+  private readonly body: HTMLElement;
   private lastText = "";
+  private collapsed = false;
 
   constructor(container: HTMLElement) {
     this.root = document.createElement("div");
@@ -56,7 +67,6 @@ export class Hud {
       position: "fixed",
       top: "12px",
       left: "12px",
-      padding: "10px 14px",
       background: "rgba(5, 6, 10, 0.65)",
       color: "#d7e2ff",
       fontSize: "12px",
@@ -65,9 +75,71 @@ export class Hud {
       border: "1px solid rgba(255,255,255,0.12)",
       pointerEvents: "none",
       zIndex: "10",
+    } satisfies Partial<CSSStyleDeclaration>);
+
+    this.header = document.createElement("div");
+    Object.assign(this.header.style, {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: "16px",
+      padding: "4px 8px",
+      cursor: "pointer",
+      pointerEvents: "auto",
+      userSelect: "none",
+    } satisfies Partial<CSSStyleDeclaration>);
+    this.header.title = "Toggle HUD";
+
+    const label = document.createElement("span");
+    label.textContent = "HUD";
+    Object.assign(label.style, {
+      opacity: "0.75",
+      letterSpacing: "0.06em",
+      fontSize: "11px",
+    } satisfies Partial<CSSStyleDeclaration>);
+
+    this.toggleGlyph = document.createElement("span");
+
+    this.header.appendChild(label);
+    this.header.appendChild(this.toggleGlyph);
+    this.header.addEventListener("click", () => this.setCollapsed(!this.collapsed));
+
+    this.body = document.createElement("div");
+    Object.assign(this.body.style, {
+      padding: "0 14px 10px",
       whiteSpace: "pre",
     } satisfies Partial<CSSStyleDeclaration>);
+
+    this.root.appendChild(this.header);
+    this.root.appendChild(this.body);
     container.appendChild(this.root);
+
+    this.setCollapsed(this.readPersistedCollapsed());
+  }
+
+  private readPersistedCollapsed(): boolean {
+    try {
+      return localStorage.getItem(COLLAPSE_STORAGE_KEY) === "1";
+    } catch {
+      // Storage can throw in private-browsing/locked-down contexts; just
+      // fall back to the "start expanded" default in that case.
+      return false;
+    }
+  }
+
+  private setCollapsed(collapsed: boolean): void {
+    this.collapsed = collapsed;
+    this.body.style.display = collapsed ? "none" : "block";
+    this.header.style.borderBottom = collapsed
+      ? "none"
+      : "1px solid rgba(255,255,255,0.12)";
+    this.header.style.padding = collapsed ? "4px 8px" : "4px 8px 3px";
+    this.toggleGlyph.textContent = collapsed ? "[+]" : "[-]";
+    try {
+      localStorage.setItem(COLLAPSE_STORAGE_KEY, collapsed ? "1" : "0");
+    } catch {
+      // Non-fatal — collapse state just won't survive a reload.
+    }
   }
 
   update(state: HudState): void {
@@ -101,7 +173,7 @@ export class Hud {
     // DOM write when nothing changed keeps it off the layout path entirely.
     const text = lines.join("\n");
     if (text !== this.lastText) {
-      this.root.textContent = text;
+      this.body.textContent = text;
       this.lastText = text;
     }
   }
