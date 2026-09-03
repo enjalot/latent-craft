@@ -21,6 +21,13 @@ export default defineConfig({
     // subject to browser PNA rules) talks to :8802.
     proxy: {
       "/chunks": "http://localhost:8802",
+      // Per-point full-resolution thumbnails (mining/inventory) — resolve a
+      // row_id to a URL via point_index.bin (subset_code/local_idx) + the
+      // manifest's thumb_url_template, then fetch it at /thumbs/<dataset
+      // family>/<that path>. Currently only the BL family is symlinked in on
+      // the data-server side (/data/latent-scope-3d/thumbs/bl ->
+      // /data/images/british-library-book-images/thumbs).
+      "/thumbs": "http://localhost:8802",
     },
   },
 });

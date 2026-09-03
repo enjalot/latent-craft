@@ -147,6 +147,26 @@ export const CAMERA_FAR = 500;
 /** Raycast max distance from the camera, world units. */
 export const RAYCAST_MAX_DISTANCE = 200;
 
+// ---------------------------------------------------------------------------
+// Mining / inventory (Phase 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Base path for full-resolution per-point thumbnails, proxied same-origin
+ * exactly like the chunk-pack paths above (see `vite.config.ts`'s
+ * `server.proxy["/thumbs"]`). Hardcoded to the `bl` family rather than
+ * derived from the active dataset key: both the `bl` and `bl-160`
+ * chunk-packs (different voxel resolutions) index the same underlying
+ * 1,080,814-point British Library thumbnail set, so there's only one thumbs
+ * tree regardless of which chunk-pack is loaded.
+ */
+export const THUMBS_BASE_PATH = "/thumbs/bl";
+
+/** How many thumbnails an expanded inventory stack renders up front, and how
+ * many more each "show more" click reveals — keeps a stack of thousands of
+ * points from creating thousands of `<img>` elements at once. */
+export const INVENTORY_THUMBS_PAGE_SIZE = 60;
+
 /**
  * Resolves the chunk-pack base URL for a dataset key, honouring
  * `CHUNK_SERVER_ORIGIN` and falling back to the page's own hostname.

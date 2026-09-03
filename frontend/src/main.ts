@@ -1,15 +1,18 @@
 import * as THREE from "three";
 import { Engine } from "./engine/Engine.ts";
 import { FlightControls } from "./engine/FlightControls.ts";
-import { VoxelRaycaster } from "./engine/Raycast.ts";
+import { VoxelRaycaster, type VoxelHit } from "./engine/Raycast.ts";
 import { createSyntheticVoxelField } from "./voxels/VoxelField.ts";
 import { AtlasCache } from "./voxels/AtlasCache.ts";
 import { loadProxyCloud, type ProxyCloud } from "./voxels/ProxyCloud.ts";
 import { loadManifest, type Manifest } from "./streaming/Manifest.ts";
 import { ChunkLoader, type ChunkMeshUserData } from "./streaming/ChunkLoader.ts";
 import { ChunkStore } from "./streaming/ChunkStore.ts";
+import { loadPointIndex, type PointIndex } from "./streaming/PointIndex.ts";
+import { MiningController } from "./interaction/MiningController.ts";
 import { Hud, type HudStreamingState } from "./ui/Hud.ts";
 import { createCrosshair } from "./ui/hud/Crosshair.ts";
+import { InventoryPanel } from "./ui/InventoryPanel.ts";
 import {
   DATASETS,
   DEFAULT_DATASET,
@@ -74,6 +77,25 @@ let manifest: Manifest | null = null;
 let chunkStore: ChunkStore | null = null;
 let proxyCloud: ProxyCloud | null = null;
 let syntheticInstances = 0;
+let miningController: MiningController | null = null;
+
+// point_index.bin (whole-dataset row_id → thumbnail lookup) is only needed
+// once the inventory panel actually wants to render a thumbnail, so it's
+// fetched lazily rather than blocking the bootstrap chain above — but kicked
+// off as soon as the manifest is known (see bootstrapStreamedWorld) so it's
+// usually already resolved by the time the first voxel gets mined.
+let pointIndexPromise: Promise<PointIndex> | null = null;
+function loadPointIndexOnce(): Promise<PointIndex> {
+  if (!manifest) return Promise.reject(new Error("point_index: manifest not loaded yet"));
+  if (!pointIndexPromise) {
+    pointIndexPromise = loadPointIndex(manifest).catch((error: unknown) => {
+      console.error("[latent-scope-3d] point_index.bin load failed", error);
+      pointIndexPromise = null; // allow a later retry instead of caching the failure forever
+      throw error;
+    });
+  }
+  return pointIndexPromise;
+}
 
 if (useSynthetic) {
   const voxelField = createSyntheticVoxelField(engine.renderer);
@@ -101,6 +123,10 @@ async function bootstrapStreamedWorld(): Promise<void> {
         `${manifest.chunksPerAxis ** 3} slots, ${manifest.totalPoints.toLocaleString()} points, ` +
         `num_voxels=${manifest.numVoxels}`,
     );
+    // Kick off in the background — not awaited — so it's usually already
+    // resolved by the time mining/inventory needs it, without delaying the
+    // proxy/chunk streaming that makes the world visible.
+    void loadPointIndexOnce();
 
     status = "loading proxy…";
     proxyCloud = await loadProxyCloud(manifest, engine.renderer);
@@ -111,11 +137,25 @@ async function bootstrapStreamedWorld(): Promise<void> {
     chunkStore = new ChunkStore(manifest, chunkLoader, {
       onResidencyChanged: (chunkId, resident) => {
         proxyCloud?.setChunkResident(chunkId, resident);
+        // Re-hide anything mined in this chunk before it was evicted — see
+        // MiningController.onChunkResident's doc comment for why this can't
+        // live on the mesh itself.
+        if (resident) miningController?.onChunkResident(chunkId);
       },
     });
     engine.scene.add(chunkStore.group);
     raycastTarget = chunkStore.group;
     raycastRecursive = true;
+
+    // Constructed synchronously right after chunkStore, with no `await` in
+    // between, so the `onResidencyChanged` closure above (which only ever
+    // runs from a later microtask, once a chunk load resolves) never sees
+    // `miningController` still null.
+    miningController = new MiningController(chunkStore);
+    // Non-null assertion: `app`'s null-check `throw` above is at module scope,
+    // but TS doesn't carry that narrowing into a separate nested function
+    // (this one) even though `app` is a never-reassigned `const`.
+    new InventoryPanel(app!, miningController.inventory, loadPointIndexOnce);
 
     // Spawn just outside the densest chunk looking straight into it, so the
     // first thing on screen is the most interesting part of the embedding
@@ -144,6 +184,24 @@ function frameDensestChunk(m: Manifest): void {
   // a plain lookAt here is picked up cleanly the moment the pointer locks.
 }
 
+// --- mining -------------------------------------------------------------
+
+/** The raycast hit as of the most recent frame — read by the click listener
+ * below rather than re-raycasting on click, since the crosshair already
+ * raycasts every frame from the same screen center. */
+let currentHit: VoxelHit | null = null;
+
+// A click both (a) requests pointer lock, via FlightControls' own listener
+// on the same element, and (b) — this listener — mines whatever's under the
+// crosshair. `isLocked` is what keeps those from colliding: the very first
+// click on a fresh page has `isLocked === false` right up until the browser
+// grants the lock (an async step), so that click only locks and never mines;
+// every click after that is a real mine attempt.
+engine.renderer.domElement.addEventListener("click", () => {
+  if (!flightControls.isLocked) return;
+  miningController?.mine(currentHit);
+});
+
 // --- per-frame loop ---------------------------------------------------------
 
 const streamingState: HudStreamingState = {
@@ -162,6 +220,7 @@ engine.start((dt) => {
 
   let hoverLabel = "none";
   const hit = raycastTarget ? raycaster.raycast(raycastTarget, raycastRecursive) : null;
+  currentHit = hit;
   if (hit) {
     hit.mesh.getMatrixAt(hit.instanceId, hitMatrix);
     hitMatrix.decompose(hitPosition, hitQuaternion, hitScale);
@@ -176,9 +235,10 @@ engine.start((dt) => {
       const chunk = chunkStore?.chunk(userData.chunkId);
       const points = chunk ? chunk.meta.count[localVoxelId] : 0;
       const reprRowId = chunk ? chunk.meta.reprRowId[localVoxelId] : -1;
+      const mineHint = miningController && flightControls.isLocked ? " · click to mine" : "";
       hoverLabel =
         `chunk ${userData.chunkId} voxel ${localVoxelId} · ${points} pts · row ${reprRowId} · ` +
-        `${hitPosition.x.toFixed(1)}, ${hitPosition.y.toFixed(1)}, ${hitPosition.z.toFixed(1)}`;
+        `${hitPosition.x.toFixed(1)}, ${hitPosition.y.toFixed(1)}, ${hitPosition.z.toFixed(1)}${mineHint}`;
     } else {
       hoverLabel = `instance #${hit.instanceId}`;
     }
@@ -229,6 +289,12 @@ Object.assign(window as unknown as Record<string, unknown>, {
     },
     get proxyCloud() {
       return proxyCloud;
+    },
+    get miningController() {
+      return miningController;
+    },
+    get currentHit() {
+      return currentHit;
     },
     raycaster,
     flightControls,
