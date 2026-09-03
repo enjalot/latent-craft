@@ -1,0 +1,21 @@
+{
+  "name": "latent-scope-3d-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@three.ez/instanced-mesh": "^0.3.16",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.4",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.2"
+  }
+}
