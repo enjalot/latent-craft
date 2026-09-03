@@ -631,8 +631,9 @@ export const RESTORE_HOLD_DURATION_MS = 1600;
 export const EXTRACTION_FLOOR_OPACITY = 0.3;
 
 /** Duration of the fly-to-inventory animation, ms (see
- * `ui/ExtractionFlight.ts`). One per extraction cycle, not per point — a
- * 16,770-point batch animating as 16,770 elements would be a browser hang,
+ * `ui/ExtractionFlight.ts`). One tile per extraction cycle, not per point —
+ * animating a fully-drained 7,098-point voxel's worth of extractions as 7,098
+ * DOM elements (even one at a time, accumulated) would be a browser hang,
  * not polish. */
 export const EXTRACTION_FLIGHT_MS = 620;
 

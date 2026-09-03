@@ -34,7 +34,7 @@ export interface LightboxSource {
  * through them `INVENTORY_THUMBS_PAGE_SIZE` at a time. Navigation resolves and
  * loads exactly one image per step (the browser's own cache handles
  * backtracking), matching the lazy-loading discipline the grid already
- * follows; nothing is prefetched, so opening a 16,770-point stack costs the
+ * follows; nothing is prefetched, so opening a 7,098-point stack costs the
  * same as opening a 4-point one.
  */
 export class Lightbox {
@@ -145,7 +145,7 @@ export class Lightbox {
 
   /** Moves `delta` positions through the stack, wrapping at both ends (so a
    * single Left from the first item lands on the last — a 60-item page in a
-   * 16,770-point stack makes "walk backwards to the end" a real use). No-op
+   * 7,098-point stack makes "walk backwards to the end" a real use). No-op
    * when closed. Returns the new index, or -1. */
   step(delta: number): number {
     const source = this.source;

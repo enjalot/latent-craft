@@ -188,7 +188,7 @@ export class MiningController {
     // cursor: returns from the inventory can put arbitrary points back at any
     // time, which a monotonic cursor would either skip over or re-extract. The
     // scan is O(points in this voxel) — under a millisecond even for BL's
-    // densest 167,700-point voxel, and it runs at most twice a second.
+    // densest 7,098-point voxel, and it runs at most twice a second.
     for (let i = 0; i < total && taken.length < batch; i++) {
       const rowId = chunk.meta.pointIds[offset + i];
       if (state.extracted.has(rowId)) continue;
@@ -293,7 +293,7 @@ export class MiningController {
    * way to undo a half-drain in one action).
    *
    * Deliberately NOT a loop over `returnRow`: both the extracted `Set` and the
-   * stack's `rowIds` array would be walked per point, and a 167,700-point
+   * stack's `rowIds` array would be walked per point, and a 7,098-point
    * stack would make that ~2.8e10 operations — a hung tab. Clearing the whole
    * state and dropping the whole stack is O(1) bookkeeping for the same
    * outcome.
