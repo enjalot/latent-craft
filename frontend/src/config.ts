@@ -1078,7 +1078,7 @@ export const LOOK_SENSITIVITY_RAD_PER_PX = 0.0028;
 export const LOOK_PITCH_LIMIT_RAD = Math.PI / 2 - 0.02;
 
 /** How far the pointer must move from its mousedown position, in CSS pixels,
- * before a candidate mine/restore hold is abandoned and reinterpreted as a
+ * before a candidate extraction hold is abandoned and reinterpreted as a
  * look-drag instead. Small enough to not feel laggy, big enough to absorb
  * sub-pixel jitter from an otherwise-still hand. */
 export const LOOK_DRAG_THRESHOLD_PX = 6;
@@ -1130,22 +1130,14 @@ export function extractionBatchSize(_totalPoints: number): number {
 }
 
 /**
- * How long a hold on an ALREADY-fully-drained voxel must be sustained to push
- * its entire extracted stack back into it (the whole-voxel inverse of
- * extraction; the per-point inverse lives in the inventory panel).
- *
- * Deliberately still 1600ms — Phase 3.5's original hold duration — rather than
- * `EXTRACTION_CYCLE_MS`. Extraction got faster because it's incremental and
- * self-limiting (let go and you keep exactly what you pulled); a restore is a
- * single irreversible-feeling bulk action that also empties an inventory
- * stack, so it keeps the longer, more deliberate hold.
- */
-export const RESTORE_HOLD_DURATION_MS = 1600;
-
-/**
  * Opacity a FULLY drained voxel renders at. A partially drained one sits at
  * `lerp(1, EXTRACTION_FLOOR_OPACITY, extractedFraction)` — see
  * `combinedVoxelOpacity()` in `voxels/VoxelOpacity.ts`.
+ *
+ * A fully drained voxel is also PASS-THROUGH to the cursor (the raycaster
+ * skips it and lands on whatever is behind — `engine/Raycast.ts`), so this is
+ * purely how the ghost looks; nothing can be armed on it. Points go back only
+ * from the inventory panel (per point or per stack).
  *
  * Replaces Phase 3.5's `MINED_OPACITY` (0.55), per the user's "should be
  * pretty faded" — 0.55 was tuned as the *binary* mined state's single value,
@@ -1346,9 +1338,10 @@ export const EFFECTOR_KEY_STEP_MULTIPLIER = 4;
  * a voxel instead of a fraction of a chunk, since this test is per-voxel. */
 export const EFFECTOR_UPDATE_MOVE_EPSILON_VOXEL_FRAC = 0.25;
 
-/** Gizmo sphere color — deliberately distinct from the hover-highlight teal
- * (`#7fffe0`) and the mine/restore hold-ring colors, so the field reads as
- * its own thing rather than blending into existing HUD accents. */
+/** Gizmo sphere color — deliberately distinct from the hover-highlight /
+ * extraction hold-ring teal (`#7fffe0`) and the minimap flashlight amber, so
+ * the field reads as its own thing rather than blending into existing HUD
+ * accents. */
 export const EFFECTOR_GIZMO_COLOR = 0x9d7bff;
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import { Engine } from "./engine/Engine.ts";
 import { FlightControls } from "./engine/FlightControls.ts";
 import { VoxelRaycaster, type VoxelHit } from "./engine/Raycast.ts";
@@ -30,7 +31,6 @@ import {
   HEMISPHERE_GROUND_COLOR,
   HEMISPHERE_INTENSITY,
   HEMISPHERE_SKY_COLOR,
-  RESTORE_HOLD_DURATION_MS,
   RING_R0_CHUNKS,
   SUN_COLOR,
   SUN_DIRECTION,
@@ -76,26 +76,42 @@ sunLight.position.set(...SUN_DIRECTION);
 engine.scene.add(sunLight);
 
 const flightControls = new FlightControls(engine.camera);
-const raycaster = new VoxelRaycaster(engine.camera);
 
-/** Resolves a raycast hit back to its chunk/voxel identity, or `null` if the
- * hit isn't against a TEXTURED chunk-voxel mesh — the Phase 1 `?synthetic=1`
- * field and the Phase 8 proxy mesh both carry no `chunkId` in their userData
- * and so resolve to nothing here. That is load-bearing for the proxies:
- * `PointerController` arms a hold on exactly what this returns, so a proxy
- * voxel (no point ids to extract) can never arm one, and `MiningController`
- * can never be handed a proxy hit. Shared by the per-frame hover logic below
- * and the mousedown-time hit test, so the two never disagree about what
- * counts as "a voxel." A proxy hover is resolved separately, by
- * `resolveProxyVoxel`. */
-function resolveVoxelTarget(hit: VoxelHit | null): VoxelTarget | null {
-  if (!hit) return null;
-  const userData = hit.mesh.userData as Partial<ChunkMeshUserData>;
+/** Resolves an instance of a mesh back to its chunk/voxel identity, or
+ * `null` if the mesh isn't a TEXTURED chunk-voxel mesh — the Phase 1
+ * `?synthetic=1` field and the Phase 8 proxy mesh both carry no `chunkId` in
+ * their userData and so resolve to nothing here. That is load-bearing for the
+ * proxies: `PointerController` arms a hold on exactly what `resolveVoxelTarget`
+ * returns, so a proxy voxel (no point ids to extract) can never arm one, and
+ * `MiningController` can never be handed a proxy hit. A proxy hover is
+ * resolved separately, by `resolveProxyVoxel`. */
+function voxelIdentityOf(mesh: InstancedMesh2, instanceId: number): VoxelTarget | null {
+  const userData = mesh.userData as Partial<ChunkMeshUserData>;
   if (userData.chunkId === undefined || !userData.instanceToLocalVoxelId) return null;
-  const localVoxelId = userData.instanceToLocalVoxelId[hit.instanceId];
+  const localVoxelId = userData.instanceToLocalVoxelId[instanceId];
   if (localVoxelId === undefined) return null;
   return { chunkId: userData.chunkId, localVoxelId };
 }
+
+/** `voxelIdentityOf` for a raycast hit. Shared by the per-frame hover logic
+ * below and the mousedown-time hit test, so the two never disagree about what
+ * counts as "a voxel." */
+function resolveVoxelTarget(hit: VoxelHit | null): VoxelTarget | null {
+  return hit ? voxelIdentityOf(hit.mesh, hit.instanceId) : null;
+}
+
+// The cursor looks THROUGH a fully drained voxel and lands on whatever is
+// behind it ("empty cubes should not interact anymore, so that you can mine
+// whats behind them") — see `VoxelRaycaster`'s class comment for why this is
+// a predicate on the intersection list rather than a visibility flag. Only
+// textured chunk voxels can be drained, so proxies and anything without a
+// chunk identity are never pass-through; `miningController` is the
+// module-scope `let` assigned once the world is up, and before then nothing
+// is drained.
+const raycaster = new VoxelRaycaster(engine.camera, (mesh, instanceId) => {
+  const target = voxelIdentityOf(mesh, instanceId);
+  return !!target && (miningController?.isFullyExtracted(target.chunkId, target.localVoxelId) ?? false);
+});
 
 /** The proxy voxel a hit landed on, or `null` if the hit is against anything
  * else. Identity is by mesh, not userData: there is exactly one proxy mesh. */
@@ -166,7 +182,7 @@ let effectorField: EffectorFieldController | null = null;
 let minimap: MinimapBridge | null = null;
 let inventoryPanel: InventoryPanel | null = null;
 
-// --- pointer: click-and-drag to look, click-and-HOLD to mine/restore --------
+// --- pointer: click-and-drag to look, click-and-HOLD to extract -------------
 //
 // `PointerController` owns the raw pointer stream and the drag-vs-hold
 // ambiguity; this module only supplies the hit-test and reacts to hold
@@ -185,14 +201,13 @@ const pointerController = new PointerController(engine.renderer.domElement, flig
   onPointerEngage: () => {
     minimap?.cancelHoverLook();
   },
-  onHoldStart: (target) => {
+  onHoldStart: () => {
     holdElapsedSeconds = 0;
-    // A hold means "keep extracting" on any voxel that still has points in it,
-    // and "push the whole stack back" only once it is completely drained —
-    // one gesture, two unambiguous meanings, no second binding needed. See
-    // `MiningController.restoreAll`.
-    const restoring = miningController?.isFullyExtracted(target.chunkId, target.localVoxelId) ?? false;
-    holdRing.show(restoring ? "restore" : "mine");
+    // A hold has exactly one meaning — keep extracting — because the only
+    // voxels that can be held are ones with points still in them: a fully
+    // drained voxel is pass-through to the cursor (see `raycaster` above), so
+    // it can never be the target here.
+    holdRing.show("mine");
   },
   onHoldCancel: () => {
     holdElapsedSeconds = 0;
@@ -547,12 +562,11 @@ engine.start((dt) => {
   currentHit = hit;
   const target = resolveVoxelTarget(hit);
   const proxyVoxel = target ? null : resolveProxyVoxel(hit);
+  // Never 1: a fully drained voxel is pass-through to the raycast, so the
+  // hovered target always has at least one point left in it.
   const hoveredFraction = target
     ? (miningController?.extractedFraction(target.chunkId, target.localVoxelId) ?? 0)
     : 0;
-  const hoveredDrained = target
-    ? (miningController?.isFullyExtracted(target.chunkId, target.localVoxelId) ?? false)
-    : false;
 
   /** The hovered voxel's representative row_id — the ONLY handle the minimap
    * has on "where is this voxel in the 2D fit" (see MinimapBridge). */
@@ -571,11 +585,7 @@ engine.start((dt) => {
       const points = chunk ? chunk.meta.count[target.localVoxelId] : 0;
       const reprRowId = chunk ? chunk.meta.reprRowId[target.localVoxelId] : -1;
       hoveredRowId = reprRowId >= 0 ? reprRowId : null;
-      const actionHint = miningController
-        ? hoveredDrained
-          ? " · hold to put it all back"
-          : " · hold to extract"
-        : "";
+      const actionHint = miningController ? " · hold to extract" : "";
       const extractedHint =
         hoveredFraction > 0 ? ` · ${Math.round(hoveredFraction * 100)}% extracted` : "";
       hoverLabel =
@@ -599,7 +609,7 @@ engine.start((dt) => {
 
   minimap?.setHoveredRow(hoveredRowId);
 
-  // --- hold-to-extract / hold-to-put-back progress ----------------------
+  // --- hold-to-extract progress -------------------------------------------
   //
   // Phase 6.5: a hold no longer performs ONE action and end. While the button
   // is down on a voxel that still has points in it, this runs an
@@ -614,58 +624,45 @@ engine.start((dt) => {
   // 1-point voxel that's identical to a per-cycle fill; for a many-thousand-
   // point voxel it advances slowly and honestly, which is the point: the ring
   // is a gauge of how much of THIS block is left, and the block's own fade
-  // agrees with it. Restore (put-it-all-back) is a single hold, so it keeps
-  // showing its own timer fill.
+  // agrees with it.
   const holdTarget = pointerController.holdTarget;
   if (holdTarget) {
     const stillHovering =
       !!target && target.chunkId === holdTarget.chunkId && target.localVoxelId === holdTarget.localVoxelId;
     if (!stillHovering) {
       // Hover target changed out from under an armed hold (e.g. WASD flight
-      // moved the world under an otherwise-still cursor) — cancel without
-      // banking any progress, per the plan's explicit requirement.
+      // moved the world under an otherwise-still cursor, or the voxel just
+      // emptied and the cursor now sees through it) — cancel without banking
+      // any progress, per the plan's explicit requirement.
       pointerController.cancelHold();
     } else {
-      const restoring = miningController?.isFullyExtracted(holdTarget.chunkId, holdTarget.localVoxelId) ?? false;
-      const durationSeconds = (restoring ? RESTORE_HOLD_DURATION_MS : EXTRACTION_CYCLE_MS) / 1000;
+      const durationSeconds = EXTRACTION_CYCLE_MS / 1000;
       holdElapsedSeconds += dt;
 
+      // Overall fraction incl. the in-progress cycle — see the comment above.
+      // An untouched voxel has no extraction record yet, so its total comes
+      // straight from the chunk's per-voxel counts.
       const cycleFraction = Math.min(1, holdElapsedSeconds / durationSeconds);
-      if (restoring) {
-        holdRing.setProgress(cycleFraction);
-      } else {
-        // Overall fraction incl. the in-progress cycle — see the comment
-        // above. An untouched voxel has no extraction record yet, so its
-        // total comes straight from the chunk's per-voxel counts.
-        const state = miningController?.extractionState(holdTarget.chunkId, holdTarget.localVoxelId);
-        const extracted = state?.extracted.size ?? 0;
-        const total = state?.total ?? chunkStore?.chunk(holdTarget.chunkId)?.meta.count[holdTarget.localVoxelId] ?? 1;
-        holdRing.setProgress(Math.min(1, (extracted + cycleFraction) / Math.max(1, total)));
-      }
+      const state = miningController?.extractionState(holdTarget.chunkId, holdTarget.localVoxelId);
+      const extracted = state?.extracted.size ?? 0;
+      const total = state?.total ?? chunkStore?.chunk(holdTarget.chunkId)?.meta.count[holdTarget.localVoxelId] ?? 1;
+      holdRing.setProgress(Math.min(1, (extracted + cycleFraction) / Math.max(1, total)));
 
       if (holdElapsedSeconds >= durationSeconds) {
-        if (restoring) {
-          miningController?.restoreAll(hit);
-          // Consumed, not canceled — requires a fresh mousedown to arm the
-          // next hold, so a completed put-back can't immediately auto-chain
-          // into re-extracting the voxel while the button is still down.
+        const cycle = miningController?.extract(hit) ?? null;
+        if (cycle) launchExtractionFlight(cycle, hitPosition);
+        holdElapsedSeconds = 0;
+        if (!cycle || cycle.complete) {
+          // Stop at the moment the voxel empties (or if extraction couldn't
+          // run at all). The emptied voxel is pass-through from the next
+          // raycast on, so the cursor is about to land on whatever is behind
+          // it; consuming the hold (rather than letting it ride) means the
+          // button still being down cannot start draining THAT voxel — a
+          // fresh mousedown is required.
           pointerController.consumeHold();
-          holdElapsedSeconds = 0;
           holdRing.hide();
         } else {
-          const cycle = miningController?.extract(hit) ?? null;
-          if (cycle) launchExtractionFlight(cycle, hitPosition);
-          holdElapsedSeconds = 0;
-          if (!cycle || cycle.complete) {
-            // Stop at the moment the voxel empties (or if extraction couldn't
-            // run at all). Continuing would roll straight into the
-            // put-it-all-back timer, and an uninterrupted hold would then
-            // silently undo the drain the user just performed.
-            pointerController.consumeHold();
-            holdRing.hide();
-          } else {
-            holdRing.setProgress(cycle.fraction);
-          }
+          holdRing.setProgress(cycle.fraction);
         }
       }
     }
@@ -678,11 +675,11 @@ engine.start((dt) => {
     holdRing.setPosition(xPx, yPx);
   }
   // A proxy voxel deliberately gets the plain arrow, not the crosshair: the
-  // crosshair means "hold here does something", and on a proxy it doesn't.
+  // crosshair means "hold here extracts", and on a proxy it doesn't.
   if (pointerController.isDragging) {
     setCursorStyle("grabbing");
   } else if (target) {
-    setCursorStyle(hoveredDrained ? "pointer" : "crosshair");
+    setCursorStyle("crosshair");
   } else {
     setCursorStyle("default");
   }

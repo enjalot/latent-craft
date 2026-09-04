@@ -3,9 +3,8 @@ import type { FlightControls } from "../engine/FlightControls.ts";
 import { LOOK_DRAG_THRESHOLD_PX } from "../config.ts";
 
 /** The voxel a pointerdown landed on, opaque beyond chunk/voxel identity —
- * `PointerController` never needs to know whether it's minable or
- * restorable, only whether the hover target it's tracking is still the same
- * one. */
+ * `PointerController` never needs to know what a hold on it will do, only
+ * whether the hover target it's tracking is still the same one. */
 export interface VoxelTarget {
   chunkId: number;
   localVoxelId: number;
@@ -14,16 +13,16 @@ export interface VoxelTarget {
 export interface PointerControllerCallbacks {
   /** Synchronous hit-test at the given NDC, called ONLY at pointerdown, to
    * resolve Phase 3.5's central ambiguity: is a voxel hovered right now (→
-   * arm a candidate mine/restore hold) or not (→ start dragging
-   * immediately, unambiguously)? */
+   * arm a candidate extraction hold) or not (→ start dragging immediately,
+   * unambiguously)? */
   hitTestVoxel: (ndc: THREE.Vector2) => VoxelTarget | null;
   /**
    * Fired synchronously on every left-button pointerdown on the canvas,
    * BEFORE the hold-vs-drag decision and before `hitTestVoxel` runs. This is
    * "the player took hold of the 3D view", whichever of the two gestures it
-   * turns into — the hook the minimap's hover-pan uses to stand down (see
-   * `MinimapBridge.cancelHoverPan`). Ordering matters: cancelling a camera
-   * flight here freezes the pose the hit test is about to raycast from, so a
+   * turns into — the hook the minimap's hover-look uses to stand down (see
+   * `MinimapBridge.cancelHoverLook`). Ordering matters: stopping a camera
+   * turn here freezes the pose the hit test is about to raycast from, so a
    * hold armed on a voxel is armed on the voxel that stays under the cursor.
    */
   onPointerEngage: () => void;
@@ -38,7 +37,7 @@ export interface PointerControllerCallbacks {
 /**
  * Owns the canvas's raw pointer stream and resolves the ambiguity a free
  * (never-captured) cursor introduces: a mousedown-then-move could mean
- * either "drag to look around" or "holding down on a voxel to mine/restore
+ * either "drag to look around" or "holding down on a voxel to extract from
  * it." Per the plan's resolution: if a voxel is hovered at mousedown, treat
  * it as a hold candidate and wait — only promote to a look-drag if the
  * pointer moves past `LOOK_DRAG_THRESHOLD_PX` before release, which cancels
@@ -102,12 +101,12 @@ export class PointerController {
     }
   }
 
-  /** Called by the frame loop when an armed hold's timer completes and the
-   * mine/restore action has been performed. Clears the target WITHOUT
-   * firing `onHoldCancel` — this was a successful completion, not a
-   * cancellation — so a completed mine can't immediately auto-chain into an
-   * accidental restore just because the button is still physically down; a
-   * fresh mousedown is required to arm the next hold. */
+  /** Called by the frame loop when an armed hold has run its course (the
+   * voxel emptied, or extraction couldn't run). Clears the target WITHOUT
+   * firing `onHoldCancel` — this was a completion, not a cancellation — and
+   * a fresh mousedown is required to arm the next hold: the button still
+   * being physically down must not start a hold on whatever the cursor now
+   * sees through the emptied voxel. */
   consumeHold(): void {
     this._holdTarget = null;
   }

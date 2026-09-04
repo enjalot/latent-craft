@@ -16,8 +16,8 @@
  *    — panel frames, backgrounds, titles, static labels. Purely decorative;
  *    carries no state.
  * 2. SIGNALS (`--hud-signal-*`) — mirrors of the functional colors already
- *    defined in `config.ts` / `main.ts` (hover-highlight teal, flashlight and
- *    restore amber, effector-field violet). These are NOT part of the skin's
+ *    defined in `config.ts` / `main.ts` (hover-highlight teal, flashlight
+ *    amber, effector-field violet). These are NOT part of the skin's
  *    palette; they are quoted here so panel chrome can be tuned to stay OUT
  *    of their way. Never repaint a signal to match the chrome — the chrome is
  *    what gets dimmed so a signal reads.
@@ -47,8 +47,8 @@
   --hud-title: #8fe9f7;
 
   /* --- functional signals (mirrored, never overridden) ------------------- */
-  --hud-signal-teal: #7fffe0; /* hover wireframe, mine ring, minimap crosshair */
-  --hud-signal-amber: #ffb347; /* minimap flashlight, restore ring */
+  --hud-signal-teal: #7fffe0; /* hover wireframe, extraction ring, minimap crosshair */
+  --hud-signal-amber: #ffb347; /* minimap flashlight */
   --hud-signal-violet: #9d7bff; /* effector-field gizmo */
 
   /* --- CRT texture ------------------------------------------------------- */

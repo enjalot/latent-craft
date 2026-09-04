@@ -64,12 +64,23 @@ export interface ExtractionCycle {
  * find again, so 3.5 moved to `InstancedMesh2`'s first-class per-instance
  * opacity channel (`setOpacityAt`/`getOpacityAt`, backed by `colorsTexture`),
  * which does NOT touch `getActiveAndVisibilityAt` (what raycasting and frustum
- * culling actually gate on). A faded voxel therefore stays fully hit-testable
- * for free, and the material needs no per-chunk preparation either: voxel
+ * culling actually gate on). A faded voxel therefore stays hit-testable for
+ * free — which is what a PARTIALLY drained voxel wants, so a hold can keep
+ * draining it — and the material needs no per-chunk preparation either: voxel
  * materials are built with alpha-to-coverage on (see `createVoxelMaterial`),
  * so any mix of opaque and faded instances renders correctly in one opaque
  * draw. (Flipping the material to `transparent` lazily, as earlier phases
  * did, was what made a faded cube cut holes in the cubes behind it.)
+ *
+ * A FULLY drained voxel is the exception, and it is handled one layer up: the
+ * raycaster (`engine/Raycast.ts`) is built with a pass-through predicate that
+ * `main.ts` wires to `isFullyExtracted` here, so the cursor looks through an
+ * emptied ghost and lands on whatever is behind it ("empty cubes should not
+ * interact anymore, so that you can mine whats behind them"). Nothing here
+ * changes for that — the record, the opacity floor and the cage's depletion
+ * are exactly as they were; the voxel just stops being a hover target until a
+ * point comes back from the inventory, at which moment `isFullyExtracted`
+ * flips and the next cast hits it again.
  *
  * ## Phase 6.5: continuous extraction, not one-shot mining
  *
@@ -94,9 +105,11 @@ export interface ExtractionCycle {
  *   counting (the extracted set is keyed by row_id, so even a re-run of the
  *   same cycle could not double-extract a point).
  *
- * Reversal exists at two granularities and they share one path
- * (`returnRows`): `restoreAll()` (hold on a fully-drained voxel) and
- * `returnRow()` (one thumbnail in the inventory panel).
+ * Reversal is the inventory panel's, at two granularities: `returnRow()` (one
+ * thumbnail) and `returnStack()` (a whole voxel's worth). There is no 3D
+ * gesture for it any more — a hold on a drained voxel used to push its stack
+ * back, but a drained voxel is now pass-through to the cursor (see above), so
+ * there is nothing to hold on.
  *
  * ## Cross-controller composition
  *
@@ -110,11 +123,11 @@ export interface ExtractionCycle {
  * in reverse. See main.ts's bootstrap-order comment.
  *
  * Phase 6.8 hangs a second readout off the very same fraction: the voxel's
- * container cage (`voxels/VoxelContainers.ts`), whose fill-line drains as it
- * does. Every place below that writes `setOpacityAt` writes
+ * container cage (`voxels/VoxelContainers.ts`), which dims and then fades as
+ * it drains. Every place below that writes `setOpacityAt` writes
  * `containers.setExtractedFraction` beside it — one fraction, two renderings of
- * it, updated at the same four moments (extract, restore-all, per-item return,
- * chunk becomes resident) rather than polled from the frame loop.
+ * it, updated at the same four moments (extract, per-item return, per-stack
+ * return, chunk becomes resident) rather than polled from the frame loop.
  */
 export class MiningController {
   readonly inventory = new Inventory();
@@ -127,14 +140,16 @@ export class MiningController {
   ) {}
 
   /** 0 (untouched) … 1 (fully drained). The single number every other system
-   * — opacity, cursor style, hold-ring color, HUD label — reads. */
+   * — opacity, cage depletion, HUD label — reads. */
   extractedFraction(chunkId: number, localVoxelId: number): number {
     const state = this.extractionByChunk.get(chunkId)?.get(localVoxelId);
     if (!state || state.total === 0) return 0;
     return Math.min(1, state.extracted.size / state.total);
   }
 
-  /** True iff every point in the voxel is currently in the inventory. */
+  /** True iff every point in the voxel is currently in the inventory — the
+   * raycaster's pass-through test (see the class comment), so it runs once
+   * per instance the cursor's ray crosses, every frame: two map lookups. */
   isFullyExtracted(chunkId: number, localVoxelId: number): boolean {
     const state = this.extractionByChunk.get(chunkId)?.get(localVoxelId);
     return !!state && state.total > 0 && state.extracted.size >= state.total;
@@ -160,8 +175,10 @@ export class MiningController {
    * Silently no-ops for a null hit, a hit against something that isn't a
    * chunk-voxel mesh (the Phase 1 `?synthetic=1` field has no `chunkId` in its
    * userData), a voxel whose chunk isn't resident, or a voxel that is already
-   * fully drained — a drained voxel stays raycastable, so that last check is
-   * load-bearing, not defensive.
+   * fully drained. The raycaster can no longer hand this a drained voxel (it
+   * passes through them), but the check is what makes that true rather than
+   * merely usual: the verification harness calls this directly with a
+   * synthetic hit, and so could any future caller.
    */
   extract(hit: VoxelHit | null): ExtractionCycle | null {
     if (!hit) return null;
@@ -214,7 +231,7 @@ export class MiningController {
       hit.instanceId,
       combinedVoxelOpacity(state.extracted.size / state.total, this.isXrayActive()),
     );
-    // The cage's fill-line is driven off the SAME fraction as the cube's fade
+    // The cage's depletion is driven off the SAME fraction as the cube's fade
     // (see `voxels/VoxelContainers.ts`), so it is updated here rather than
     // polled: there is no other way for a voxel's extraction state to change.
     chunk.containers.setExtractedFraction(hit.instanceId, state.extracted.size / state.total);
@@ -233,45 +250,15 @@ export class MiningController {
   }
 
   /**
-   * Pushes a fully-drained voxel's ENTIRE stack back into it: opacity back to
-   * normal, the per-voxel record dropped (so eviction/reload doesn't resurrect
-   * a drained state), and its inventory stack removed. Returns `true` iff a
-   * voxel was actually restored.
-   *
-   * Deliberately gated on FULLY drained rather than "partially drained too":
-   * the same gesture (hold) means "keep extracting" on a partially drained
-   * voxel, so allowing bulk-restore there would make one hold ambiguous. The
-   * inventory panel's per-item and per-stack returns cover the partial case
-   * without needing a second 3D binding.
-   */
-  restoreAll(hit: VoxelHit | null): boolean {
-    if (!hit) return false;
-    const userData = hit.mesh.userData as Partial<ChunkMeshUserData>;
-    if (userData.chunkId === undefined || !userData.instanceToLocalVoxelId) return false;
-
-    const chunkId = userData.chunkId;
-    const localVoxelId = userData.instanceToLocalVoxelId[hit.instanceId];
-    if (localVoxelId === undefined || !this.isFullyExtracted(chunkId, localVoxelId)) return false;
-
-    this.clearState(chunkId, localVoxelId);
-    // NOT a bare `1` — if X-Ray is still equipped, a restored voxel must land
-    // back on XRAY_OPACITY (still see-through, per that item's global effect),
-    // not snap to fully opaque just because its extraction state cleared.
-    hit.mesh.setOpacityAt(hit.instanceId, combinedVoxelOpacity(0, this.isXrayActive()));
-    // Fraction 0 == the cage refills to the brim, in one write.
-    this.chunkStore.chunk(chunkId)?.containers.setExtractedFraction(hit.instanceId, 0);
-    this.inventory.removeStack(voxelStackId(chunkId, localVoxelId));
-    return true;
-  }
-
-  /**
    * Sends ONE specific point back into its source voxel, from the inventory
    * panel. Returns `true` iff that row was actually extracted from that stack.
    *
    * Works whether or not the voxel's chunk is currently resident: the
    * authoritative state is the extracted set here, and the visual (opacity)
    * is re-derived either immediately (resident) or on the next
-   * `onChunkResident` (not resident).
+   * `onChunkResident` (not resident). Returning one point to a fully drained
+   * voxel is also what makes it a hover target again — `isFullyExtracted`
+   * goes false the moment the set shrinks.
    */
   returnRow(stackId: string, rowId: number): boolean {
     const stack = this.inventory.stack(stackId);
@@ -288,9 +275,12 @@ export class MiningController {
 
   /**
    * Sends an entire stack back into its source voxel, from the inventory panel
-   * — the partial-drain counterpart to `restoreAll`'s hold gesture (that one
-   * only offers itself once a voxel is completely drained, so this is the only
-   * way to undo a half-drain in one action).
+   * — the only way to undo a drain (partial or complete) in one action. The
+   * per-voxel record is dropped outright (so eviction/reload doesn't resurrect
+   * a drained state) and the opacity/cage go back to normal in one write —
+   * NOT to a bare `1`: `applyToResidentVoxel` composes through
+   * `combinedVoxelOpacity`, so if X-Ray is still equipped the refilled voxel
+   * lands back on `XRAY_OPACITY` rather than snapping opaque.
    *
    * Deliberately NOT a loop over `returnRow`: both the extracted `Set` and the
    * stack's `rowIds` array would be walked per point, and a 7,098-point
@@ -339,7 +329,7 @@ export class MiningController {
         combinedVoxelOpacity(state.extracted.size / state.total, xrayActive),
       );
       // A reloaded chunk's cages are rebuilt full, so re-draining exactly to
-      // this voxel's fraction is all that's needed to make the gauge as
+      // this voxel's fraction is all that's needed to make the depletion as
       // persistent across an evict/reload as the fade it accompanies.
       chunk.containers.setExtractedFraction(instanceId, state.extracted.size / state.total);
     }
