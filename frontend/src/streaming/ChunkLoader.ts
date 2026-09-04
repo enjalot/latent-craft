@@ -2,7 +2,6 @@ import * as THREE from "three";
 import { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import { fetchArrayBuffer } from "../net/fetchTyped.ts";
 import { createVoxelMaterial, initVoxelUniforms } from "../voxels/VoxelMaterial.ts";
-import { VoxelGreebles } from "../voxels/VoxelGreebles.ts";
 import type { AtlasCache } from "../voxels/AtlasCache.ts";
 import type { Manifest } from "./Manifest.ts";
 import type { ChunkMeta, ManifestChunk } from "../types.ts";
@@ -102,13 +101,6 @@ export interface LoadedChunk {
   /** `localVoxelId` for each instance id, so a raycast hit resolves back to
    * the data model (needed from Phase 3's mining onward). */
   instanceToLocalVoxelId: Uint32Array;
-  /**
-   * This chunk's edge-detail layer (Phase 6.7), or `null` if none of its voxels
-   * hold enough points to earn any (or greebles are switched off). Indexed by
-   * the SAME instance ids as `mesh`, so anything holding a voxel hit can drive
-   * both without a translation table. See `voxels/VoxelGreebles.ts`.
-   */
-  greebles: VoxelGreebles | null;
 }
 
 /** Extra fields hung off the chunk mesh so a raycast hit can identify itself
@@ -145,10 +137,6 @@ export class ChunkLoader {
     private readonly manifest: Manifest,
     private readonly atlasCache: AtlasCache,
     private readonly renderer: THREE.WebGLRenderer,
-    /** Build the per-chunk greeble layer (Phase 6.7). Off only via `?greebles=0`,
-     * which exists so the cost of the layer can be A/B'd against the same
-     * camera pose on the same data rather than estimated. */
-    private readonly enableGreebles: boolean = true,
   ) {}
 
   async load(entry: ManifestChunk, signal?: AbortSignal): Promise<LoadedChunk> {
@@ -205,16 +193,6 @@ export class ChunkLoader {
     mesh.userData = userData;
     mesh.name = `chunk-${entry.chunk_id}`;
 
-    // Parented to the voxel mesh, not added to the scene separately, so the
-    // greebles inherit its exact lifetime — `ChunkStore` adding/removing the
-    // chunk mesh moves them with it and there is no second residency table to
-    // keep in sync. They are explicitly disposed in `unload` below, since
-    // removing a parent does not dispose its children.
-    const greebles = this.enableGreebles
-      ? VoxelGreebles.build(entry, meta, this.manifest, this.renderer)
-      : null;
-    if (greebles) mesh.add(greebles.mesh);
-
     return {
       entry,
       meta,
@@ -222,13 +200,11 @@ export class ChunkLoader {
       atlasUrl,
       bytes: this.atlasCache.byteSize(atlasUrl, entry.atlas_bytes) + entry.meta_bytes,
       instanceToLocalVoxelId: meta.occupied,
-      greebles,
     };
   }
 
   /** Tears down a loaded chunk's GPU resources and drops its atlas reference. */
   unload(chunk: LoadedChunk): void {
-    chunk.greebles?.dispose();
     chunk.mesh.removeFromParent();
     chunk.mesh.dispose();
     chunk.mesh.geometry.dispose();

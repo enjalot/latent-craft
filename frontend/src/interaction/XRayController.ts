@@ -1,6 +1,5 @@
 import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import { combinedVoxelOpacity, ensureTransparentMaterial } from "../voxels/VoxelOpacity.ts";
-import { XRAY_OPACITY } from "../config.ts";
 
 /**
  * Hotbar Item 1 — "X-Ray": a global, chunk-wide translucency toggle.
@@ -73,11 +72,6 @@ export class XRayController {
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk) return;
     ensureTransparentMaterial(chunk.mesh);
-    // Phase 6.7: the edge-detail layer is a separate mesh, so it needs telling
-    // too — left opaque it would sit as a field of solid specks inside an
-    // otherwise see-through cluster. One material-level write per chunk; see
-    // `VoxelGreebles.setXrayOpacity`.
-    chunk.greebles?.setXrayOpacity(this.active ? XRAY_OPACITY : 1);
     const occupied = chunk.meta.occupied;
     for (let instanceId = 0; instanceId < occupied.length; instanceId++) {
       const localVoxelId = occupied[instanceId];
