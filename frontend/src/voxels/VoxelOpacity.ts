@@ -1,4 +1,3 @@
-import type { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import { EXTRACTION_FLOOR_OPACITY, XRAY_OPACITY } from "../config.ts";
 
 /**
@@ -57,22 +56,4 @@ export function combinedVoxelOpacity(extractedFraction: number, xrayActive: bool
   const miningComponent = extractionOpacity(extractedFraction);
   const xrayComponent = xrayActive ? XRAY_OPACITY : 1;
   return Math.min(miningComponent, xrayComponent);
-}
-
-/**
- * Formerly flipped a chunk's material into the transparent render path the
- * first time any of its voxels was faded. That was the cause of the "a
- * transparent block makes some of the blocks behind it disappear" bug — see
- * `createVoxelMaterial`'s doc comment for the mechanism. Per-instance opacity
- * now goes through alpha-to-coverage on a material that is created ready for
- * it, so there is nothing to flip: every chunk material handles any mix of
- * opaque and faded voxels from the moment it's built.
- *
- * Kept as an explicit no-op for now only because its call sites
- * (`MiningController`, `XRayController`) are being edited concurrently by the
- * container work; the calls come out with that work's landing, and this
- * function goes with them.
- */
-export function ensureTransparentMaterial(mesh: InstancedMesh2): void {
-  void mesh;
 }

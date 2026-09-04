@@ -185,8 +185,16 @@ export class EffectorFieldController {
    * itself, so `update()`'s move-epsilon throttle would otherwise skip
    * recomputing and leave the new chunk's voxels un-suppressed even where
    * they should be — this forces one recompute pass to cover that case. */
-  onChunkResident(_chunkId: number): void {
+  onChunkResident(chunkId: number): void {
     if (!this.active) return;
+    // A chunk that was evicted while suppressed and has now streamed back in
+    // has a FRESH mesh with every instance visible, but `suppressed` may still
+    // hold the ids this controller hid in the old one (eviction has no hook,
+    // so the record was never pruned). Left in place, the diff below would
+    // see "already suppressed" and skip re-hiding them. Forget the stale
+    // record first so the rebuilt chunk is treated as fully visible, which is
+    // what it is.
+    this.suppressed.delete(chunkId);
     this.recomputeSuppression();
   }
 

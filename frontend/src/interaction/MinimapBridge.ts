@@ -102,6 +102,12 @@ export type HoverPanState = "idle" | "pending" | "flying";
  * against the camera's CURRENT position (the standoff is on the camera's side
  * of the voxel), so it is only valid at the moment it was planned.
  */
+/** A hover-pan whose destination is closer than this fraction of a voxel to
+ * the camera is not started at all — see `hoverPanToQ`. A quarter voxel is
+ * well under any distance a flight would visibly cover, and well over the
+ * ~1e-15 residue a landed flight leaves. */
+const HOVER_PAN_ARRIVED_VOXEL_FRAC = 0.25;
+
 export interface FlightPlan {
   rowId: number;
   chunkId: number;
@@ -683,9 +689,11 @@ export class MinimapBridge {
       lookAt: plan.target,
       durationMs,
       onArrive: () => {
-        // Re-aim through FlightControls so its yaw/pitch match the quaternion
-        // the slerp landed on — otherwise the next look-drag would compose
-        // from stale state and snap the view.
+        // Re-aim through FlightControls so its yaw/pitch match the pose the
+        // flight landed on — otherwise the next look-drag would compose from
+        // stale state and snap the view. (Since the Engine sweeps yaw/pitch
+        // directly this is a re-sync of already-consistent state, kept so
+        // FlightControls stays the single owner of that pair.)
         this.flightControls.lookAt(plan.target);
         this.chunkStore.clearTeleportTarget();
         this.activeFlight = null;
@@ -752,6 +760,11 @@ export class MinimapBridge {
     const retargeted = this.activeFlight === "pan";
 
     const distance = this.engine.camera.position.distanceTo(plan.destination);
+    // Already there (the cursor re-settled on the voxel the last pan landed
+    // at, or the player flew here): a zero-length flight would still hold
+    // `engine.isTeleporting` for MINIMAP_HOVER_PAN_MIN_MS, re-pin the
+    // destination and flip the caption, all to move the camera nowhere.
+    if (distance < this.manifest.voxelWorldSize * HOVER_PAN_ARRIVED_VOXEL_FRAC) return null;
     const durationMs = Math.min(
       MINIMAP_HOVER_PAN_MAX_MS,
       Math.max(MINIMAP_HOVER_PAN_MIN_MS, distance * MINIMAP_HOVER_PAN_MS_PER_WORLD_UNIT),
@@ -795,7 +808,7 @@ export class MinimapBridge {
    * (`clearTeleportTarget`, or the abandoned destination keeps prefetching
    * a neighbourhood nobody is going to) and `FlightControls`' yaw/pitch
    * (`adoptCameraOrientation` — the same re-sync `onArrive` does with
-   * `lookAt`, but from a mid-slerp pose that has no target to look at).
+   * `lookAt`, but from a mid-flight pose that has no target to look at).
    *
    * @returns whether a flight was actually abandoned (a pending pan being
    *   dropped doesn't count — nothing had moved yet).

@@ -1,5 +1,5 @@
 import type { ChunkStore } from "../streaming/ChunkStore.ts";
-import { combinedVoxelOpacity, ensureTransparentMaterial } from "../voxels/VoxelOpacity.ts";
+import { combinedVoxelOpacity } from "../voxels/VoxelOpacity.ts";
 
 /**
  * Hotbar Item 1 — "X-Ray": a global, chunk-wide translucency toggle.
@@ -71,7 +71,6 @@ export class XRayController {
   private applyChunk(chunkId: number): void {
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk) return;
-    ensureTransparentMaterial(chunk.mesh);
     // Phase 6.8: the container cages are a separate mesh with their own
     // (material-level) X-Ray opacity — see `CONTAINER_XRAY_OPACITY` for why
     // they deliberately do NOT follow the cubes down to `XRAY_OPACITY`.

@@ -2,7 +2,7 @@ import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import type { ChunkMeshUserData, LoadedChunk } from "../streaming/ChunkLoader.ts";
 import type { VoxelHit } from "../engine/Raycast.ts";
 import { Inventory } from "./Inventory.ts";
-import { combinedVoxelOpacity, ensureTransparentMaterial } from "../voxels/VoxelOpacity.ts";
+import { combinedVoxelOpacity } from "../voxels/VoxelOpacity.ts";
 import { extractionBatchSize } from "../config.ts";
 
 export function voxelStackId(chunkId: number, localVoxelId: number): string {
@@ -65,10 +65,11 @@ export interface ExtractionCycle {
  * opacity channel (`setOpacityAt`/`getOpacityAt`, backed by `colorsTexture`),
  * which does NOT touch `getActiveAndVisibilityAt` (what raycasting and frustum
  * culling actually gate on). A faded voxel therefore stays fully hit-testable
- * for free. The one thing that needs doing manually:
- * `MeshStandardMaterial` defaults to `transparent: false`, so opacity < 1 would
- * otherwise render fully opaque — `ensureTransparentMaterial()` flips that on
- * lazily, once per chunk material.
+ * for free, and the material needs no per-chunk preparation either: voxel
+ * materials are built with alpha-to-coverage on (see `createVoxelMaterial`),
+ * so any mix of opaque and faded instances renders correctly in one opaque
+ * draw. (Flipping the material to `transparent` lazily, as earlier phases
+ * did, was what made a faded cube cut holes in the cubes behind it.)
  *
  * ## Phase 6.5: continuous extraction, not one-shot mining
  *
@@ -209,7 +210,6 @@ export class MiningController {
       taken,
     );
 
-    ensureTransparentMaterial(hit.mesh);
     hit.mesh.setOpacityAt(
       hit.instanceId,
       combinedVoxelOpacity(state.extracted.size / state.total, this.isXrayActive()),
@@ -329,7 +329,6 @@ export class MiningController {
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk) return;
 
-    ensureTransparentMaterial(chunk.mesh);
     const xrayActive = this.isXrayActive();
     const occupied = chunk.meta.occupied;
     for (let instanceId = 0; instanceId < occupied.length; instanceId++) {
@@ -375,7 +374,6 @@ export class MiningController {
     if (!chunk) return;
     const instanceId = instanceIdOf(chunk, localVoxelId);
     if (instanceId < 0) return;
-    ensureTransparentMaterial(chunk.mesh);
     chunk.mesh.setOpacityAt(
       instanceId,
       combinedVoxelOpacity(this.extractedFraction(chunkId, localVoxelId), this.isXrayActive()),

@@ -215,8 +215,9 @@ export const SUN_DIRECTION: readonly [number, number, number] = [1, 1.4, 0.8];
 // Voxel containers (Phase 6.8)
 // ---------------------------------------------------------------------------
 //
-// Direct feedback, replacing Phase 6.7's edge-bolted detail pieces (which did
-// not land): "i think they should be like a container around the box (we have
+// Direct feedback, replacing Phase 6.7's edge-bolted detail pieces (shipped,
+// then removed — "i dont like the greebles"): "i think they should be like a
+// container around the box (we have
 // the light green hover cube border, can we make that something textured that
 // also has visual indication of how much is in it?)"
 //
