@@ -5,11 +5,14 @@
  * Slot "1" is the implicit empty hand, rendered explicitly rather than left
  * as "nothing selected" so it reads as a real, always-present choice the
  * same way Minecraft's own hotbar always shows every slot including empty
- * ones. Equipping empty-hand (slot 1, or Escape) turns off every tool's
- * effect — normal Phase 3.5 mining/restoring keeps working exactly as
- * before, with no tool effect layered on top. Numbering starts at 1, not 0,
- * per user feedback — it matches the physical key row and Minecraft's own
- * hotbar, where "1" is always the leftmost slot.
+ * ones. Equipping empty-hand (slot 1) turns off every tool's effect — normal
+ * extraction keeps working exactly as before, with no tool effect layered on
+ * top. Numbering starts at 1, not 0, per user feedback — it matches the
+ * physical key row and Minecraft's own hotbar, where "1" is always the
+ * leftmost slot. Only the digit keys change the equipped slot: Escape is
+ * deliberately NOT bound here ("escape should not reset to empty hand, just
+ * numbers do that") — it belongs to the lightbox and whatever else needs a
+ * dismiss key, and an Escape meant for a modal must not also drop the tool.
  *
  * This file deliberately owns ALL hotbar/tool-status UI on screen — per the
  * task brief, `ui/Hud.ts` (the collapsible stats panel from the prior
@@ -141,7 +144,7 @@ export class Hotbar {
 
   /** Clicking (or pressing the key for) an already-equipped tool slot
    * un-equips it back to empty hand — standard toggle-button feel, and the
-   * only way to get back to empty-hand besides slot 1 / Escape. */
+   * only way to get back to empty-hand besides slot 1. */
   private toggleEquip(tool: ToolId): void {
     this.equip(this.equipped === tool ? null : tool);
   }
@@ -194,7 +197,7 @@ export class Hotbar {
   }
 
   private handleKeydown = (event: KeyboardEvent): void => {
-    if (event.code === "Escape" || event.code === HAND_KEY_CODE) {
+    if (event.code === HAND_KEY_CODE) {
       this.equip(null);
       return;
     }
