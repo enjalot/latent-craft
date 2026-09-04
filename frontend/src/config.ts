@@ -79,6 +79,13 @@ export const DATASETS: Record<string, DatasetConfig> = {
     label: "MONET · sscd draw",
     minimapPath: "/minimap/monet-sscd",
   },
+  "monet-annfaiss": {
+    path: "/chunks/monet-annfaiss",
+    label: "MONET · annfaiss draw",
+    minimapPath: "/minimap/monet-annfaiss",
+  },
+  // `monet-theirfaiss` gets added the same way once the research project
+  // produces that draw (its rarity computation is still running).
 };
 
 /** Which entry of `DATASETS` to load when no `?dataset=` param is given. */
