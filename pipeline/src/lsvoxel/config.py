@@ -28,6 +28,11 @@ def points_table_path(dataset_id: str) -> Path:
     return DATA_ROOT / "points" / dataset_id / "points.parquet"
 
 
+def point_meta_path(dataset_id: str) -> Path:
+    """`point_meta.bin` sits beside the points table it mirrors row-for-row (see
+    `lsvoxel/point_meta.py`); the data server resolves `/meta/<id>/<row>` here."""
+    return DATA_ROOT / "points" / dataset_id / "point_meta.bin"
+
 
 def umap_run_dir(dataset_id: str, run: str = "umap-001") -> Path:
     return DATA_ROOT / "umap" / dataset_id / run
