@@ -2,21 +2,32 @@
 
 Joins the already-built embeddings substrate's row table against the thumbs
 manifest to produce points.parquet — the row_id-indexed table every downstream
-pipeline stage (UMAP fit, voxel assignment, chunk pack, minimap pack) reads from.
+pipeline stage (UMAP fit, voxel assignment, chunk pack, minimap pack) reads from —
+then joins the Flickr lookup table on top for the original-image columns
+(`image_url`, `image_width`, `image_height`) that `point_meta.bin` is built from.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from ..config import (
+    BL_FLICKR_TABLE,
     BL_ROWS_PARQUET,
     BL_SUBSETS,
     BL_THUMBS_MANIFEST_ROOT,
     BL_THUMBS_ROOT,
 )
+from ..points_table import write_points_table
 from .base import ThumbnailSource
+
+#: The per-row values built packs carry or key off — what a rebuild must reproduce
+#: exactly (see `points_table.write_points_table`). `global_idx` is `point_index.bin`'s
+#: `local_idx`; `subset` its `subset_code` and the minimap's density axis; `fname`
+#: the identity the thumbs manifest join resolved.
+BL_CONTRACT_COLUMNS = ("row_id", "fname", "subset", "global_idx")
 
 
 def _load_thumbs_manifest() -> pd.DataFrame:
@@ -31,10 +42,46 @@ def _load_thumbs_manifest() -> pd.DataFrame:
     return pd.concat(parts, ignore_index=True)
 
 
+def _load_flickr_table(path: Path) -> pd.DataFrame:
+    """(fname, image_type) -> original-image URL, checked to be a unique key: the
+    join below is a left join onto the points rows and must never fan out."""
+    flickr = pd.read_parquet(path, columns=["fname", "image_type", "flickr_original_url"])
+    n_dup = int(flickr.duplicated(["fname", "image_type"]).sum())
+    if n_dup:
+        raise ValueError(f"{path}: {n_dup} duplicate (fname, image_type) keys — join would be ambiguous")
+    return flickr
+
+
+def _join_originals(out: pd.DataFrame, flickr: pd.DataFrame) -> pd.DataFrame:
+    """Add `image_url` / `image_width` / `image_height` without disturbing row order.
+
+    `image_type` equals `subset` for every row today, but it's the Flickr table's
+    own key, so the join uses it rather than assuming. Rows with no Flickr match
+    (all of `covers`, a handful of `plates`) and rows whose match has no original
+    URL both land as a null `image_url`; the pixel size comes from the thumbs
+    manifest's `orig_width`/`orig_height`, which every row has.
+    """
+    n_dup = int(out.duplicated(["fname", "image_type"]).sum())
+    if n_dup:
+        raise ValueError(f"points table has {n_dup} duplicate (fname, image_type) keys")
+    merged = out.merge(flickr, on=["fname", "image_type"], how="left", validate="one_to_one")
+    # A left merge keeps the left order, but the whole pipeline rides on this, so check.
+    if not np.array_equal(merged["row_id"].to_numpy(), np.arange(len(out), dtype=np.uint32)):
+        raise ValueError("Flickr join reordered rows")
+
+    url = merged["flickr_original_url"]
+    out = out.copy()
+    out["image_url"] = url.mask(url == "")  # empty string == no url, same as a null
+    out["image_width"] = out["orig_width"].clip(lower=0).astype(np.int32)
+    out["image_height"] = out["orig_height"].clip(lower=0).astype(np.int32)
+    return out
+
+
 def build_points_table(
     out_path: Path,
     rows_parquet: Path = BL_ROWS_PARQUET,
     thumbs_manifest_root: Path = BL_THUMBS_MANIFEST_ROOT,
+    flickr_table: Path = BL_FLICKR_TABLE,
 ) -> pd.DataFrame:
     rows = pd.read_parquet(rows_parquet)
     rows["row_id"] = rows.index.astype("uint32")
@@ -71,9 +118,9 @@ def build_points_table(
             "orig_width", "orig_height", "date", "image_type",
         ]
     ]
+    out = _join_originals(out, _load_flickr_table(flickr_table))
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(out_path, index=False)
+    write_points_table(out, out_path, BL_CONTRACT_COLUMNS)
     return out
 
 

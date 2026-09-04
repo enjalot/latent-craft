@@ -28,6 +28,7 @@ def points_table_path(dataset_id: str) -> Path:
     return DATA_ROOT / "points" / dataset_id / "points.parquet"
 
 
+
 def umap_run_dir(dataset_id: str, run: str = "umap-001") -> Path:
     return DATA_ROOT / "umap" / dataset_id / run
 
@@ -45,6 +46,11 @@ BL_ROWS_PARQUET = Path("/data/latent-basemap/substrates/bl-siglip2-1m/rows.parqu
 BL_THUMBS_MANIFEST_ROOT = Path("/data/images/british-library-book-images/thumbs/manifest")
 BL_THUMBS_ROOT = Path("/data/images/british-library-book-images/thumbs")
 BL_SUBSETS = ("covers", "medium", "embellishments", "plates")
+#: fname -> Flickr photo lookup (1,019,200 rows, keyed by (fname, image_type)). The
+#: full-resolution originals of the BL images live on Flickr, not on this box, so a
+#: point's `image_url` is that table's `flickr_original_url`. The 61,548 `covers` rows
+#: have no Flickr counterpart at all, and a few thousand rows carry no original URL.
+BL_FLICKR_TABLE = Path("/data/images/british-library-book-images/flickr-metadata/fname_to_flickr.parquet")
 
 # ---------------------------------------------------------------------------
 # MONET (jasperai/monet) — the 19.3M-row "pool" and the 2M-row research draws
@@ -60,6 +66,13 @@ MONET_DRAWS_DIR = Path("/data2/monet/draws")
 #: per HF shard, in the pool's own shard order). See `lsvoxel/monet_thumbs.py`.
 MONET_THUMBS_DIR = Path("/data2/monet/pool-20m-thumbs256")
 MONET_THUMBS_SHARDS_DIR = MONET_THUMBS_DIR / "shards"
+#: Per-shard `url`/`width`/`height` of every pool row, pulled by
+#: `scripts/pull_pool_urls.py` in the same shard order as the thumbs store, so a
+#: point's `(shard_idx, local_row)` addresses both. Crawl sources carry the source
+#: site's original-image URL; synthetic sources have none (their 384px thumbnail is
+#: the largest image that exists).
+MONET_URLS_DIR = Path("/data2/monet/pool-20m-urls")
+MONET_URLS_SHARDS_DIR = MONET_URLS_DIR / "shards"
 
 #: The research project's draw arms. `random`/`sscd` exist today; `annfaiss` and
 #: `theirfaiss` land as their density steps finish. Everything downstream is

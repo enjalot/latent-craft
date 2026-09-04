@@ -26,6 +26,11 @@ them without knowing which dataset it's on:
   field the frontend has for building a thumbnail URL. Here it's the packed
   `(shard_idx, local_row)` thumbnail reference; see `lsvoxel/monet_thumbs.py` for the
   packing, which is defined and decoded only there.
+
+The same `(shard_idx, local_row)` also addresses the pool's original-image
+`url`/`width`/`height` store (`config.MONET_URLS_SHARDS_DIR`, pulled by
+`scripts/pull_pool_urls.py` in the pool's shard order), which is where the table's
+`image_url` / `image_width` / `image_height` columns come from.
 """
 from __future__ import annotations
 
@@ -33,11 +38,14 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from ..config import (
     MONET_POOL_DIR,
     MONET_SOURCES,
     MONET_THUMBS_SHARDS_DIR,
+    MONET_URLS_SHARDS_DIR,
     monet_draw_clip_path,
     monet_draw_idx_path,
 )
@@ -47,11 +55,64 @@ from ..monet_thumbs import (
     pack_thumb_ref,
     unpack_thumb_ref,
 )
+from ..points_table import write_points_table
 from .base import ThumbnailSource
 
 #: Pool columns gathered per draw row, with the dtype each lands in the table as.
 #: `id`/`sscd_cluster_id` stay strings; the rest are numeric.
 _POOL_COLUMNS = ("id", "source", "sscd_nn", "sscd_cluster_id", "aesthetic")
+
+#: The per-row values built packs carry or key off — what a rebuild must reproduce
+#: exactly (see `points_table.write_points_table`): the two load-bearing columns
+#: named above, plus row_id itself.
+MONET_CONTRACT_COLUMNS = ("row_id", "global_idx", "subset")
+
+
+def _gather_originals(
+    shard_idx: np.ndarray, local_row: np.ndarray, urls_shards_dir: Path
+) -> tuple[pa.Array, np.ndarray, np.ndarray]:
+    """`(url, width, height)` per draw row from the per-shard url store, reading only
+    the shards this draw touches (a 2M draw touches ~2,012 of 2,015 — nearly all, but
+    a smaller draw shouldn't pay for the whole pool).
+
+    Pool rows are NOT shard-ordered (`prov_shard_idx` isn't monotone), so the rows are
+    visited grouped by shard and the results scattered back through the inverse
+    permutation, all arrow/numpy: the url column stays an arrow string array from the
+    parquet read to the frame, never 2M python `str` objects in between.
+    """
+    n = len(shard_idx)
+    order = np.argsort(shard_idx, kind="stable")
+    shards, starts = np.unique(shard_idx[order], return_index=True)
+    ends = np.append(starts[1:], n)
+
+    url_chunks: list[pa.Array] = []
+    width = np.zeros(n, dtype=np.int32)
+    height = np.zeros(n, dtype=np.int32)
+    for shard, a, b in zip(shards.tolist(), starts.tolist(), ends.tolist()):
+        pos = order[a:b]
+        rows = local_row[pos]
+        base = urls_shards_dir / f"{shard:04d}"
+        if not base.with_suffix(".done").exists():
+            raise FileNotFoundError(
+                f"url store shard {shard} not pulled yet ({base.with_suffix('.parquet')}); "
+                "run scripts/pull_pool_urls.py to completion before building a MONET table"
+            )
+        table = pq.read_table(base.with_suffix(".parquet"), columns=["url", "width", "height"])
+        if int(rows.max()) >= table.num_rows:
+            raise ValueError(
+                f"url store shard {shard} has {table.num_rows} rows but the draw addresses "
+                f"local_row {int(rows.max())} — store and pool provenance disagree"
+            )
+        take = pa.array(rows)
+        url_chunks.extend(table.column("url").take(take).chunks)
+        width[pos] = table.column("width").take(take).to_numpy()
+        height[pos] = table.column("height").take(take).to_numpy()
+
+    inverse = np.empty(n, dtype=np.int64)
+    inverse[order] = np.arange(n)
+    urls_by_shard = pa.chunked_array(url_chunks, type=pa.string()).combine_chunks()
+    urls = urls_by_shard.take(pa.array(inverse))
+    return urls, np.clip(width, 0, None), np.clip(height, 0, None)
 
 
 def _gather(name: str, idx: np.ndarray, pool_dir: Path, n_pool: int) -> np.ndarray:
@@ -81,6 +142,7 @@ def build_points_table(
     arm: str,
     out_path: Path,
     pool_dir: Path = MONET_POOL_DIR,
+    urls_shards_dir: Path = MONET_URLS_SHARDS_DIR,
 ) -> pd.DataFrame:
     """Build `points.parquet` for one draw arm.
 
@@ -135,6 +197,8 @@ def build_points_table(
     if not (np.array_equal(back_shard, shard_idx) and np.array_equal(back_local, local_row)):
         raise ValueError("packed thumbnail refs don't round-trip back to (shard_idx, local_row)")
 
+    image_url, image_width, image_height = _gather_originals(shard_idx, local_row, urls_shards_dir)
+
     out = pd.DataFrame(
         {
             "row_id": np.arange(n, dtype=np.uint32),
@@ -148,6 +212,10 @@ def build_points_table(
             "shard_idx": shard_idx.astype(np.uint16),
             "local_row": local_row.astype(np.uint16),
             "global_idx": global_idx,  # contract column: point_index.bin's local_idx
+            # original image at the source site (null for synthetic sources); 0 == unknown size
+            "image_url": image_url.to_pandas(),
+            "image_width": image_width,
+            "image_height": image_height,
         }
     )
 
@@ -169,8 +237,7 @@ def build_points_table(
     else:
         print(f"[monet] note: {clip_path} not assembled yet — UMAP input missing for {arm!r}")
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(out_path, index=False)
+    write_points_table(out, out_path, MONET_CONTRACT_COLUMNS)
     return out
 
 
