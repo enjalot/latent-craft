@@ -17,6 +17,10 @@ import {
   MINIMAP_FLASHLIGHT_MAX_ROWS,
   MINIMAP_FLASHLIGHT_MAX_VOXELS,
   MINIMAP_FLASHLIGHT_RADIUS_PX,
+  MINIMAP_HOVER_PAN_DEBOUNCE_MS,
+  MINIMAP_HOVER_PAN_MAX_MS,
+  MINIMAP_HOVER_PAN_MIN_MS,
+  MINIMAP_HOVER_PAN_MS_PER_WORLD_UNIT,
   TELEPORT_STANDOFF_CHUNKS,
   VOXEL_FILL,
 } from "../config.ts";
@@ -75,6 +79,40 @@ export interface TeleportResult {
   destinationWorld: { x: number; y: number; z: number };
 }
 
+export interface HoverPanResult extends TeleportResult {
+  /** Flight time this pan was given (`MINIMAP_HOVER_PAN_*`, from the distance
+   * the camera had left to cover when it fired). */
+  durationMs: number;
+  /** Whether this pan replaced one still in flight — i.e. the cursor came to
+   * rest somewhere new before the camera got to the last place it rested. */
+  retargeted: boolean;
+}
+
+/**
+ * Where the hover-pan is in its lifecycle: `pending` = the cursor is resting
+ * on the map and the debounce is running, `flying` = the camera is on its way
+ * there, `idle` = neither (including while a CLICK teleport is in flight —
+ * that is `activeFlightKind === "teleport"`, not a pan).
+ */
+export type HoverPanState = "idle" | "pending" | "flying";
+
+/**
+ * Everything a click-teleport or a hover-pan needs to know before it moves
+ * the camera: the resolved voxel and where to stop relative to it. Computed
+ * against the camera's CURRENT position (the standoff is on the camera's side
+ * of the voxel), so it is only valid at the moment it was planned.
+ */
+export interface FlightPlan {
+  rowId: number;
+  chunkId: number;
+  localVoxelId: number;
+  /** The voxel's own center — what the camera ends up looking at. */
+  target: THREE.Vector3;
+  /** Where the camera comes to rest: `TELEPORT_STANDOFF_CHUNKS` back from the
+   * target, toward where the camera is now. */
+  destination: THREE.Vector3;
+}
+
 export interface MinimapBridgeDeps {
   container: HTMLElement;
   pack: MinimapPack;
@@ -97,12 +135,16 @@ export interface MinimapBridgeDeps {
  * | crosshair (3D hover → 2D) | hovered voxel's `repr_row_id` → `qx/qy[row_id]` → overlay marker |
  * | avatar (camera → 2D) | nearest resident voxel → its `repr_row_id` → overlay marker (approximate, see below) |
  * | teleport (2D click → 3D) | q → nearest row_id → `row_to_voxel` → voxel center → prefetch + fly |
+ * | pan (2D linger → 3D) | the teleport chain, fired by the cursor RESTING for `MINIMAP_HOVER_PAN_DEBOUNCE_MS` instead of by a click |
  * | flashlight (inventory hover → 3D + 2D) | stack's (chunk, voxel) → glow box; stack's `repr_row_id` → overlay marker |
  *
- * That last row is Phase 6.5's addition (`highlightVoxel`) — the same
+ * The inventory row is Phase 6.5's addition (`highlightVoxel`) — the same
  * flashlight, aimed by a caller that already knows its target instead of by a
  * 2D cursor position. See its own doc comment for how it degrades when the
- * target's chunk isn't streamed in.
+ * target's chunk isn't streamed in. The pan row is Phase 6.9's
+ * (`hoverPanToQ`); the two flights share `planFlight` and the Engine, and
+ * differ only in what starts them, how fast they go, and what may interrupt
+ * them — see `cancelHoverPan`.
  *
  * This class owns the panel rather than being handed one, which keeps the
  * callback wiring acyclic: the panel's hover/click callbacks need the bridge,
@@ -143,6 +185,24 @@ export class MinimapBridge {
   private lastFlashlightResult: FlashlightResult | null = null;
   private lastTeleportResult: TeleportResult | null = null;
   private lastVoxelHighlightResult: VoxelHighlightResult | null = null;
+  private lastHoverPanResult: HoverPanResult | null = null;
+
+  /**
+   * Which of the bridge's two flights the Engine is currently flying, if
+   * any. The Engine itself has one flight slot and no idea who filled it; the
+   * bridge needs the distinction because a hover-pan yields to the player
+   * (`cancelHoverPan`) and to a click, while a click-teleport yields to
+   * nothing — not even a pan that comes due mid-flight (see `update`).
+   */
+  private activeFlight: "teleport" | "pan" | null = null;
+  /** `voxelKey` of the voxel the in-flight pan is headed to, so a re-linger
+   * on the same voxel doesn't restart a flight that is already going there. */
+  private panVoxelKey = -1;
+  /** The armed hover-pan: where the cursor is resting and when the debounce
+   * runs out. Every pointermove over the panel replaces it (restarting the
+   * clock); leaving the panel or taking the controls drops it. */
+  private pendingPan: { qx: number; qy: number; dueAtMs: number } | null = null;
+  private hoverPansFired = 0;
 
   constructor(deps: MinimapBridgeDeps) {
     this.pack = deps.pack;
@@ -155,8 +215,24 @@ export class MinimapBridge {
     this.panel = new MinimapRenderer(deps.container, deps.pack, {
       onHover: (qx, qy) => {
         this.pendingHover = { qx, qy };
+        // Debounce, not throttle: the clock restarts on EVERY move, so it only
+        // ever runs out while the cursor is holding still. Armed here rather
+        // than in `update` so the timer starts at the event, not at the next
+        // frame — at SwiftShader-class frame times that difference is the
+        // whole debounce.
+        this.pendingPan = { qx, qy, dueAtMs: performance.now() + MINIMAP_HOVER_PAN_DEBOUNCE_MS };
       },
-      onLeave: () => this.clearFlashlight(),
+      onLeave: () => {
+        this.clearFlashlight();
+        // A pan that hasn't fired yet was a promise about where the cursor is
+        // resting, and it isn't resting there any more. A pan already in
+        // flight is a different matter: it completes. The cursor leaving the
+        // map is not the player taking the controls — it's usually on its way
+        // to the world to look at what the pan is arriving at — and a flight
+        // that died the instant the cursor crossed the panel border would
+        // strand the camera mid-void more often than it would help.
+        this.pendingPan = null;
+      },
       onSelect: (qx, qy) => this.teleportToQ(qx, qy),
     });
 
@@ -186,6 +262,26 @@ export class MinimapBridge {
     return this.lastVoxelHighlightResult;
   }
 
+  get lastHoverPan(): HoverPanResult | null {
+    return this.lastHoverPanResult;
+  }
+
+  get hoverPanState(): HoverPanState {
+    if (this.activeFlight === "pan") return "flying";
+    return this.pendingPan ? "pending" : "idle";
+  }
+
+  /** Which of the bridge's flights the Engine is on right now, or null. */
+  get activeFlightKind(): "teleport" | "pan" | null {
+    return this.activeFlight;
+  }
+
+  /** Running count of hover-pans that have fired — the cheapest way for the
+   * verification harness to assert "exactly one pan / no pan happened". */
+  get hoverPanCount(): number {
+    return this.hoverPansFired;
+  }
+
   get litVoxelCount(): number {
     return this.highlight.count;
   }
@@ -203,9 +299,10 @@ export class MinimapBridge {
   /**
    * The full 2D→3D resolution for a quantized position, without acting on it:
    * nearest row_id, the voxel it lives in, that voxel's world center, and
-   * whether its chunk is resident right now. `teleportToQ` is this plus the
-   * prefetch and the camera flight; keeping it separate makes the lookup
-   * chain inspectable from the console and assertable from a test.
+   * whether its chunk is resident right now. `planFlight` is this plus the
+   * standoff destination, and `teleportToQ`/`hoverPanToQ` add the prefetch
+   * and the camera flight; keeping the lookup chain separate makes it
+   * inspectable from the console and assertable from a test.
    */
   resolveQ(
     qx: number,
@@ -256,12 +353,21 @@ export class MinimapBridge {
   // --- per-frame -----------------------------------------------------------
 
   /** Called from the render loop: applies at most one coalesced hover per
-   * frame, then refreshes the avatar on its own slower schedule. */
+   * frame, fires the hover-pan if its debounce has run out, then refreshes
+   * the avatar on its own slower schedule. */
   update(camera: THREE.Camera, deltaSeconds: number): void {
     if (this.pendingHover) {
       const { qx, qy } = this.pendingHover;
       this.pendingHover = null;
       this.applyFlashlight(qx, qy);
+    }
+    // A click-teleport in flight is never retargeted by a pan: the click was
+    // a command and gets to land. The pan stays armed and fires on the frame
+    // after arrival if the cursor is still resting there.
+    if (this.pendingPan && this.activeFlight !== "teleport" && performance.now() >= this.pendingPan.dueAtMs) {
+      const { qx, qy } = this.pendingPan;
+      this.pendingPan = null;
+      this.hoverPanToQ(qx, qy);
     }
     this.updateAvatar(camera, deltaSeconds * 1000);
   }
@@ -521,19 +627,19 @@ export class MinimapBridge {
     return { chunkId: bestChunk, localVoxelId: bestVoxel, distance: bestDistance };
   }
 
-  // --- teleport: 2D click → 3D ---------------------------------------------
+  // --- teleport (2D click → 3D) and pan (2D linger → 3D) --------------------
 
   /**
-   * Flies the camera to the 3D voxel holding the point nearest a clicked 2D
-   * position. For a discrete click the single nearest row_id is the right
-   * answer (unlike the flashlight, which wants a whole neighbourhood).
-   *
-   * Order matters and is load-bearing: `prioritizeTeleport` runs
-   * synchronously BEFORE `teleportTo`, so the destination's chunk fetches are
-   * already in flight while the camera is still flying. The always-resident
-   * `ProxyCloud` covers whatever hasn't arrived by touchdown.
+   * Resolves a 2D position to the flight a click or a pan would make from the
+   * camera's current pose: the single nearest row_id (for a discrete
+   * destination the nearest point is the right answer — unlike the
+   * flashlight, which wants a whole neighbourhood), its voxel, and a standoff
+   * destination on the camera's side of that voxel. Public so the console and
+   * the verification harness can ask "where would this take me" without
+   * going anywhere; `null` if the pack is empty or the row's chunk is one the
+   * manifest omits.
    */
-  teleportToQ(qx: number, qy: number): TeleportResult | null {
+  planFlight(qx: number, qy: number): FlightPlan | null {
     const { rowId } = this.pack.nearestRow(qx, qy);
     if (rowId < 0) return null;
 
@@ -545,49 +651,164 @@ export class MinimapBridge {
     }
 
     const target = this.manifest.voxelCenterWorldById(chunkId, localVoxelId, new THREE.Vector3());
-    const camera = this.engine.camera;
 
     // Approach from whichever side the camera is already on, so the arrival
     // pose is a natural continuation of the current view and never lands
     // inside the cluster.
-    const direction = new THREE.Vector3().subVectors(camera.position, target);
+    const direction = new THREE.Vector3().subVectors(this.engine.camera.position, target);
     if (direction.lengthSq() < 1e-6) direction.set(0, 0, 1);
     direction.normalize();
     const destination = target
       .clone()
       .addScaledVector(direction, this.manifest.chunkWorldSize * TELEPORT_STANDOFF_CHUNKS);
 
-    const chunkWasResident = this.chunkStore.chunk(chunkId) !== undefined;
-    const pinnedChunks = this.chunkStore.prioritizeTeleport(target, camera);
-    this.engine.teleportTo(destination, {
-      lookAt: target,
+    return { rowId, chunkId, localVoxelId, target, destination };
+  }
+
+  /**
+   * Starts the Engine flight for a plan, as a click-teleport or a hover-pan.
+   *
+   * Order matters and is load-bearing: `prioritizeTeleport` runs
+   * synchronously BEFORE `teleportTo`, so the destination's chunk fetches are
+   * already in flight while the camera is still flying. The always-resident
+   * `ProxyCloud` covers whatever hasn't arrived by touchdown.
+   *
+   * @returns how many chunks the destination pinned into a fetching ring.
+   */
+  private fly(plan: FlightPlan, kind: "teleport" | "pan", durationMs?: number): number {
+    const pinnedChunks = this.chunkStore.prioritizeTeleport(plan.target, this.engine.camera);
+    this.activeFlight = kind;
+    this.panVoxelKey = kind === "pan" ? voxelKey(plan.chunkId, plan.localVoxelId) : -1;
+    this.engine.teleportTo(plan.destination, {
+      lookAt: plan.target,
+      durationMs,
       onArrive: () => {
         // Re-aim through FlightControls so its yaw/pitch match the quaternion
         // the slerp landed on — otherwise the next look-drag would compose
         // from stale state and snap the view.
-        this.flightControls.lookAt(target);
+        this.flightControls.lookAt(plan.target);
         this.chunkStore.clearTeleportTarget();
+        this.activeFlight = null;
+        this.panVoxelKey = -1;
       },
     });
+    return pinnedChunks;
+  }
+
+  /**
+   * Flies the camera to the 3D voxel holding the point nearest a clicked 2D
+   * position — immediately, with no debounce, and replacing any hover-pan
+   * (pending or in flight: the click is the more deliberate gesture, and a
+   * pan to the same spot firing right after the click landed would be a
+   * zero-length flight to nowhere).
+   */
+  teleportToQ(qx: number, qy: number): TeleportResult | null {
+    const plan = this.planFlight(qx, qy);
+    if (!plan) return null;
+    this.pendingPan = null;
+
+    const chunkWasResident = this.chunkStore.chunk(plan.chunkId) !== undefined;
+    const pinnedChunks = this.fly(plan, "teleport");
 
     const result: TeleportResult = {
       qx,
       qy,
-      rowId,
-      chunkId,
-      localVoxelId,
+      rowId: plan.rowId,
+      chunkId: plan.chunkId,
+      localVoxelId: plan.localVoxelId,
       chunkWasResident,
       pinnedChunks,
-      targetWorld: { x: target.x, y: target.y, z: target.z },
-      destinationWorld: { x: destination.x, y: destination.y, z: destination.z },
+      targetWorld: { x: plan.target.x, y: plan.target.y, z: plan.target.z },
+      destinationWorld: { x: plan.destination.x, y: plan.destination.y, z: plan.destination.z },
     };
     this.lastTeleportResult = result;
-    const corpus = this.pack.rowCorpusName(rowId);
+    const corpus = this.pack.rowCorpusName(plan.rowId);
     this.panel.setCaption(
-      `→ row ${rowId}${corpus ? ` · ${corpus}` : ""}\n` +
-        `chunk ${chunkId} voxel ${localVoxelId} · ${pinnedChunks} prefetched`,
+      `→ row ${plan.rowId}${corpus ? ` · ${corpus}` : ""}\n` +
+        `chunk ${plan.chunkId} voxel ${plan.localVoxelId} · ${pinnedChunks} prefetched`,
     );
     return result;
+  }
+
+  /**
+   * The hover-pan (Phase 6.9): the click-teleport's flight, started by the
+   * cursor resting on the map for `MINIMAP_HOVER_PAN_DEBOUNCE_MS` (see
+   * `update`) instead of by a click, and slower (`MINIMAP_HOVER_PAN_*`).
+   *
+   * Fired while a previous pan is still flying, this RETARGETS: the Engine
+   * starts the new flight from the camera's current pose and carries its
+   * current velocity (see `Engine.teleportTo`), so the camera bends toward
+   * the new destination instead of stopping, or worse, starting over from
+   * where the first pan began. A linger on the voxel the in-flight pan is
+   * already headed to is a no-op — restarting it would only reset the
+   * easing. The duration is recomputed from wherever the camera is at that
+   * moment, so a retarget to somewhere close finishes soon.
+   */
+  hoverPanToQ(qx: number, qy: number): HoverPanResult | null {
+    const plan = this.planFlight(qx, qy);
+    if (!plan) return null;
+    const key = voxelKey(plan.chunkId, plan.localVoxelId);
+    if (this.activeFlight === "pan" && key === this.panVoxelKey) return null;
+    const retargeted = this.activeFlight === "pan";
+
+    const distance = this.engine.camera.position.distanceTo(plan.destination);
+    const durationMs = Math.min(
+      MINIMAP_HOVER_PAN_MAX_MS,
+      Math.max(MINIMAP_HOVER_PAN_MIN_MS, distance * MINIMAP_HOVER_PAN_MS_PER_WORLD_UNIT),
+    );
+    const chunkWasResident = this.chunkStore.chunk(plan.chunkId) !== undefined;
+    const pinnedChunks = this.fly(plan, "pan", durationMs);
+    this.hoverPansFired++;
+
+    const result: HoverPanResult = {
+      qx,
+      qy,
+      rowId: plan.rowId,
+      chunkId: plan.chunkId,
+      localVoxelId: plan.localVoxelId,
+      chunkWasResident,
+      pinnedChunks,
+      targetWorld: { x: plan.target.x, y: plan.target.y, z: plan.target.z },
+      destinationWorld: { x: plan.destination.x, y: plan.destination.y, z: plan.destination.z },
+      durationMs,
+      retargeted,
+    };
+    this.lastHoverPanResult = result;
+    const corpus = this.pack.rowCorpusName(plan.rowId);
+    this.panel.setCaption(
+      `pan → row ${plan.rowId}${corpus ? ` · ${corpus}` : ""}\n` +
+        `chunk ${plan.chunkId} voxel ${plan.localVoxelId} · ${(durationMs / 1000).toFixed(1)}s`,
+    );
+    return result;
+  }
+
+  /**
+   * The player took the controls: drop a pending hover-pan and abandon one in
+   * flight where it is. Called from `main.ts` every frame a movement key is
+   * held and synchronously on every pointerdown on the 3D canvas
+   * (`PointerController.onPointerEngage`) — a look-drag or a hold on a
+   * voxel, either way the view is theirs now. A click-teleport is left alone:
+   * it was asked for, and it lands (its ≤ 0.8s flight simply ignores input,
+   * as it always has — see `main.ts`).
+   *
+   * Two other things the cancel has to leave consistent: the chunk pin
+   * (`clearTeleportTarget`, or the abandoned destination keeps prefetching
+   * a neighbourhood nobody is going to) and `FlightControls`' yaw/pitch
+   * (`adoptCameraOrientation` — the same re-sync `onArrive` does with
+   * `lookAt`, but from a mid-slerp pose that has no target to look at).
+   *
+   * @returns whether a flight was actually abandoned (a pending pan being
+   *   dropped doesn't count — nothing had moved yet).
+   */
+  cancelHoverPan(): boolean {
+    this.pendingPan = null;
+    if (this.activeFlight !== "pan") return false;
+    this.engine.cancelTeleport();
+    this.chunkStore.clearTeleportTarget();
+    this.flightControls.adoptCameraOrientation();
+    this.activeFlight = null;
+    this.panVoxelKey = -1;
+    return true;
   }
 
   dispose(): void {

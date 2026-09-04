@@ -150,6 +150,14 @@ let holdElapsedSeconds = 0;
 
 const pointerController = new PointerController(engine.renderer.domElement, flightControls, {
   hitTestVoxel: (ndc) => resolveVoxelTarget(raycastAt(ndc)),
+  // Taking hold of the 3D view (look-drag or a hold on a voxel) is the
+  // player's, and it cancels a minimap hover-pan the instant it starts — the
+  // pointer half of the key poll at the top of the frame loop below. `minimap`
+  // is the module-scope `let` assigned once the 2D pack loads, and this only
+  // ever runs from a real pointer event, so before then it is a no-op.
+  onPointerEngage: () => {
+    minimap?.cancelHoverPan();
+  },
   onHoldStart: (target) => {
     holdElapsedSeconds = 0;
     // A hold means "keep extracting" on any voxel that still has points in it,
@@ -464,10 +472,17 @@ function computeHotbarStatus(): string {
 }
 
 engine.start((dt) => {
-  // Flight input stands down during a teleport flight: `Engine.stepTeleport`
-  // (which already ran this frame, before this callback) interpolates the
-  // camera from a fixed start snapshot, so anything WASD added here would be
-  // silently discarded next frame rather than composed.
+  // The two bridge flights treat player input oppositely. A minimap
+  // hover-pan yields: a held movement key cancels it right here, before the
+  // flight update, so this same frame's WASD is applied to the pose the pan
+  // left the camera in (the pointer half — look-drag or hold — cancels
+  // synchronously in `onPointerEngage` above). A click-teleport instead makes
+  // flight input stand down: `Engine.stepTeleport` (which already ran this
+  // frame, before this callback) interpolates the camera from a fixed start
+  // snapshot, so anything WASD added here would be silently discarded next
+  // frame rather than composed. `cancelHoverPan` is a no-op unless a pan is
+  // what's flying, which is what keeps the two cases apart.
+  if (flightControls.isMovementInputHeld) minimap?.cancelHoverPan();
   if (!engine.isTeleporting) flightControls.update(dt);
   chunkStore?.updateCamera(engine.camera);
   effectorField?.update(engine.camera);

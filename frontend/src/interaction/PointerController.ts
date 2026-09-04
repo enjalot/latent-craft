@@ -17,6 +17,16 @@ export interface PointerControllerCallbacks {
    * arm a candidate mine/restore hold) or not (→ start dragging
    * immediately, unambiguously)? */
   hitTestVoxel: (ndc: THREE.Vector2) => VoxelTarget | null;
+  /**
+   * Fired synchronously on every left-button pointerdown on the canvas,
+   * BEFORE the hold-vs-drag decision and before `hitTestVoxel` runs. This is
+   * "the player took hold of the 3D view", whichever of the two gestures it
+   * turns into — the hook the minimap's hover-pan uses to stand down (see
+   * `MinimapBridge.cancelHoverPan`). Ordering matters: cancelling a camera
+   * flight here freezes the pose the hit test is about to raycast from, so a
+   * hold armed on a voxel is armed on the voxel that stays under the cursor.
+   */
+  onPointerEngage: () => void;
   /** Fired synchronously the instant a hold candidate is armed. */
   onHoldStart: (target: VoxelTarget) => void;
   /** Fired when an armed hold is abandoned without completing — released
@@ -118,6 +128,7 @@ export class PointerController {
     this.downX = event.clientX;
     this.downY = event.clientY;
 
+    this.callbacks.onPointerEngage();
     const target = this.callbacks.hitTestVoxel(this.ndc);
     if (target) {
       // A voxel is hovered: arm a candidate hold, do NOT start dragging yet.

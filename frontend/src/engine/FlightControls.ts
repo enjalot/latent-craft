@@ -19,6 +19,21 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
   return tag === "input" || tag === "textarea" || tag === "select" || element.isContentEditable === true;
 }
 
+/** Every key `update()` turns into motion. `keys` records EVERY keydown (the
+ * hotbar digits, effector brackets, …), so "is the player flying" has to be
+ * asked against this list rather than against `keys` being non-empty. */
+const MOVEMENT_KEY_CODES = [
+  "KeyW",
+  "KeyA",
+  "KeyS",
+  "KeyD",
+  "Space",
+  "ShiftLeft",
+  "ShiftRight",
+  "KeyE",
+  "KeyQ",
+] as const;
+
 /**
  * Spectator-style 6-DOF flight: no gravity, no collision, nothing to stand
  * on (there's no ground in a sparse point cloud, so noclip-fly is the only
@@ -141,11 +156,33 @@ export class FlightControls {
     return this.sprinting;
   }
 
+  /** True while any movement key is held — i.e. the next `update()` will
+   * accelerate the camera. What the minimap's hover-pan polls to yield to the
+   * player (see `main.ts`); a look-drag is reported separately by
+   * `PointerController`, since it never passes through the key set. */
+  get isMovementInputHeld(): boolean {
+    for (const code of MOVEMENT_KEY_CODES) if (this.keys.has(code)) return true;
+    return false;
+  }
+
   /** Re-derives yaw/pitch from the camera's current quaternion. */
   private syncFromCamera(): void {
     this.scratchEuler.setFromQuaternion(this.camera.quaternion, "YXZ");
     this.pitch = this.scratchEuler.x;
     this.yaw = this.scratchEuler.y;
+  }
+
+  /**
+   * Takes over from wherever `camera.quaternion` currently points — the
+   * counterpart of `lookAt()` for a flight that was cancelled rather than
+   * completed (`Engine.cancelTeleport`). Yaw/pitch are re-derived from the
+   * quaternion and written straight back through the pitch clamp, so the next
+   * drag composes from the pose the player is actually looking at, in range,
+   * instead of from the stale pre-flight one and snapping.
+   */
+  adoptCameraOrientation(): void {
+    this.syncFromCamera();
+    this.applyLookDelta(0, 0);
   }
 
   /**

@@ -891,6 +891,54 @@ export const TELEPORT_MS_PER_WORLD_UNIT = 9;
 export const TELEPORT_MIN_MS = 260;
 export const TELEPORT_MAX_MS = 800;
 
+// ---------------------------------------------------------------------------
+// Minimap hover-pan (Phase 6.9)
+// ---------------------------------------------------------------------------
+//
+// Direct feedback: "i want to try it so that hovering over the 2d map causes
+// the camera to pan to that part of the map (where it would teleport you to)
+// and have the pan be transitioned not instant and debounced."
+//
+// So: let the cursor rest on a spot of the 2D map and the camera drifts to
+// exactly where a click would have teleported it — same destination
+// resolution, same chunk prefetch, same Engine flight (see
+// `MinimapBridge.hoverPanToQ`) — only later (debounced), slower (its own
+// duration constants below) and revocable (any flight input cancels it,
+// whereas a click's teleport is a deliberate command and always lands). The
+// flashlight is untouched; the pan is layered on top of it.
+
+/**
+ * How long the cursor has to rest on one spot of the minimap before a hover
+ * pan fires, ms. Every pointermove over the panel restarts the clock, so a
+ * sweep across the map — which delivers a move every ~8-16 ms — never fires
+ * one; only a deliberate pause does.
+ *
+ * 350 is the same order as `FLIGHT_SPRINT_DOUBLE_TAP_MS` (300), the app's
+ * other "two events this close are one gesture" window, and about the time it
+ * takes to register the flashlight highlight the hover already produced and
+ * decide to stay there. Shorter (~200) starts firing on the natural
+ * micro-pauses of a scan across the map, turning browsing into a camera that
+ * lurches after the cursor; longer (500+) reads as the map not responding,
+ * since the flight it then starts takes the better part of a second on top.
+ */
+export const MINIMAP_HOVER_PAN_DEBOUNCE_MS = 350;
+
+/**
+ * Hover-pan flight duration: derived from distance and clamped exactly like
+ * the click-teleport's (`TELEPORT_*` above), but gentler on every axis —
+ * ~1.5x the ms-per-unit and ~2x both clamps. A click is a command and its
+ * flight should feel like arriving; a pan is a consequence of where the cursor
+ * happens to rest, so the camera drifts over rather than lunges: for the same
+ * unclamped distance its peak speed is 9/14 ≈ 2/3 of the click's. The floor
+ * (600) keeps a pan to the next voxel over reading as motion rather than a
+ * cut, and the ceiling (1600) is where a corner-to-corner crossing (~173
+ * units) starts feeling like waiting on a cutscene — especially since the
+ * debounce already sits in front of it.
+ */
+export const MINIMAP_HOVER_PAN_MS_PER_WORLD_UNIT = 14;
+export const MINIMAP_HOVER_PAN_MIN_MS = 600;
+export const MINIMAP_HOVER_PAN_MAX_MS = 1600;
+
 /**
  * Resolves the chunk-pack base URL for a dataset key, honouring
  * `CHUNK_SERVER_ORIGIN` and falling back to the page's own hostname.
