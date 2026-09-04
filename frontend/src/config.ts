@@ -201,6 +201,142 @@ export const VOXEL_UNDERLIGHT = 0.34;
  */
 export const VOXEL_COVERAGE_DITHER = 0.25;
 
+/**
+ * Direction the scene's one directional "sun" shines FROM (un-normalized;
+ * `main.ts` sets the light's position to it, `voxels/VoxelContainers.ts`
+ * normalizes it into a shader uniform). One constant rather than two literals
+ * so the container cages shade from the same side as the cubes they wrap — a
+ * cage lit from the left around a cube lit from the right reads as two objects
+ * in two scenes.
+ */
+export const SUN_DIRECTION: readonly [number, number, number] = [1, 1.4, 0.8];
+
+// ---------------------------------------------------------------------------
+// Voxel containers (Phase 6.8)
+// ---------------------------------------------------------------------------
+//
+// Direct feedback, replacing Phase 6.7's edge-bolted detail pieces (which did
+// not land): "i think they should be like a container around the box (we have
+// the light green hover cube border, can we make that something textured that
+// also has visual indication of how much is in it?)"
+//
+// So: every voxel cube sits inside a persistent cage — the hover wireframe's
+// idea generalized into a shell with real rails, corner brackets and surface
+// detail — whose weight says how many thumbnails are inside and whose lit
+// fill-line drains as they are extracted. All of it is drawn procedurally in
+// one shader (`voxels/VoxelContainers.ts`) from two per-instance numbers,
+// `capacity` and `fullness`; everything below is the tuning surface.
+
+/**
+ * Container edge as a multiple of the cube edge (`manifest.voxelWorldSize *
+ * VOXEL_FILL`). 1.08 leaves a 4%-of-edge gap on every side — enough that the
+ * cage reads as a shell AROUND the block rather than paint ON it, and small
+ * enough that with `VOXEL_FILL` at 0.8 neighbouring cages (0.864 of a cell
+ * each) still clear each other by 13% of a cell.
+ */
+export const CONTAINER_SCALE = 1.08;
+
+/**
+ * `log2(points)` that maps to a container's full capacity (1.0); everything
+ * above clamps. `capacityForPoints` below is the map.
+ *
+ * Picked from the real per-voxel counts of the bl-160 pack (all 246 chunks,
+ * 14,688 occupied voxels): they run 1 … 3,129 (mean 73.6, median 17, p75 77,
+ * p90 200, p99 721), i.e. log2 tops out at 11.61. At 12 the pack's densest
+ * voxel lands at 0.97, the median at 0.34 and the 14.8% of voxels holding a
+ * single point at exactly 0 — and because the population is close to flat per
+ * octave (2^0 … 2^6 each hold 11-15% of voxels) a log map spreads it evenly
+ * across the whole visual range, where anything linear would leave the median
+ * voxel indistinguishable from the emptiest. The coarser `bl` pack tops out at
+ * 7,098 points (log2 12.8), which clamps — that is its top ~0.2%, all of which
+ * should read as "as heavy as it gets" anyway.
+ */
+export const CONTAINER_CAPACITY_LOG2_MAX = 12;
+
+/**
+ * Normalized capacity, 0..1, for a voxel holding `points` points. Worked
+ * examples from the real distribution:
+ *
+ *     1 → 0.00    16 → 0.33    256 → 0.67    3,129 → 0.97 (bl-160's densest)
+ *     4 → 0.17    64 → 0.50  1,024 → 0.83    7,098 → 1.00 (clamped, bl's densest)
+ */
+export function capacityForPoints(points: number): number {
+  if (points <= 1) return 0;
+  return Math.min(1, Math.log2(points) / CONTAINER_CAPACITY_LOG2_MAX);
+}
+
+/**
+ * Rail width at capacity 0 and 1, as a fraction of the container edge.
+ *
+ * The cube's thumbnail has to stay the dominant thing on screen, so even the
+ * heaviest rail covers only ~11% of an edge per side — at the spawn framing a
+ * cube is ~40-60px across, which puts the rails at ~1.5px (a 1-point voxel: a
+ * hairline frame that anti-aliases to a faint outline) up to ~6px (a
+ * thousand-point voxel: an unmistakable girder). Rails narrower than ~3% of an
+ * edge vanish entirely at browsing distance rather than reading as thin.
+ */
+export const CONTAINER_RAIL_WIDTH_MIN = 0.035;
+export const CONTAINER_RAIL_WIDTH_MAX = 0.11;
+
+/**
+ * Corner brackets: an L-shaped plate at each of the cube's 8 corners, this far
+ * along each edge from the corner (fraction of the container edge, at
+ * capacity 0 and 1) and this many rail-widths wide. Brackets grow with
+ * capacity for the same reason rails do — a heavy crate is braced at the
+ * corners, a light one just has edges — and they carry no tick/rivet texture
+ * so they read as solid plates against the segmented rails between them.
+ */
+export const CONTAINER_BRACKET_LENGTH_MIN = 0.14;
+export const CONTAINER_BRACKET_LENGTH_MAX = 0.3;
+export const CONTAINER_BRACKET_WIDTH_MULT = 1.75;
+
+/**
+ * Segment ticks per rail (dark notches across the rail, with a rivet at each
+ * segment's centre) at capacity 0 and 1. More segments == more hardware ==
+ * more inside; 3 is the fewest that still reads as a segmented rail rather
+ * than a plain bar, and past ~11 the notches on a 6px rail merge into noise.
+ */
+export const CONTAINER_TICKS_MIN = 3;
+export const CONTAINER_TICKS_MAX = 11;
+
+/**
+ * Frame tint (sRGB) and the brightness it is scaled by at capacity 0 and 1.
+ *
+ * The same cool neutral steel Phase 6.7's detail pieces used, for the same
+ * reason: unmistakably "not the thumbnail" against BL's warm paper/ink scans, and a
+ * step duller/greyer than both the hover teal (`#7fffe0`) and the HUD chrome
+ * cyan so a hovered cage still lights up against its neighbours. The
+ * brightness ramp is the third capacity cue after rail width and tick count —
+ * a 1-point cage is a dim hairline, a dense one gleams — and its floor is set
+ * where the thinnest cage is still visible against the void, not below.
+ */
+export const CONTAINER_FRAME_COLOR = 0x9aa6b4;
+export const CONTAINER_FRAME_BRIGHTNESS_MIN = 0.42;
+export const CONTAINER_FRAME_BRIGHTNESS_MAX = 1.05;
+
+/**
+ * Fill-gauge accent (sRGB): the colour of the lit fill-line that runs along the
+ * inner side of every rail and drains from the top down as thumbnails are
+ * extracted (see `VoxelContainers` for the level math). Warm on purpose — the
+ * frame is cool steel and the two must read as different materials — and a
+ * plain orange rather than the minimap flashlight's yellow-amber (`#ffb347`),
+ * which is an additive overlay that lights up whole cubes; a cage whose gauge
+ * were the same hue would look permanently flashlit. Kept to a narrow line
+ * (rather than tinting whole rails) so 14,000 full containers don't turn the
+ * world orange: at browsing distance the line blends into a faint warmth in
+ * the frame, and only up close resolves into a gauge.
+ */
+export const CONTAINER_FILL_COLOR = 0xff8c42;
+
+/**
+ * Container opacity while X-Ray is equipped. Cages are deliberately NOT faded
+ * to `XRAY_OPACITY` along with their cubes: the whole point of a persistent
+ * frame is to stay legible when the thing inside it goes translucent, and the
+ * rails are narrow enough (see `CONTAINER_RAIL_WIDTH_*`) that a fully-opaque
+ * lattice still shows the cluster behind it. 1 == unchanged.
+ */
+export const CONTAINER_XRAY_OPACITY = 1;
+
 // ---------------------------------------------------------------------------
 // Streaming rings
 // ---------------------------------------------------------------------------

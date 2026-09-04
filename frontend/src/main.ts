@@ -26,6 +26,7 @@ import {
   DEFAULT_DATASET,
   EXTRACTION_CYCLE_MS,
   RESTORE_HOLD_DURATION_MS,
+  SUN_DIRECTION,
   WORLD_HALF_EXTENT,
   WORLD_SCALE,
   XRAY_OPACITY,
@@ -56,7 +57,7 @@ const engine = new Engine(app);
 const hemiLight = new THREE.HemisphereLight(0xbcd0ff, 0x14141f, 1.35);
 engine.scene.add(hemiLight);
 const sunLight = new THREE.DirectionalLight(0xfff2e0, 1.55);
-sunLight.position.set(1, 1.4, 0.8);
+sunLight.position.set(...SUN_DIRECTION);
 engine.scene.add(sunLight);
 
 const flightControls = new FlightControls(engine.camera);
@@ -89,6 +90,13 @@ const highlightGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)
 const highlightMaterial = new THREE.LineBasicMaterial({ color: 0x7fffe0, transparent: true, opacity: 0.9 });
 const highlightBox = new THREE.LineSegments(highlightGeometry, highlightMaterial);
 highlightBox.visible = false;
+// Drawn after the container cages (renderOrder 1, see `VoxelContainers.ts`):
+// the box sits just inside a cage's rails, so in submission order the rails
+// would composite over the teal lines and the hover would vanish on exactly
+// the faces you are looking at. The cages write no depth, so ordering alone
+// puts the lines on top; they still depth-test against the cube itself, which
+// is what hides the box's far edges as before.
+highlightBox.renderOrder = 2;
 engine.scene.add(highlightBox);
 
 const hud = new Hud(app);
@@ -634,11 +642,37 @@ engine.start((dt) => {
   });
 });
 
+/**
+ * Resident container totals (Phase 6.8) — how many cages exist across the
+ * streamed world right now, how many the Effector Field isn't hiding, and how
+ * many the last frame actually drew after per-instance culling. Not on the
+ * HUD; it exists for the headless verification harness and for console
+ * spelunking, the same role `ChunkStore.stats()` plays.
+ */
+function containerStats(): { chunks: number; instances: number; visible: number; drawn: number } {
+  let chunks = 0;
+  let instances = 0;
+  let visible = 0;
+  let drawn = 0;
+  if (chunkStore) {
+    for (const chunkId of chunkStore.residentChunkIds) {
+      const containers = chunkStore.chunk(chunkId)?.containers;
+      if (!containers) continue;
+      chunks++;
+      instances += containers.instanceCount;
+      visible += containers.visibleInstanceCount;
+      drawn += containers.drawnInstanceCount;
+    }
+  }
+  return { chunks, instances, visible, drawn };
+}
+
 // Handy for poking at the world from the devtools console (and for the
 // headless verification harness, which reads counters off it).
 Object.assign(window as unknown as Record<string, unknown>, {
   lsv: {
     engine,
+    containerStats,
     get manifest() {
       return manifest;
     },

@@ -107,6 +107,13 @@ export interface ExtractionCycle {
  * reference) to avoid a two-way constructor dependency — `XRayController`
  * itself needs `MiningController.extractedFraction` to do the same combination
  * in reverse. See main.ts's bootstrap-order comment.
+ *
+ * Phase 6.8 hangs a second readout off the very same fraction: the voxel's
+ * container cage (`voxels/VoxelContainers.ts`), whose fill-line drains as it
+ * does. Every place below that writes `setOpacityAt` writes
+ * `containers.setExtractedFraction` beside it — one fraction, two renderings of
+ * it, updated at the same four moments (extract, restore-all, per-item return,
+ * chunk becomes resident) rather than polled from the frame loop.
  */
 export class MiningController {
   readonly inventory = new Inventory();
@@ -207,6 +214,10 @@ export class MiningController {
       hit.instanceId,
       combinedVoxelOpacity(state.extracted.size / state.total, this.isXrayActive()),
     );
+    // The cage's fill-line is driven off the SAME fraction as the cube's fade
+    // (see `voxels/VoxelContainers.ts`), so it is updated here rather than
+    // polled: there is no other way for a voxel's extraction state to change.
+    chunk.containers.setExtractedFraction(hit.instanceId, state.extracted.size / state.total);
 
     return {
       chunkId,
@@ -247,6 +258,8 @@ export class MiningController {
     // back on XRAY_OPACITY (still see-through, per that item's global effect),
     // not snap to fully opaque just because its extraction state cleared.
     hit.mesh.setOpacityAt(hit.instanceId, combinedVoxelOpacity(0, this.isXrayActive()));
+    // Fraction 0 == the cage refills to the brim, in one write.
+    this.chunkStore.chunk(chunkId)?.containers.setExtractedFraction(hit.instanceId, 0);
     this.inventory.removeStack(voxelStackId(chunkId, localVoxelId));
     return true;
   }
@@ -326,6 +339,10 @@ export class MiningController {
         instanceId,
         combinedVoxelOpacity(state.extracted.size / state.total, xrayActive),
       );
+      // A reloaded chunk's cages are rebuilt full, so re-draining exactly to
+      // this voxel's fraction is all that's needed to make the gauge as
+      // persistent across an evict/reload as the fade it accompanies.
+      chunk.containers.setExtractedFraction(instanceId, state.extracted.size / state.total);
     }
   }
 
@@ -363,6 +380,7 @@ export class MiningController {
       instanceId,
       combinedVoxelOpacity(this.extractedFraction(chunkId, localVoxelId), this.isXrayActive()),
     );
+    chunk.containers.setExtractedFraction(instanceId, this.extractedFraction(chunkId, localVoxelId));
   }
 }
 

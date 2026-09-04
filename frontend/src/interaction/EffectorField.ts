@@ -261,6 +261,10 @@ export class EffectorFieldController {
         const localVoxelId = occupied[instanceId];
         if (prevSet.has(localVoxelId) && !nextSet?.has(localVoxelId)) {
           chunk.mesh.setVisibilityAt(instanceId, true);
+          // Phase 6.8: a voxel's container cage is a separate mesh, so hiding
+          // the cube alone would leave an empty frame floating in the hole the
+          // field just opened. Same instance id, same gate.
+          chunk.containers.setSuppressed(instanceId, false);
         }
       }
     }
@@ -274,6 +278,7 @@ export class EffectorFieldController {
         const localVoxelId = occupied[instanceId];
         if (nextSet.has(localVoxelId) && !prevSet?.has(localVoxelId)) {
           chunk.mesh.setVisibilityAt(instanceId, false);
+          chunk.containers.setSuppressed(instanceId, true);
         }
       }
     }
@@ -290,6 +295,7 @@ export class EffectorFieldController {
       for (let instanceId = 0; instanceId < occupied.length; instanceId++) {
         if (!set.has(occupied[instanceId])) continue;
         chunk.mesh.setVisibilityAt(instanceId, true);
+        chunk.containers.setSuppressed(instanceId, false);
       }
     }
     this.suppressed.clear();

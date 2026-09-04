@@ -72,6 +72,10 @@ export class XRayController {
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk) return;
     ensureTransparentMaterial(chunk.mesh);
+    // Phase 6.8: the container cages are a separate mesh with their own
+    // (material-level) X-Ray opacity — see `CONTAINER_XRAY_OPACITY` for why
+    // they deliberately do NOT follow the cubes down to `XRAY_OPACITY`.
+    chunk.containers.setXrayActive(this.active);
     const occupied = chunk.meta.occupied;
     for (let instanceId = 0; instanceId < occupied.length; instanceId++) {
       const localVoxelId = occupied[instanceId];

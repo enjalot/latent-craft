@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import { fetchArrayBuffer } from "../net/fetchTyped.ts";
 import { createVoxelMaterial, initVoxelUniforms } from "../voxels/VoxelMaterial.ts";
+import { VoxelContainers } from "../voxels/VoxelContainers.ts";
 import type { AtlasCache } from "../voxels/AtlasCache.ts";
 import type { Manifest } from "./Manifest.ts";
 import type { ChunkMeta, ManifestChunk } from "../types.ts";
@@ -101,6 +102,12 @@ export interface LoadedChunk {
   /** `localVoxelId` for each instance id, so a raycast hit resolves back to
    * the data model (needed from Phase 3's mining onward). */
   instanceToLocalVoxelId: Uint32Array;
+  /**
+   * This chunk's container cages (Phase 6.8), one per voxel, indexed by the
+   * SAME instance ids as `mesh` — so anything holding a voxel hit can drive
+   * both without a translation table. See `voxels/VoxelContainers.ts`.
+   */
+  containers: VoxelContainers;
 }
 
 /** Extra fields hung off the chunk mesh so a raycast hit can identify itself
@@ -193,6 +200,14 @@ export class ChunkLoader {
     mesh.userData = userData;
     mesh.name = `chunk-${entry.chunk_id}`;
 
+    // Parented to the voxel mesh, not added to the scene separately, so the
+    // cages inherit its exact lifetime — `ChunkStore` adding/removing the
+    // chunk mesh moves them with it and there is no second residency table to
+    // keep in sync. Explicitly disposed in `unload` below, since removing a
+    // parent does not dispose its children.
+    const containers = VoxelContainers.build(entry, meta, this.manifest, this.renderer);
+    mesh.add(containers.mesh);
+
     return {
       entry,
       meta,
@@ -200,11 +215,13 @@ export class ChunkLoader {
       atlasUrl,
       bytes: this.atlasCache.byteSize(atlasUrl, entry.atlas_bytes) + entry.meta_bytes,
       instanceToLocalVoxelId: meta.occupied,
+      containers,
     };
   }
 
   /** Tears down a loaded chunk's GPU resources and drops its atlas reference. */
   unload(chunk: LoadedChunk): void {
+    chunk.containers.dispose();
     chunk.mesh.removeFromParent();
     chunk.mesh.dispose();
     chunk.mesh.geometry.dispose();
