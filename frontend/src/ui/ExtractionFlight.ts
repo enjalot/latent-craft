@@ -49,6 +49,10 @@ export class ExtractionFlights {
   durationMs = EXTRACTION_FLIGHT_MS;
 
   private readonly live = new Set<HTMLElement>();
+  private readonly cleanup = new Map<
+    HTMLElement,
+    { timeout: number; firstFrame: number; secondFrame: number }
+  >();
 
   constructor(private readonly container: HTMLElement) {}
 
@@ -107,23 +111,31 @@ export class ExtractionFlights {
     const dx = request.toX - request.fromX;
     const dy = request.toY - request.fromY;
 
+    const handles = { timeout: 0, firstFrame: 0, secondFrame: 0 };
+    this.cleanup.set(tile, handles);
     const finish = (): void => {
       if (!this.live.delete(tile)) return;
+      window.clearTimeout(handles.timeout);
+      cancelAnimationFrame(handles.firstFrame);
+      cancelAnimationFrame(handles.secondFrame);
+      this.cleanup.delete(tile);
       tile.remove();
     };
     tile.addEventListener("transitionend", finish, { once: true });
     // Belt and braces: a transition on an element in a background tab (or one
     // whose transition never starts because the layout was already final)
     // never fires `transitionend`, which would leak the node forever.
-    window.setTimeout(finish, this.durationMs + 400);
+    handles.timeout = window.setTimeout(finish, this.durationMs + 400);
 
     // Two frames, not one: the first commits the tile at its start position,
     // the second changes the properties being transitioned. Setting both in
     // the same frame makes the browser coalesce them and skip the animation
     // entirely (the classic "transition doesn't run on a freshly-inserted
     // element" trap).
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
+    handles.firstFrame = requestAnimationFrame(() => {
+      handles.firstFrame = 0;
+      handles.secondFrame = requestAnimationFrame(() => {
+        handles.secondFrame = 0;
         tile.style.transform = `translate(${dx}px, ${dy}px) scale(0.3)`;
         tile.style.opacity = "0.05";
       });
@@ -134,7 +146,16 @@ export class ExtractionFlights {
 
   /** Removes every in-flight tile immediately (page teardown). */
   clear(): void {
-    for (const tile of this.live) tile.remove();
+    for (const tile of [...this.live]) {
+      const handles = this.cleanup.get(tile);
+      if (handles) {
+        window.clearTimeout(handles.timeout);
+        cancelAnimationFrame(handles.firstFrame);
+        cancelAnimationFrame(handles.secondFrame);
+      }
+      tile.remove();
+    }
     this.live.clear();
+    this.cleanup.clear();
   }
 }

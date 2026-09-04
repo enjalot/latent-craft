@@ -155,6 +155,33 @@ export class FlightControls {
   private readonly scratchEuler = new THREE.Euler(0, 0, 0, "YXZ");
   private readonly scratchMatrix = new THREE.Matrix4();
 
+  private readonly handleKeydown = (event: KeyboardEvent): void => {
+    // A focused HUD control gets first refusal. Its keyboard activation must
+    // not also become a frame of flight (notably Space on a collapse header).
+    if (event.defaultPrevented || isTextEntryTarget(event.target)) return;
+    // Space's default action scrolls the page or activates the focused
+    // control. Neither is wanted while it is acting as the ascend key.
+    if (event.code === "Space") event.preventDefault();
+    this.keys.add(event.code);
+    // Holding a key fires repeated keydowns; only a genuine fresh press can
+    // be half of a double-tap.
+    if (event.code === "KeyW" && !event.repeat) {
+      const now = performance.now();
+      if (now - this.lastForwardPressMs <= FLIGHT_SPRINT_DOUBLE_TAP_MS) this.sprinting = true;
+      this.lastForwardPressMs = now;
+    }
+  };
+
+  private readonly handleKeyup = (event: KeyboardEvent): void => {
+    this.keys.delete(event.code);
+    if (event.code === "KeyW") this.sprinting = false;
+  };
+
+  private readonly handleBlur = (): void => {
+    this.keys.clear();
+    this.sprinting = false;
+  };
+
   constructor(camera: THREE.Camera) {
     this.camera = camera;
     // Adopt whatever orientation the camera already has (Phase 1's synthetic
@@ -163,35 +190,11 @@ export class FlightControls {
     // view to some unrelated zeroed baseline.
     this.syncFromCamera();
 
-    window.addEventListener("keydown", (event) => {
-      // Space's default action scrolls the page, and activates the focused
-      // control if there is one (a <button> treats Space as a click). Neither
-      // is wanted now that Space means "ascend" and gets held down for
-      // seconds at a time. Today's HUD controls are all click-handling
-      // <div>s, so nothing takes focus and only the scroll case can bite —
-      // but that's an implementation detail of panels this file doesn't own,
-      // so suppress both. Guarded on the event target so a future text field
-      // in the HUD would still receive spaces normally.
-      if (event.code === "Space" && !isTextEntryTarget(event.target)) event.preventDefault();
-      this.keys.add(event.code);
-      // Holding a key fires repeated keydowns with `repeat === true`; only a
-      // genuine fresh press can be half of a double-tap.
-      if (event.code === "KeyW" && !event.repeat) {
-        const now = performance.now();
-        if (now - this.lastForwardPressMs <= FLIGHT_SPRINT_DOUBLE_TAP_MS) this.sprinting = true;
-        this.lastForwardPressMs = now;
-      }
-    });
-    window.addEventListener("keyup", (event) => {
-      this.keys.delete(event.code);
-      if (event.code === "KeyW") this.sprinting = false;
-    });
+    window.addEventListener("keydown", this.handleKeydown);
+    window.addEventListener("keyup", this.handleKeyup);
     // Don't let movement keys get "stuck" held down if the tab loses focus
     // (alt-tab etc.) without a matching keyup.
-    window.addEventListener("blur", () => {
-      this.keys.clear();
-      this.sprinting = false;
-    });
+    window.addEventListener("blur", this.handleBlur);
   }
 
   /** True while a double-tap-W sprint is held — for the HUD readout. */
@@ -369,8 +372,12 @@ export class FlightControls {
   }
 
   dispose(): void {
-    // Nothing owned here needs explicit teardown anymore — there is no
-    // PointerLockControls instance to dispose. The window-level key
-    // listeners live for the page's lifetime, same as Phase 1-3.
+    window.removeEventListener("keydown", this.handleKeydown);
+    window.removeEventListener("keyup", this.handleKeyup);
+    window.removeEventListener("blur", this.handleBlur);
+    this.keys.clear();
+    this.velocity.set(0, 0, 0);
+    this.lookTransition = null;
+    this.sprinting = false;
   }
 }

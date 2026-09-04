@@ -15,8 +15,8 @@ Layout (little-endian):
     num_voxels:u16 @12 (world grid, e.g. 160)  voxels_per_chunk:u16 @14 (16)
   VoxelProxyRecord x n_voxels (12B each):
     chunk_id:u32  local_voxel_id:u16  count:u16  color_rgb:u8[3]  flags:u8
-  count / color_rgb / flags are byte-for-byte the chunk's VoxelRecord fields (count
-  is already saturated at 65535 there, see build.assign_and_build).
+  count / color_rgb / flags are byte-for-byte the chunk's VoxelRecord fields. Pack
+  construction rejects a count above 65535 rather than silently saturating it.
 
 Records are sorted by (chunk_id, local_voxel_id) ascending — the same order as each
 chunk's occupied list (count > 0, local_voxel_id ascending, which is what the

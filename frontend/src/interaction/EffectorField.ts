@@ -342,7 +342,21 @@ export class EffectorFieldController {
   };
 
   dispose(): void {
+    this.active = false;
+    this.clearSuppression();
     window.removeEventListener("wheel", this.handleWheel);
     window.removeEventListener("keydown", this.handleKeydown);
+    this.gizmo.removeFromParent();
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    this.gizmo.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      geometries.add(object.geometry);
+      const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of objectMaterials) materials.add(material);
+    });
+    for (const geometry of geometries) geometry.dispose();
+    for (const material of materials) material.dispose();
+    this.gizmo.clear();
   }
 }

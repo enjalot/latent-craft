@@ -200,6 +200,29 @@
   color: #dffbff;
 }
 
+.hud-select {
+  min-width: 230px;
+  padding: 3px 24px 3px 6px;
+  font-family: var(--hud-font);
+  font-size: 10px;
+  color: var(--hud-text);
+  background: var(--hud-well);
+  border: 1px solid var(--hud-line);
+  border-radius: 0;
+  outline: none;
+  cursor: pointer;
+}
+.hud-select:hover,
+.hud-select:focus-visible {
+  border-color: var(--hud-accent-bright);
+  box-shadow: 0 0 8px var(--hud-glow);
+}
+.hud-select option,
+.hud-select optgroup {
+  color: var(--hud-text);
+  background: #031017;
+}
+
 /* Hotbar cell. The equipped state uses the SIGNAL teal at full strength — the
  * chrome around it is deliberately dim so this reads instantly. */
 .hud-slot {

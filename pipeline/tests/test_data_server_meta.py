@@ -57,6 +57,14 @@ def _get(url: str):
         return err.code, err.headers, err.read()
 
 
+def test_command_line_help_documents_compatible_arguments():
+    module = _load_server_module()
+    help_text = module.build_parser().format_help()
+    assert "[port] [root]" in help_text
+    assert "--bind" in help_text
+    assert module.build_parser().parse_args([]).port == 8802
+
+
 def test_meta_route(server):
     status, headers, body = _get(f"{server}/meta/demo-1/0")
     assert status == 200

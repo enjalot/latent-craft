@@ -34,8 +34,22 @@ def select_representatives(
     coords_norm: np.ndarray, assign: dict[str, np.ndarray], num_voxels: int
 ) -> pd.DataFrame:
     """One row per OCCUPIED (chunk_id, local_voxel_id) pair: repr_row_id (nearest to
-    the voxel's cell center, ties -> lowest row_id) and n_points (occupancy count)."""
+    the voxel's cell center, ties -> lowest row_id) and n_points (occupancy count).
+
+    The sort is over compact NumPy arrays. The previous implementation first made a
+    full N-row pandas DataFrame and then sorted/grouped it, which duplicated several
+    two-million-row columns just to return one row per occupied voxel.
+    """
     n = coords_norm.shape[0]
+    if n == 0:
+        return pd.DataFrame(
+            {
+                "chunk_id": pd.Series(dtype=np.uint32),
+                "local_voxel_id": pd.Series(dtype=np.uint16),
+                "repr_row_id": pd.Series(dtype=np.uint32),
+                "n_points": pd.Series(dtype=np.int64),
+            }
+        )
     cell = 2.0 / num_voxels
     cx = -1.0 + (assign["vx"].astype(np.float64) + 0.5) * cell
     cy = -1.0 + (assign["vy"].astype(np.float64) + 0.5) * cell
@@ -46,19 +60,24 @@ def select_representatives(
         + (coords_norm[:, 2] - cz) ** 2
     )
 
-    df = pd.DataFrame(
+    row_ids = np.arange(n, dtype=np.uint32)
+    chunk_ids = assign["chunk_id"]
+    local_ids = assign["local_voxel_id"]
+    order = np.lexsort((row_ids, dist2, local_ids, chunk_ids))
+    sorted_chunks = chunk_ids[order]
+    sorted_locals = local_ids[order]
+    boundaries = np.flatnonzero(
+        (sorted_chunks[1:] != sorted_chunks[:-1])
+        | (sorted_locals[1:] != sorted_locals[:-1])
+    ) + 1
+    starts = np.concatenate(([0], boundaries))
+    ends = np.concatenate((boundaries, [n]))
+    representative_rows = order[starts].astype(np.uint32, copy=False)
+    return pd.DataFrame(
         {
-            "row_id": np.arange(n, dtype=np.uint32),
-            "chunk_id": assign["chunk_id"],
-            "local_voxel_id": assign["local_voxel_id"],
-            "dist2": dist2,
+            "chunk_id": sorted_chunks[starts],
+            "local_voxel_id": sorted_locals[starts],
+            "repr_row_id": representative_rows,
+            "n_points": (ends - starts).astype(np.int64, copy=False),
         }
     )
-    counts = df.groupby(["chunk_id", "local_voxel_id"], sort=False).size()
-    reps = (
-        df.sort_values(["chunk_id", "local_voxel_id", "dist2", "row_id"])
-        .drop_duplicates(["chunk_id", "local_voxel_id"], keep="first")
-        .set_index(["chunk_id", "local_voxel_id"])["row_id"]
-    )
-    out = pd.DataFrame({"repr_row_id": reps, "n_points": counts}).reset_index()
-    return out

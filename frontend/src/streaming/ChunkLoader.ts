@@ -149,74 +149,93 @@ export class ChunkLoader {
   async load(entry: ManifestChunk, signal?: AbortSignal): Promise<LoadedChunk> {
     const metaUrl = this.manifest.url(entry.meta_path);
     const atlasUrl = this.manifest.url(entry.atlas_path);
+    let atlasAcquired = false;
+    const atlasPromise = this.atlasCache.acquire(atlasUrl, signal).then((texture) => {
+      atlasAcquired = true;
+      return texture;
+    });
+    let mesh: InstancedMesh2 | null = null;
+    let material: THREE.Material | null = null;
+    let containers: VoxelContainers | null = null;
 
-    const [metaBuffer, atlas] = await Promise.all([
-      fetchArrayBuffer(metaUrl, signal),
-      this.atlasCache.acquire(atlasUrl, signal),
-    ]);
+    try {
+      const [metaBuffer, atlas] = await Promise.all([
+        fetchArrayBuffer(metaUrl, signal),
+        atlasPromise,
+      ]);
 
-    const meta = parseChunkMeta(metaBuffer);
-    if (meta.chunkId !== entry.chunk_id) {
-      this.atlasCache.release(atlasUrl);
-      throw new Error(`chunk ${entry.chunk_id}: meta.bin reports chunk_id ${meta.chunkId}`);
+      const meta = parseChunkMeta(metaBuffer);
+      if (meta.chunkId !== entry.chunk_id) {
+        throw new Error(`chunk ${entry.chunk_id}: meta.bin reports chunk_id ${meta.chunkId}`);
+      }
+
+      material = createVoxelMaterial({
+        atlas,
+        tilesPerSide: this.manifest.atlasTilesPerSide(entry),
+        tilePx: this.manifest.tilePx,
+      });
+
+      const instanceCount = meta.occupied.length;
+      mesh = new InstancedMesh2(this.geometryTemplate.clone(), material, {
+        capacity: Math.max(1, instanceCount),
+        renderer: this.renderer,
+      });
+      // Must precede any setUniform call — it allocates the uniform texture at
+      // the mesh's capacity.
+      initVoxelUniforms(mesh);
+
+      const scale = this.manifest.voxelWorldSize * VOXEL_FILL;
+      const { cx, cy, cz } = entry;
+      mesh.addInstances(instanceCount, (instance, index) => {
+        const localVoxelId = meta.occupied[index];
+        this.manifest.voxelCenterWorld(cx, cy, cz, localVoxelId, this.scratch);
+        instance.position.copy(this.scratch);
+        instance.scale.setScalar(scale);
+        // Legacy atlases use local_voxel_id directly. Compact atlases pack
+        // occupied voxels in this same ascending instance order.
+        instance.setUniform("tileIndex", this.manifest.compactAtlases ? index : localVoxelId);
+      });
+
+      // Instances are static for the life of the chunk, so one BVH build at load
+      // time is the intended usage — this is what makes per-frame raycasting
+      // against every resident chunk cheap.
+      mesh.computeBVH();
+
+      const userData: ChunkMeshUserData = {
+        chunkId: entry.chunk_id,
+        chunkEntry: entry,
+        instanceToLocalVoxelId: meta.occupied,
+      };
+      mesh.userData = userData;
+      mesh.name = `chunk-${entry.chunk_id}`;
+
+      containers = VoxelContainers.build(entry, meta, this.manifest, this.renderer);
+      mesh.add(containers.mesh);
+
+      return {
+        entry,
+        meta,
+        mesh,
+        atlasUrl,
+        bytes: this.atlasCache.byteSize(atlasUrl, entry.atlas_bytes) + entry.meta_bytes,
+        instanceToLocalVoxelId: meta.occupied,
+        containers,
+      };
+    } catch (error) {
+      containers?.dispose();
+      if (mesh) {
+        mesh.removeFromParent();
+        mesh.dispose();
+        mesh.geometry.dispose();
+      }
+      material?.dispose();
+      // Promise.all can reject on meta fetch before the non-abortable KTX2
+      // transcode finishes. In that case attach ownership cleanup now; if the
+      // atlas is already ours, release it synchronously.
+      if (atlasAcquired) this.atlasCache.release(atlasUrl);
+      else void atlasPromise.then(() => this.atlasCache.release(atlasUrl), () => undefined);
+      throw error;
     }
-
-    const material = createVoxelMaterial({
-      atlas,
-      tilesPerSide: this.manifest.tilesPerSide,
-      tilePx: this.manifest.tilePx,
-    });
-
-    const instanceCount = meta.occupied.length;
-    const mesh = new InstancedMesh2(this.geometryTemplate.clone(), material, {
-      capacity: Math.max(1, instanceCount),
-      renderer: this.renderer,
-    });
-    // Must precede any setUniform call — it allocates the uniform texture at
-    // the mesh's capacity.
-    initVoxelUniforms(mesh);
-
-    const scale = this.manifest.voxelWorldSize * VOXEL_FILL;
-    const { cx, cy, cz } = entry;
-    mesh.addInstances(instanceCount, (instance, index) => {
-      const localVoxelId = meta.occupied[index];
-      this.manifest.voxelCenterWorld(cx, cy, cz, localVoxelId, this.scratch);
-      instance.position.copy(this.scratch);
-      instance.scale.setScalar(scale);
-      // local_voxel_id IS the atlas tile index (16^3 == 64^2).
-      instance.setUniform("tileIndex", localVoxelId);
-    });
-
-    // Instances are static for the life of the chunk, so one BVH build at load
-    // time is the intended usage — this is what makes per-frame raycasting
-    // against every resident chunk cheap.
-    mesh.computeBVH();
-
-    const userData: ChunkMeshUserData = {
-      chunkId: entry.chunk_id,
-      chunkEntry: entry,
-      instanceToLocalVoxelId: meta.occupied,
-    };
-    mesh.userData = userData;
-    mesh.name = `chunk-${entry.chunk_id}`;
-
-    // Parented to the voxel mesh, not added to the scene separately, so the
-    // cages inherit its exact lifetime — `ChunkStore` adding/removing the
-    // chunk mesh moves them with it and there is no second residency table to
-    // keep in sync. Explicitly disposed in `unload` below, since removing a
-    // parent does not dispose its children.
-    const containers = VoxelContainers.build(entry, meta, this.manifest, this.renderer);
-    mesh.add(containers.mesh);
-
-    return {
-      entry,
-      meta,
-      mesh,
-      atlasUrl,
-      bytes: this.atlasCache.byteSize(atlasUrl, entry.atlas_bytes) + entry.meta_bytes,
-      instanceToLocalVoxelId: meta.occupied,
-      containers,
-    };
   }
 
   /** Tears down a loaded chunk's GPU resources and drops its atlas reference. */
@@ -231,5 +250,6 @@ export class ChunkLoader {
 
   dispose(): void {
     this.geometryTemplate.dispose();
+    this.atlasCache.dispose();
   }
 }

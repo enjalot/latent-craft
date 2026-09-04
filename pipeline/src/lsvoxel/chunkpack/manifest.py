@@ -146,6 +146,26 @@ def validate_manifest(out_dir: Path) -> dict[str, Any]:
     if "voxel_proxy" not in manifest:
         raise KeyError("manifest has no voxel_proxy entry — derive it with scripts/derive_voxel_proxy.py")
 
+    atlas = manifest["atlas"]
+    layout = atlas.get("layout")
+    if layout not in {None, "compact-occupied-v1"}:
+        raise ValueError(f"unsupported atlas layout {layout!r}")
+    if layout == "compact-occupied-v1":
+        max_side = atlas["tiles_per_side"]
+        tile_px = atlas["tile_px"]
+        for chunk in manifest["chunks"]:
+            side = chunk.get("atlas_tiles_per_side")
+            size = chunk.get("atlas_size_px")
+            if (
+                not isinstance(side, int)
+                or side <= 0
+                or side > max_side
+                or side & (side - 1)
+                or side * side < chunk["n_occupied_voxels"]
+                or size != side * tile_px
+            ):
+                raise ValueError(f"chunk {chunk['chunk_id']}: invalid compact atlas dimensions")
+
     for key in ("proxy", "point_index", "row_to_voxel", "voxel_proxy"):
         entry = manifest[key]
         p = out_dir / entry["path"]

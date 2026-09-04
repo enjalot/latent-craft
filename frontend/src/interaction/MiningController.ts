@@ -206,7 +206,7 @@ export class MiningController {
     // cursor: returns from the inventory can put arbitrary points back at any
     // time, which a monotonic cursor would either skip over or re-extract. The
     // scan is O(points in this voxel) — under a millisecond even for BL's
-    // densest 7,098-point voxel, and it runs at most twice a second.
+    // densest 7,098-point voxel, and it runs roughly four times a second.
     for (let i = 0; i < total && taken.length < batch; i++) {
       const rowId = chunk.meta.pointIds[offset + i];
       if (state.extracted.has(rowId)) continue;

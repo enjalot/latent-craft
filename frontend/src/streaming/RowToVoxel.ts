@@ -18,7 +18,7 @@ const RECORD_BYTES = 8;
 export interface RowToVoxel {
   /** chunkId[row_id] — always an *occupied* chunk (every point lands in one). */
   chunkId: Uint32Array;
-  /** localVoxelId[row_id] — 0..voxels_per_chunk^3-1, the atlas tile index too. */
+  /** localVoxelId[row_id] — 0..voxels_per_chunk^3-1. */
   localVoxelId: Uint16Array;
 }
 

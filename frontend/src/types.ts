@@ -28,11 +28,14 @@ export interface ManifestWorld {
 }
 
 export interface ManifestAtlas {
+  /** Maximum atlas dimensions. Compact packs choose a smaller size per chunk. */
   size_px: number;
   tile_px: number;
   tiles_per_side: number;
   format: string;
   alpha: boolean;
+  /** Missing on legacy packs, whose tile index is local_voxel_id. */
+  layout?: "compact-occupied-v1";
 }
 
 export interface ManifestBlobRef {
@@ -50,6 +53,9 @@ export interface ManifestChunk {
   bbox: [number, number, number, number, number, number];
   n_occupied_voxels: number;
   n_points: number;
+  /** Present for compact atlases; absent on legacy fixed-size packs. */
+  atlas_size_px?: number;
+  atlas_tiles_per_side?: number;
   atlas_path: string;
   atlas_bytes: number;
   atlas_sha256: string;
@@ -125,7 +131,7 @@ export interface VoxelProxyData {
   voxelsPerChunk: number;
   chunkId: Uint32Array;
   localVoxelId: Uint16Array;
-  /** Points in the voxel, saturated at 65535 like `ChunkMeta.count`. */
+  /** Points in the voxel; pack construction rejects counts above uint16. */
   count: Uint16Array;
   /** Mean thumbnail color, 3 sRGB bytes per record. */
   colorRgb: Uint8Array;

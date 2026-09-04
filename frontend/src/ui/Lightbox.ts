@@ -1,4 +1,6 @@
 import {
+  LIGHTBOX_ORIGINAL_CACHE_MAX_BYTES,
+  LIGHTBOX_ORIGINAL_CACHE_MAX_ROWS,
   LIGHTBOX_ORIGINAL_CROSSFADE_MS,
   LIGHTBOX_ORIGINAL_MAX_VIEWPORT_FRAC,
   LIGHTBOX_ORIGINAL_TIMEOUT_MS,
@@ -6,6 +8,7 @@ import {
   SYNTHETIC_SUBSET_PREFIX,
 } from "../config.ts";
 import { fetchPointMeta, originHostname, peekPointMeta, type PointMeta } from "../streaming/PointMeta.ts";
+import { WeightedLruCache } from "../utils/WeightedLruCache.ts";
 import { applyHudPanelChrome, HUD_CLASS } from "./hudPanel.ts";
 
 /** What the lightbox needs in order to page through a whole stack without
@@ -65,59 +68,43 @@ export type LightboxOriginalState =
  * every time the carousel passes over it. */
 type CachedOriginal = HTMLImageElement | "failed";
 
-/**
- * How many rows' originals the lightbox keeps decoded, most recently
- * visited first. The originals are big — BL's Flickr `_o` scans run to
- * 2600x3400 px, tens of MB each once decoded — so an unbounded per-session
- * cache would grow without limit through a long paging session. 40 rows is
- * more than anyone pages back and forth across by hand (a page of the
- * inventory grid is `INVENTORY_THUMBS_PAGE_SIZE` = 60 thumbnails, of which
- * a handful get opened), so recent paging still lands in the cache and is
- * instant, while the worst case is bounded at ~40 decoded scans. A row that
- * falls out is simply fetched again the next time it is visited.
- */
-const ORIGINALS_CACHE_ROWS = 40;
-
-/**
- * The originals cache: a least-recently-visited map capped at
- * `ORIGINALS_CACHE_ROWS`. Recency is refreshed on every hit as well as on
- * insert — the rows the user is paging between right now are the ones that
- * must stay — and the row that has gone longest unvisited is dropped to make
- * room. Dropping means only that: the cache forgets its reference and the
- * element is garbage once nothing else holds it. An evicted row that is on
- * the stage at that moment (possible when many loads the user paged past
- * finish while a cached row is being looked at) stays on screen until the
- * next step, exactly as before; it will just be fetched again next time.
- *
- * `"failed"` markers share the cap: a dead link is worth remembering only
- * for as long as the user is near it.
- */
 class OriginalsCache {
-  private readonly entries = new Map<number, CachedOriginal>();
+  private readonly entries: WeightedLruCache<number, CachedOriginal>;
 
-  get(rowId: number): CachedOriginal | undefined {
-    const entry = this.entries.get(rowId);
-    if (entry === undefined) return undefined;
-    // A Map iterates in insertion order, so re-inserting is "move to most
-    // recent"; the least recent is always the first key.
-    this.entries.delete(rowId);
-    this.entries.set(rowId, entry);
-    return entry;
+  constructor(onEvict: (entry: CachedOriginal) => void) {
+    this.entries = new WeightedLruCache({
+      maxEntries: LIGHTBOX_ORIGINAL_CACHE_MAX_ROWS,
+      maxWeight: LIGHTBOX_ORIGINAL_CACHE_MAX_BYTES,
+      weightOf: (entry) =>
+        entry === "failed" ? 0 : entry.naturalWidth * entry.naturalHeight * 4,
+      onEvict,
+    });
   }
 
-  set(rowId: number, entry: CachedOriginal): void {
-    this.entries.delete(rowId);
-    this.entries.set(rowId, entry);
-    if (this.entries.size > ORIGINALS_CACHE_ROWS) {
-      const oldest = this.entries.keys().next().value;
-      if (oldest !== undefined) this.entries.delete(oldest);
-    }
+  get(rowId: number): CachedOriginal | undefined {
+    return this.entries.get(rowId);
+  }
+
+  set(rowId: number, entry: CachedOriginal): boolean {
+    return this.entries.set(rowId, entry);
   }
 
   /** Row ids currently cached, least recently visited first. */
   rowIds(): number[] {
-    return [...this.entries.keys()];
+    return this.entries.keys();
   }
+
+  clear(): void {
+    this.entries.clear();
+  }
+}
+
+type ImageLoadResult = HTMLImageElement | null | undefined;
+
+interface ImageLoadTask {
+  /** `undefined` means explicitly canceled; `null` means failed/timed out. */
+  promise: Promise<ImageLoadResult>;
+  cancel(): void;
 }
 
 /**
@@ -139,15 +126,9 @@ class OriginalsCache {
  * link is dead, that a BL cover has no original on record, or that a
  * synthetic MONET image has no larger copy anywhere.
  *
- * The thumbnail-first discipline is what keeps this cheap: the originals are
- * multi-megabyte scans on hosts that may be slow or gone, and none of that
- * ever delays the picture the user clicked on. The last `ORIGINALS_CACHE_ROWS`
- * rows visited keep their decoded original (`originals`), so paging back to
- * one shows it instantly; an original still loading when the user pages away
- * keeps loading into that cache rather than being torn down, and the `showToken`
- * is what guarantees it can never be swapped into the WRONG row — every
- * async continuation checks that the row it was started for is still the
- * row on screen before it touches the DOM.
+ * The thumbnail-first discipline is what keeps this cheap: originals never
+ * delay the local image. Only the current row may have an original request in
+ * flight, and decoded images are retained under a byte-weighted LRU budget.
  *
  * ## Carousel (Phase 6.5)
  *
@@ -183,18 +164,18 @@ export class Lightbox {
 
   /** The original element currently stacked over the thumbnail, if any. */
   private shownOriginal: HTMLImageElement | null = null;
+  private shownOriginalCached = false;
   private originalState: LightboxOriginalState = "idle";
   private statusString = "";
 
-  private readonly originals = new OriginalsCache();
-  /** Originals in flight, so paging away and back to a still-loading row
-   * joins the existing load instead of starting a second one. Separate from
-   * the cache: a load is a promise, not an image, and it settles INTO the
-   * cache (possibly evicting a row) only once the image has decoded. */
-  private readonly loading = new Map<number, Promise<HTMLImageElement | null>>();
+  private readonly originals: OriginalsCache;
+  /** At most the current row's original is allowed to consume network/decode. */
+  private loading: { rowId: number; task: ImageLoadTask } | null = null;
+  private metaLookup: { token: number; controller: AbortController } | null = null;
 
   constructor(container: HTMLElement, options: LightboxOptions) {
     this.pointsId = options.pointsId;
+    this.originals = new OriginalsCache((entry) => this.handleOriginalEvicted(entry));
 
     this.root = document.createElement("div");
     this.root.className = "ls-lightbox";
@@ -332,9 +313,7 @@ export class Lightbox {
     window.addEventListener("keydown", this.handleKeyDown);
     // An original is sized against the viewport at the moment it is shown;
     // keep it fitting if the window changes underneath it.
-    window.addEventListener("resize", () => {
-      if (this.shownOriginal) this.fitStageTo(this.shownOriginal);
-    });
+    window.addEventListener("resize", this.handleResize);
   }
 
   /** Whether the modal is currently showing. */
@@ -374,9 +353,7 @@ export class Lightbox {
     return this.openLink.hidden ? null : this.openLink.href;
   }
 
-  /** Rows whose original (or failure) is cached, least recently visited
-   * first — never more than `ORIGINALS_CACHE_ROWS` of them. For the headless
-   * harness and console. */
+  /** Rows whose original (or failure) is cached, least recently visited first. */
   get cachedOriginalRowIds(): number[] {
     return this.originals.rowIds();
   }
@@ -406,6 +383,8 @@ export class Lightbox {
 
   close(): void {
     this.showToken++;
+    this.cancelMetaLookup();
+    this.cancelOriginalLoad();
     this.root.style.display = "none";
     this.source = null;
     this.clearOriginal();
@@ -422,6 +401,8 @@ export class Lightbox {
     }
     // Anything started for the previous row is now stale — see `showToken`.
     const token = ++this.showToken;
+    this.cancelMetaLookup();
+    this.cancelOriginalLoad();
     source.index = clampIndex(source.index, length);
     const rowId = source.rowIds[source.index];
     const url = source.resolveUrl(rowId);
@@ -449,7 +430,7 @@ export class Lightbox {
     const knownMeta = peekPointMeta(this.pointsId, rowId);
     const cached = this.originals.get(rowId);
     if (knownMeta?.url && cached instanceof HTMLImageElement) {
-      this.presentOriginal(cached, knownMeta, true);
+      this.presentOriginal(cached, knownMeta, true, true);
       return;
     }
 
@@ -459,14 +440,17 @@ export class Lightbox {
 
   /**
    * The async half of `show()`: look the row up, then fetch its original.
-   * Every step re-checks `token` before touching the DOM, so a slow lookup or
-   * a slow image for a row the user has already paged past resolves into the
-   * cache and nowhere else.
+   * Every step re-checks `token` before touching the DOM. Obsolete metadata
+   * and image requests are canceled; a decoded image that wins the race with
+   * cancellation is released rather than cached for a row no longer shown.
    */
   private async resolveOriginal(token: number, rowId: number): Promise<void> {
     const pointsId = this.pointsId;
     if (pointsId === null) return;
-    const meta = await fetchPointMeta(pointsId, rowId);
+    const controller = new AbortController();
+    this.metaLookup = { token, controller };
+    const meta = await fetchPointMeta(pointsId, rowId, controller.signal);
+    if (this.metaLookup?.token === token) this.metaLookup = null;
     if (token !== this.showToken) return;
 
     if (meta === undefined) {
@@ -499,37 +483,45 @@ export class Lightbox {
       return;
     }
     if (cached) {
-      this.presentOriginal(cached, meta, true);
+      this.presentOriginal(cached, meta, true, true);
       return;
     }
 
     this.setStatus(`loading original · ${meta.width} x ${meta.height} …`, "loading", meta.url);
     const image = await this.loadOriginal(rowId, meta.url);
-    if (token !== this.showToken) return;
-    if (image) this.presentOriginal(image, meta, false);
-    else this.setStatus(unavailableStatus(meta), "unavailable", meta.url);
+    if (image === undefined) return;
+    if (token !== this.showToken) {
+      if (image) releaseImage(image);
+      return;
+    }
+    if (image) {
+      this.presentOriginal(image, meta, false, false);
+      this.shownOriginalCached = this.originals.set(rowId, image);
+    } else {
+      this.originals.set(rowId, "failed");
+      this.setStatus(unavailableStatus(meta), "unavailable", meta.url);
+    }
   }
 
-  /** Fetches (or joins the in-flight fetch of) one row's original. Resolves
-   * `null` on error or after `LIGHTBOX_ORIGINAL_TIMEOUT_MS`; either way the
-   * outcome lands in `originals`, so it is not repeated while the row stays
-   * among the `ORIGINALS_CACHE_ROWS` most recently visited. */
-  private loadOriginal(rowId: number, url: string): Promise<HTMLImageElement | null> {
-    let pending = this.loading.get(rowId);
-    if (!pending) {
-      pending = loadImage(url, LIGHTBOX_ORIGINAL_TIMEOUT_MS).then((image) => {
-        this.originals.set(rowId, image ?? "failed");
-        this.loading.delete(rowId);
-        return image;
-      });
-      this.loading.set(rowId, pending);
-    }
-    return pending;
+  private loadOriginal(rowId: number, url: string): Promise<ImageLoadResult> {
+    if (this.loading?.rowId === rowId) return this.loading.task.promise;
+    this.cancelOriginalLoad();
+    const task = loadImage(url, LIGHTBOX_ORIGINAL_TIMEOUT_MS);
+    this.loading = { rowId, task };
+    void task.promise.finally(() => {
+      if (this.loading?.task === task) this.loading = null;
+    });
+    return task.promise;
   }
 
   /** Puts a loaded original on screen over the thumbnail, growing the box to
    * fit it. `instant` skips the cross-fade (a cached row paging back in). */
-  private presentOriginal(image: HTMLImageElement, meta: PointMeta, instant: boolean): void {
+  private presentOriginal(
+    image: HTMLImageElement,
+    meta: PointMeta,
+    instant: boolean,
+    cached: boolean,
+  ): void {
     this.clearOriginal();
     image.className = "ls-lightbox-original";
     image.alt = this.img.alt;
@@ -545,6 +537,7 @@ export class Lightbox {
     } satisfies Partial<CSSStyleDeclaration>);
     this.stage.appendChild(image);
     this.shownOriginal = image;
+    this.shownOriginalCached = cached;
     this.fitStageTo(image);
     // Force the opacity:0 start state to be committed before flipping it, or
     // the browser coalesces both writes and there is no transition to run.
@@ -587,8 +580,11 @@ export class Lightbox {
    * re-inserted. */
   private clearOriginal(): void {
     if (this.shownOriginal) {
+      const image = this.shownOriginal;
       this.shownOriginal.remove();
       this.shownOriginal = null;
+      if (!this.shownOriginalCached) releaseImage(image);
+      this.shownOriginalCached = false;
     }
     this.stage.style.width = "";
     this.stage.style.height = "";
@@ -630,6 +626,40 @@ export class Lightbox {
     event.stopPropagation();
     this.step(event.key === "ArrowRight" ? 1 : -1);
   };
+
+  private handleResize = (): void => {
+    if (this.shownOriginal) this.fitStageTo(this.shownOriginal);
+  };
+
+  private cancelOriginalLoad(): void {
+    const loading = this.loading;
+    if (!loading) return;
+    this.loading = null;
+    loading.task.cancel();
+  }
+
+  private cancelMetaLookup(): void {
+    this.metaLookup?.controller.abort();
+    this.metaLookup = null;
+  }
+
+  private handleOriginalEvicted(entry: CachedOriginal): void {
+    if (!(entry instanceof HTMLImageElement)) return;
+    if (entry === this.shownOriginal) {
+      this.shownOriginalCached = false;
+      return;
+    }
+    releaseImage(entry);
+  }
+
+  dispose(): void {
+    this.close();
+    this.originals.clear();
+    this.img.src = "";
+    window.removeEventListener("keydown", this.handleKeyDown);
+    window.removeEventListener("resize", this.handleResize);
+    this.root.remove();
+  }
 }
 
 function unavailableStatus(meta: PointMeta): string {
@@ -651,13 +681,14 @@ function unavailableStatus(meta: PointMeta): string {
  * the only way to cancel an `<img>` fetch; the handlers are detached first so
  * that the `error` event the clear fires does not double-settle.
  */
-function loadImage(url: string, timeoutMs: number): Promise<HTMLImageElement | null> {
-  return new Promise((resolve) => {
+function loadImage(url: string, timeoutMs: number): ImageLoadTask {
+  let cancel = (): void => undefined;
+  const promise = new Promise<ImageLoadResult>((resolve) => {
     const image = new Image();
     image.referrerPolicy = "no-referrer";
     image.decoding = "async";
     let settled = false;
-    const settle = (result: HTMLImageElement | null): void => {
+    const settle = (result: ImageLoadResult): void => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timer);
@@ -675,8 +706,21 @@ function loadImage(url: string, timeoutMs: number): Promise<HTMLImageElement | n
       settle(image.naturalWidth > 0 && image.naturalHeight > 0 ? image : null);
     };
     image.onerror = () => settle(null);
+    cancel = () => {
+      if (settled) return;
+      image.onload = null;
+      image.onerror = null;
+      image.src = "";
+      settle(undefined);
+    };
     image.src = url;
   });
+  return { promise, cancel: () => cancel() };
+}
+
+function releaseImage(image: HTMLImageElement): void {
+  image.remove();
+  image.src = "";
 }
 
 function clampIndex(index: number, length: number): number {

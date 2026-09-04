@@ -57,6 +57,7 @@ const SLOT_BASE_STYLE: Partial<CSSStyleDeclaration> = {
 };
 
 export class Hotbar {
+  private readonly root: HTMLElement;
   private equipped: ToolId | null = null;
   private readonly slotEls = new Map<ToolId | "hand", HTMLElement>();
   private readonly statusEl: HTMLElement;
@@ -76,8 +77,8 @@ export class Hotbar {
     // every time it appeared it shoved the rack up by its own height — "i want
     // the effector field tooltip to be above the hotbar not below, so it
     // doesn't move the hotbar.")
-    const root = document.createElement("div");
-    Object.assign(root.style, {
+    this.root = document.createElement("div");
+    Object.assign(this.root.style, {
       position: "fixed",
       bottom: "16px",
       left: "50%",
@@ -129,9 +130,9 @@ export class Hotbar {
 
     // Strip first, rack last — see the root's comment for why the order is
     // load-bearing.
-    root.appendChild(this.statusEl);
-    root.appendChild(bar);
-    container.appendChild(root);
+    this.root.appendChild(this.statusEl);
+    this.root.appendChild(bar);
+    container.appendChild(this.root);
 
     window.addEventListener("keydown", this.handleKeydown);
     this.renderActiveState();
@@ -205,6 +206,16 @@ export class Hotbar {
   }
 
   private handleKeydown = (event: KeyboardEvent): void => {
+    if (event.defaultPrevented) return;
+    const target = event.target as HTMLElement | null;
+    if (
+      target?.isContentEditable ||
+      target?.tagName === "INPUT" ||
+      target?.tagName === "TEXTAREA" ||
+      target?.tagName === "SELECT"
+    ) {
+      return;
+    }
     if (event.code === HAND_KEY_CODE) {
       this.equip(null);
       return;
@@ -215,5 +226,6 @@ export class Hotbar {
 
   dispose(): void {
     window.removeEventListener("keydown", this.handleKeydown);
+    this.root.remove();
   }
 }

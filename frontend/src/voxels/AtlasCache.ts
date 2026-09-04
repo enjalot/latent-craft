@@ -1,6 +1,20 @@
 import * as THREE from "three";
 import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
 
+/** Narrow loader surface so the ownership logic can be tested without a WebGL
+ * context. `KTX2Loader` is the production implementation. */
+export interface AtlasTextureLoader {
+  loadAsync(url: string): Promise<THREE.Texture>;
+  dispose(): void;
+}
+
+interface PendingAtlas {
+  promise: Promise<THREE.Texture>;
+  /** Callers currently waiting for this decode. A decoded zero-ref texture may
+   * only be disposed after every waiter has either claimed it or aborted. */
+  waiters: number;
+}
+
 /**
  * Loads and refcounts the per-chunk KTX2/Basis-Universal atlases.
  *
@@ -26,16 +40,25 @@ import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
  * is re-requested while its dispose is still pending.
  */
 export class AtlasCache {
-  private readonly loader: KTX2Loader;
+  private readonly loader: AtlasTextureLoader;
   private readonly entries = new Map<string, { texture: THREE.Texture; refs: number }>();
-  private readonly pending = new Map<string, Promise<THREE.Texture>>();
+  private readonly pending = new Map<string, PendingAtlas>();
+  private disposed = false;
 
-  constructor(renderer: THREE.WebGLRenderer, transcoderPath = "/basis/") {
-    this.loader = new KTX2Loader().setTranscoderPath(transcoderPath).detectSupport(renderer);
+  constructor(
+    renderer: THREE.WebGLRenderer,
+    transcoderPath = "/basis/",
+    loader?: AtlasTextureLoader,
+  ) {
+    this.loader =
+      loader ?? new KTX2Loader().setTranscoderPath(transcoderPath).detectSupport(renderer);
   }
 
   /** Loads (or re-uses) an atlas and takes a reference on it. */
   async acquire(url: string, signal?: AbortSignal): Promise<THREE.Texture> {
+    if (this.disposed) throw new Error("AtlasCache is disposed");
+    if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+
     const existing = this.entries.get(url);
     if (existing) {
       existing.refs += 1;
@@ -44,34 +67,62 @@ export class AtlasCache {
 
     let inFlight = this.pending.get(url);
     if (!inFlight) {
-      inFlight = this.loader.loadAsync(url).then((texture) => {
-        this.configure(texture);
-        this.pending.delete(url);
+      const pending: PendingAtlas = {
+        // Assigned immediately below; the placeholder keeps the record stable
+        // for every waiter sharing this decode.
+        promise: undefined as unknown as Promise<THREE.Texture>,
+        waiters: 0,
+      };
+      pending.promise = this.loader.loadAsync(url).then((texture) => {
+        if (this.disposed) {
+          texture.dispose();
+          throw new DOMException("aborted", "AbortError");
+        }
+        try {
+          this.configure(texture);
+        } catch (error) {
+          texture.dispose();
+          throw error;
+        }
         this.entries.set(url, { texture, refs: 0 });
         return texture;
       });
+      inFlight = pending;
       this.pending.set(url, inFlight);
-      inFlight.catch(() => this.pending.delete(url));
     }
 
-    const texture = await inFlight;
-    if (signal?.aborted) {
-      // The caller gave up while we were decoding. The texture stays cached
-      // with refs === 0 so a later request is instant; `release` is what
-      // eventually disposes it.
-      throw new DOMException("aborted", "AbortError");
+    inFlight.waiters += 1;
+    try {
+      const texture = await inFlight.promise;
+      if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+      const entry = this.entries.get(url);
+      if (!entry || entry.texture !== texture) {
+        throw new Error(`AtlasCache lost decoded texture ${url}`);
+      }
+      entry.refs += 1;
+      return texture;
+    } finally {
+      inFlight.waiters -= 1;
+      if (inFlight.waiters === 0) {
+        if (this.pending.get(url) === inFlight) this.pending.delete(url);
+        // KTX2Loader itself cannot be aborted. If every consumer left while it
+        // was transcoding, the final waiter owns cleanup of the now-unused
+        // result so it cannot bypass ChunkStore's residency budget.
+        const entry = this.entries.get(url);
+        if (entry?.refs === 0) {
+          entry.texture.dispose();
+          this.entries.delete(url);
+        }
+      }
     }
-    const entry = this.entries.get(url);
-    if (entry) entry.refs += 1;
-    return texture;
   }
 
   /** Drops a reference; disposes the GPU texture when the last one goes. */
   release(url: string): void {
     const entry = this.entries.get(url);
     if (!entry) return;
-    entry.refs -= 1;
-    if (entry.refs <= 0) {
+    if (entry.refs > 0) entry.refs -= 1;
+    if (entry.refs === 0 && !this.pending.has(url)) {
       entry.texture.dispose();
       this.entries.delete(url);
     }
@@ -100,19 +151,20 @@ export class AtlasCache {
     texture.wrapS = THREE.ClampToEdgeWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
     texture.magFilter = THREE.LinearFilter;
-    // Deliberately NOT mipmapped for sampling, even though `basisu -mipmap`
-    // put mip levels in the file: a 2048px atlas of 32px tiles only stays
-    // tile-correct down to mip 5 — past that a texel spans several tiles and
-    // neighbouring thumbnails bleed into each other. Trading distant-voxel
-    // aliasing for never showing the wrong book cover is the right way round
-    // here; a proper fix (clamped TEXTURE_MAX_LEVEL, or a texture array with
-    // one layer per tile) is a later-phase optimization.
+    // Legacy packs contain a full mip chain, but atlases are deliberately
+    // sampled at level 0: once a mip texel spans a tile boundary it can show a
+    // neighbouring image. KTX2Loader transcodes every level it keeps, and
+    // three uploads them even with LinearFilter, so discard the unused levels
+    // before the first upload. New packs omit them at encode time too.
+    if (texture.mipmaps.length > 1) texture.mipmaps.splice(1);
     texture.minFilter = THREE.LinearFilter;
     texture.generateMipmaps = false;
     texture.needsUpdate = true;
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     for (const entry of this.entries.values()) entry.texture.dispose();
     this.entries.clear();
     this.pending.clear();

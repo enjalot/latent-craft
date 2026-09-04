@@ -10,15 +10,14 @@
  *
  * `path` is fetched same-origin (relative to the page) and proxied by Vite's
  * dev server (see `vite.config.ts`'s `server.proxy`) through to the static
- * data server on port 8802. A direct cross-port browser fetch to :8802 was
+ * data server (port 8802 by default; `LSV_DATA_PROXY_TARGET` overrides it).
+ * A direct cross-port browser fetch to :8802 was
  * tried first and gets blocked by Chrome's Private/Local Network Access
  * policy once the page is served over plain http from a LAN hostname like
  * gsv.local — proxying through Vite's Node process sidesteps that entirely,
  * and incidentally means the same build works unmodified from localhost, any
  * LAN IP, or gsv.local.
  */
-export const CHUNK_SERVER_PORT = 8802;
-
 export interface DatasetConfig {
   /** Path on the chunk server to the directory holding `manifest.json`. */
   path: string;
@@ -125,9 +124,7 @@ export const DATASETS: Record<string, DatasetConfig> = {
     minimapPath: "/minimap/monet-annfaiss",
   },
   // The fourth arm, the research project's own faiss-based rarity draw. Its
-  // packs are built by the same per-arm chain as the other three; until that
-  // chain finishes these entries resolve to 404s, which the loader reports as
-  // a status line rather than a crash.
+  // packs are built by the same per-arm chain as the other three.
   "monet-theirfaiss": {
     path: "/chunks/monet-theirfaiss",
     label: "MONET · theirfaiss draw",
@@ -151,20 +148,22 @@ export const DATASETS: Record<string, DatasetConfig> = {
  * (which is what the earlier `VOXEL_FILL` cut did, now reverted; see its doc
  * comment). Resolution is a pipeline-side knob (`num_voxels` in
  * `run_chunkpack_bl.py`), so the frontend just points at the finer pack.
- * Going finer still (256+) needs per-chunk compact atlases first — at 16^3
- * voxels/chunk every chunk carries a full 2048^2 atlas even when it holds a
- * handful of voxels, so VRAM scales with chunk count, not point count.
+ * New builds use compact per-chunk atlases, so finer grids no longer force a
+ * full 2048² texture on every sparsely occupied chunk. Existing packs remain
+ * readable through the legacy local-voxel-id atlas layout.
  */
 export const DEFAULT_DATASET = "bl-160";
 
 /**
- * Explicit override for the chunk server origin; `null` (the default) means
- * "same-origin, relative path" — i.e. let Vite's proxy handle it. Only set
- * this to bypass the proxy (e.g. hitting the data server directly from a
- * non-Vite-served context), which will hit the Private Network Access wall
- * described above unless that context is a secure/localhost origin.
+ * Optional data-server origin. `VITE_DATA_ORIGIN=https://data.example.org`
+ * makes a production build fetch every pack/thumbnail/meta route there;
+ * absent means same-origin, which lets Vite's development proxy (or a reverse
+ * proxy in production) handle it. Trailing slashes are normalized away.
  */
-export const CHUNK_SERVER_ORIGIN: string | null = null;
+const configuredDataOrigin = import.meta.env.VITE_DATA_ORIGIN?.trim();
+export const CHUNK_SERVER_ORIGIN: string | null = configuredDataOrigin
+  ? configuredDataOrigin.replace(/\/+$/, "")
+  : null;
 
 /**
  * Half-extent of the rendered world, in world units. The manifest's frame is a
@@ -380,6 +379,11 @@ export const HEADLAMP_RANGE = WORLD_SCALE * 0.5;
  */
 export const CONTAINER_SCALE = 1.08;
 
+/** Cages are fine detail, unlike the thumbnail cubes themselves. Past this
+ * camera-to-chunk-center distance they contribute mostly fragment discard and
+ * visual noise, so the whole per-chunk cage draw is skipped. */
+export const CONTAINER_RENDER_DISTANCE_CHUNKS = 2.0;
+
 /**
  * `log2(points)` that maps to a container's full capacity (1.0); everything
  * above clamps. `capacityForPoints` below is the map.
@@ -553,14 +557,19 @@ export const RING_R2_CHUNKS = 3.5;
 /** Max chunk fetches in flight at once. */
 export const MAX_CONCURRENT_CHUNK_LOADS = 6;
 
+/** Additional attempts for transient chunk/network failures. Corrupt pack
+ * data and definitive 4xx responses still fail immediately. */
+export const CHUNK_LOAD_MAX_RETRIES = 3;
+export const CHUNK_LOAD_RETRY_BASE_MS = 500;
+export const CHUNK_LOAD_RETRY_MAX_MS = 4_000;
+
 /**
  * Hard caps on residency, enforced farthest-first once the ring pass is done.
  *
- * Sizing note: every chunk carries a full 2048px atlas regardless of how few
- * voxels it actually occupies, so resident VRAM is driven by chunk *count*,
- * not by point count. Measured on the BL num_voxels=96 pack: ~5.7 MB per
- * decoded atlas, so all 98 chunks ≈ 553 MB. 1.25 GB leaves room for that plus
- * a denser pack without the budget biting during normal flight.
+ * Legacy packs carry a full 2048px atlas per chunk (measured around 5.7 MB
+ * decoded on BL), so this intentionally remains large enough for them. New
+ * compact packs scale each atlas to occupied voxel count and generally sit
+ * far below this ceiling.
  *
  * With the Phase 8 rings these almost never bind: a keep sphere of 3.5 chunk
  * edges holds at most ~180 chunk slots (4/3·π·3.5³) and on every current pack
@@ -575,6 +584,9 @@ export const MAX_RESIDENT_ATLAS_BYTES = 1280 * 1024 * 1024;
  * (world units) — the pass is O(occupied chunks) and doesn't need to run at
  * 120 Hz while hovering in place. */
 export const CHUNK_UPDATE_MOVE_EPSILON = 1.5;
+
+/** Re-prioritize queued chunks after a meaningful stationary camera turn. */
+export const CHUNK_UPDATE_TURN_EPSILON_RAD = (3 * Math.PI) / 180;
 
 // ---------------------------------------------------------------------------
 // Voxel proxies (Phase 8 — LOD)
@@ -1269,6 +1281,15 @@ export const LIGHTBOX_ORIGINAL_MAX_VIEWPORT_FRAC: readonly [number, number] = [0
  */
 export const LIGHTBOX_ORIGINAL_CROSSFADE_MS = 220;
 
+/** Decoded originals are budgeted by their RGBA pixel footprint, not merely
+ * by row count. Oversized single images are shown but never retained. */
+export const LIGHTBOX_ORIGINAL_CACHE_MAX_BYTES = 128 * 1024 * 1024;
+export const LIGHTBOX_ORIGINAL_CACHE_MAX_ROWS = 12;
+
+/** Definitive `/meta` answers are small, but their URLs can still accumulate
+ * indefinitely during a long carousel session. */
+export const POINT_META_CACHE_MAX_ROWS = 4096;
+
 /**
  * Subset-name prefix that marks a row as a generated (synthetic) image —
  * MONET's `synthetic-flux-klein`, `synthetic-flux-schnell`, `synthetic-
@@ -1387,7 +1408,7 @@ export const MINIMAP_BASE_ZOOM = 1;
  * rather than half the world. */
 export const MINIMAP_FLASHLIGHT_RADIUS_PX = 5;
 
-/** Caps on one flashlight query: how many row_ids the linear scan collects,
+/** Caps on one flashlight query: how many row_ids the spatial index collects,
  * and how many DISTINCT voxels get glow boxes. The row cap only bounds work
  * (the rows are deduped down to voxels immediately); the voxel cap bounds
  * both the glow-box pool and how legible the highlight is — lighting up
@@ -1500,7 +1521,7 @@ export function resolveDatasetBaseUrl(datasetKey: string): string {
     );
   }
   // Default: same-origin relative path, proxied by Vite (see vite.config.ts) to
-  // the data server on CHUNK_SERVER_PORT. This avoids the browser ever making a
+  // the configured data server. This avoids the browser ever making a
   // cross-port request, which is what triggers the Private Network Access block.
   const origin = CHUNK_SERVER_ORIGIN ?? "";
   return `${origin}${dataset.path}`;

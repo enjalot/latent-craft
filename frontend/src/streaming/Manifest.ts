@@ -21,6 +21,8 @@ export class Manifest {
   readonly chunksPerAxis: number;
   readonly tilesPerSide: number;
   readonly tilePx: number;
+  /** Compact packs use instance order as atlas tile order. */
+  readonly compactAtlases: boolean;
 
   /** World edge length of one voxel cell. */
   readonly voxelWorldSize: number;
@@ -42,6 +44,11 @@ export class Manifest {
     this.chunksPerAxis = raw.world.chunks_per_axis;
     this.tilesPerSide = raw.atlas.tiles_per_side;
     this.tilePx = raw.atlas.tile_px;
+    this.compactAtlases = raw.atlas.layout === "compact-occupied-v1";
+
+    if (raw.atlas.layout !== undefined && !this.compactAtlases) {
+      throw new Error(`Unsupported atlas layout ${String(raw.atlas.layout)}`);
+    }
 
     if (this.voxelsPerChunk ** 3 !== this.tilesPerSide ** 2) {
       // The whole texturing scheme depends on "local_voxel_id IS the tile
@@ -56,7 +63,23 @@ export class Manifest {
     this.chunkWorldSize = (2 * worldScale) / this.chunksPerAxis;
 
     this.chunksById = new Map();
-    for (const chunk of raw.chunks) this.chunksById.set(chunk.chunk_id, chunk);
+    for (const chunk of raw.chunks) {
+      if (this.compactAtlases) {
+        const side = chunk.atlas_tiles_per_side;
+        if (
+          !Number.isInteger(side) ||
+          side === undefined ||
+          side <= 0 ||
+          side > this.tilesPerSide ||
+          (side & (side - 1)) !== 0 ||
+          side * side < chunk.n_occupied_voxels ||
+          chunk.atlas_size_px !== side * this.tilePx
+        ) {
+          throw new Error(`chunk ${chunk.chunk_id}: invalid compact atlas dimensions`);
+        }
+      }
+      this.chunksById.set(chunk.chunk_id, chunk);
+    }
   }
 
   get datasetId(): string {
@@ -75,6 +98,10 @@ export class Manifest {
   /** Absolute URL for a manifest-relative path (`c/000137/atlas.ktx2`, …). */
   url(path: string): string {
     return `${this.baseUrl}/${path.replace(/^\/+/, "")}`;
+  }
+
+  atlasTilesPerSide(chunk: ManifestChunk): number {
+    return this.compactAtlases ? chunk.atlas_tiles_per_side! : this.tilesPerSide;
   }
 
   /**

@@ -81,6 +81,7 @@ export class MinimapRenderer {
   private avatar: MinimapMarker | null = null;
 
   private overlayScheduled = false;
+  private overlayRaf = 0;
   private captionText = HINT;
   private base: DensityBase | null = null;
 
@@ -265,7 +266,8 @@ export class MinimapRenderer {
   private scheduleOverlay(): void {
     if (this.overlayScheduled) return;
     this.overlayScheduled = true;
-    requestAnimationFrame(() => {
+    this.overlayRaf = requestAnimationFrame(() => {
+      this.overlayRaf = 0;
       this.overlayScheduled = false;
       this.drawOverlay();
     });
@@ -365,6 +367,9 @@ export class MinimapRenderer {
   };
 
   dispose(): void {
+    if (this.overlayRaf !== 0) cancelAnimationFrame(this.overlayRaf);
+    this.overlayRaf = 0;
+    this.overlayScheduled = false;
     this.mapWrap.removeEventListener("pointermove", this.handlePointerMove);
     this.mapWrap.removeEventListener("pointerleave", this.handlePointerLeave);
     this.mapWrap.removeEventListener("pointerdown", this.handlePointerDown);

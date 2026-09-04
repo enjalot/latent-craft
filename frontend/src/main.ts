@@ -13,6 +13,7 @@ import { ChunkStore } from "./streaming/ChunkStore.ts";
 import { loadPointIndex, resolveThumbUrl, type PointIndex } from "./streaming/PointIndex.ts";
 import { loadRowToVoxel } from "./streaming/RowToVoxel.ts";
 import { loadMinimapPack } from "./minimap/Manifest.ts";
+import { isAbortError } from "./net/fetchTyped.ts";
 import { MinimapBridge } from "./interaction/MinimapBridge.ts";
 import type { ProxyVoxel } from "./voxels/VoxelProxyCloud.ts";
 import { MiningController, type ExtractionCycle } from "./interaction/MiningController.ts";
@@ -20,6 +21,7 @@ import { PointerController, type VoxelTarget } from "./interaction/PointerContro
 import { XRayController } from "./interaction/XRayController.ts";
 import { EffectorFieldController } from "./interaction/EffectorField.ts";
 import { Hud, type HudStreamingState } from "./ui/Hud.ts";
+import { DatasetPicker } from "./ui/DatasetPicker.ts";
 import { createHoldProgressRing } from "./ui/hud/Crosshair.ts";
 import { InventoryPanel } from "./ui/InventoryPanel.ts";
 import { ExtractionFlights } from "./ui/ExtractionFlight.ts";
@@ -46,6 +48,8 @@ import {
 
 const app = document.getElementById("app");
 if (!app) throw new Error("#app container missing from index.html");
+const appLifetime = new AbortController();
+let appDisposed = false;
 
 const params = new URLSearchParams(window.location.search);
 /** `?synthetic=1` brings back the Phase 1 procedural field — handy for
@@ -142,6 +146,7 @@ highlightBox.visible = false;
 highlightBox.renderOrder = 2;
 engine.scene.add(highlightBox);
 
+const datasetPicker = new DatasetPicker(app, datasetKey, DATASETS, useSynthetic);
 const hud = new Hud(app);
 const holdRing = createHoldProgressRing(app);
 
@@ -181,6 +186,7 @@ let xrayController: XRayController | null = null;
 let effectorField: EffectorFieldController | null = null;
 let minimap: MinimapBridge | null = null;
 let inventoryPanel: InventoryPanel | null = null;
+let syntheticVoxelField: InstancedMesh2 | null = null;
 
 // --- pointer: click-and-drag to look, click-and-HOLD to extract -------------
 //
@@ -216,10 +222,9 @@ const pointerController = new PointerController(engine.renderer.domElement, flig
 });
 
 // point_index.bin (whole-dataset row_id → thumbnail lookup) is only needed
-// once the inventory panel actually wants to render a thumbnail, so it's
-// fetched lazily rather than blocking the bootstrap chain above — but kicked
-// off as soon as the manifest is known (see bootstrapStreamedWorld) so it's
-// usually already resolved by the time the first voxel gets mined.
+// once the inventory contains its first stack. InventoryPanel triggers this
+// loader on demand so the multi-megabyte table does not compete with the
+// initial proxy and R0 atlas requests.
 let pointIndexPromise: Promise<PointIndex> | null = null;
 /** The resolved table, once it lands — for the couple of call sites that are
  * synchronous by nature (the fly-to-inventory tile is created inside a frame
@@ -229,13 +234,19 @@ let pointIndexReady: PointIndex | null = null;
 function loadPointIndexOnce(): Promise<PointIndex> {
   if (!manifest) return Promise.reject(new Error("point_index: manifest not loaded yet"));
   if (!pointIndexPromise) {
-    pointIndexPromise = loadPointIndex(manifest, resolveThumbsBaseUrl(datasetKey))
+    pointIndexPromise = loadPointIndex(
+      manifest,
+      resolveThumbsBaseUrl(datasetKey),
+      appLifetime.signal,
+    )
       .then((index) => {
         pointIndexReady = index;
         return index;
       })
       .catch((error: unknown) => {
-        console.error("[latent-scope-3d] point_index.bin load failed", error);
+        if (!isAbortError(error)) {
+          console.error("[latent-scope-3d] point_index.bin load failed", error);
+        }
         pointIndexPromise = null; // allow a later retry instead of caching the failure forever
         throw error;
       });
@@ -244,10 +255,10 @@ function loadPointIndexOnce(): Promise<PointIndex> {
 }
 
 if (useSynthetic) {
-  const voxelField = createSyntheticVoxelField(engine.renderer);
-  engine.scene.add(voxelField);
-  raycastTargets = voxelField;
-  syntheticInstances = voxelField.instancesCount;
+  syntheticVoxelField = createSyntheticVoxelField(engine.renderer);
+  engine.scene.add(syntheticVoxelField);
+  raycastTargets = syntheticVoxelField;
+  syntheticInstances = syntheticVoxelField.instancesCount;
   engine.camera.position.set(0, 6, WORLD_HALF_EXTENT * 1.7);
   status = undefined;
 } else {
@@ -271,19 +282,18 @@ if (useSynthetic) {
 async function bootstrapStreamedWorld(): Promise<void> {
   try {
     const baseUrl = resolveDatasetBaseUrl(datasetKey);
-    manifest = await loadManifest(baseUrl, WORLD_SCALE);
+    manifest = await loadManifest(baseUrl, WORLD_SCALE, appLifetime.signal);
     console.info(
       `[latent-scope-3d] ${manifest.datasetId}: ${manifest.chunks.length} occupied chunks / ` +
         `${manifest.chunksPerAxis ** 3} slots, ${manifest.totalPoints.toLocaleString()} points, ` +
         `num_voxels=${manifest.numVoxels}`,
     );
-    // Kick off in the background — not awaited — so it's usually already
-    // resolved by the time mining/inventory needs it, without delaying the
-    // proxy/chunk streaming that makes the world visible.
-    void loadPointIndexOnce();
-
     status = "loading proxy…";
-    voxelProxy = new VoxelProxyCloud(manifest, await loadVoxelProxy(manifest), engine.renderer);
+    voxelProxy = new VoxelProxyCloud(
+      manifest,
+      await loadVoxelProxy(manifest, appLifetime.signal),
+      engine.renderer,
+    );
     engine.scene.add(voxelProxy.mesh);
 
     const atlasCache = new AtlasCache(engine.renderer);
@@ -373,6 +383,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
     // pack configured simply runs without one.
     void bootstrapMinimap(manifest, chunkStore, voxelProxy);
   } catch (error) {
+    if (appLifetime.signal.aborted || isAbortError(error)) return;
     console.error("[latent-scope-3d] failed to load dataset", error);
     status = `ERROR: ${(error as Error).message}`;
   }
@@ -391,10 +402,11 @@ async function bootstrapMinimap(m: Manifest, store: ChunkStore, proxies: VoxelPr
     console.info(`[latent-scope-3d] dataset ${datasetKey} has no minimap pack — panel disabled`);
     return;
   }
+  let bridge: MinimapBridge | null = null;
   try {
     const [pack, rowToVoxel] = await Promise.all([
-      loadMinimapPack(minimapBaseUrl),
-      loadRowToVoxel(m),
+      loadMinimapPack(minimapBaseUrl, appLifetime.signal),
+      loadRowToVoxel(m, appLifetime.signal),
     ]);
     if (pack.nPoints !== m.totalPoints) {
       // Both packs index the same points table by row_id; if they disagree on
@@ -405,7 +417,7 @@ async function bootstrapMinimap(m: Manifest, store: ChunkStore, proxies: VoxelPr
           `these packs are not from the same points table`,
       );
     }
-    minimap = new MinimapBridge({
+    bridge = new MinimapBridge({
       // Non-null assertion: same module-scope `throw` narrowing limitation as
       // the InventoryPanel construction above.
       container: app!,
@@ -417,13 +429,21 @@ async function bootstrapMinimap(m: Manifest, store: ChunkStore, proxies: VoxelPr
       engine,
       flightControls,
     });
-    await minimap.loadBase();
+    minimap = bridge;
+    await bridge.loadBase(appLifetime.signal);
     console.info(
       `[latent-scope-3d] minimap ready: ${pack.datasetId}, ${pack.nPoints.toLocaleString()} 2D points, ` +
-        `base z${minimap.panel.densityBase?.zoom} ` +
-        `(${minimap.panel.densityBase?.tilesDrawn}/${minimap.panel.densityBase?.tilesExpected} tiles)`,
+        `base z${bridge.panel.densityBase?.zoom} ` +
+        `(${bridge.panel.densityBase?.tilesDrawn}/${bridge.panel.densityBase?.tilesExpected} tiles)`,
     );
   } catch (error) {
+    // A density-tile failure happens after the panel and GPU highlight mesh
+    // exist. Tear that partial bridge down unless page teardown already did.
+    if (bridge && minimap === bridge) {
+      bridge.dispose();
+      minimap = null;
+    }
+    if (appLifetime.signal.aborted || isAbortError(error)) return;
     console.error("[latent-scope-3d] minimap failed to load", error);
   }
 }
@@ -797,3 +817,57 @@ Object.assign(window as unknown as Record<string, unknown>, {
     },
   },
 });
+
+/** Complete ownership teardown for navigation, page caching, and Vite HMR.
+ * Keeping this centralized also makes async startup abortable: a dataset
+ * switch cannot finish constructing an old world behind the new page. */
+function disposeApp(): void {
+  if (appDisposed) return;
+  appDisposed = true;
+  window.removeEventListener("pagehide", disposeApp);
+  appLifetime.abort();
+  engine.stop();
+
+  pointerController.dispose();
+  flightControls.dispose();
+  minimap?.dispose();
+  minimap = null;
+  inventoryPanel?.dispose();
+  inventoryPanel = null;
+  effectorField?.dispose();
+  effectorField = null;
+  extractionFlights.clear();
+  hotbar.dispose();
+  holdRing.dispose();
+  hud.dispose();
+  datasetPicker.dispose();
+
+  chunkStore?.dispose();
+  chunkStore = null;
+  voxelProxy?.dispose();
+  voxelProxy = null;
+  if (syntheticVoxelField) {
+    syntheticVoxelField.removeFromParent();
+    syntheticVoxelField.dispose();
+    syntheticVoxelField.geometry.dispose();
+    const materials = Array.isArray(syntheticVoxelField.material)
+      ? syntheticVoxelField.material
+      : [syntheticVoxelField.material];
+    for (const material of materials) material.dispose();
+    syntheticVoxelField = null;
+  }
+
+  highlightBox.removeFromParent();
+  highlightGeometry.dispose();
+  highlightMaterial.dispose();
+  hemiLight.removeFromParent();
+  sunLight.removeFromParent();
+  raycastTargets = null;
+  miningController = null;
+  xrayController = null;
+  engine.dispose();
+  delete (window as unknown as Record<string, unknown>).lsv;
+}
+
+window.addEventListener("pagehide", disposeApp, { once: true });
+import.meta.hot?.dispose(disposeApp);

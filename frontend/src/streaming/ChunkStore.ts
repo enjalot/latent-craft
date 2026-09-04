@@ -1,12 +1,17 @@
 import * as THREE from "three";
 import type { InstancedMesh2 } from "@three.ez/instanced-mesh";
-import { isAbortError } from "../net/fetchTyped.ts";
+import { isAbortError, isRetryableRequestError } from "../net/fetchTyped.ts";
 import { Ring, chunkPriority, ringFor, type RingRadii } from "./priority.ts";
 import type { ChunkLoader, LoadedChunk } from "./ChunkLoader.ts";
 import type { Manifest } from "./Manifest.ts";
 import type { ManifestChunk } from "../types.ts";
 import {
+  CHUNK_LOAD_MAX_RETRIES,
+  CHUNK_LOAD_RETRY_BASE_MS,
+  CHUNK_LOAD_RETRY_MAX_MS,
   CHUNK_UPDATE_MOVE_EPSILON,
+  CHUNK_UPDATE_TURN_EPSILON_RAD,
+  CONTAINER_RENDER_DISTANCE_CHUNKS,
   MAX_CONCURRENT_CHUNK_LOADS,
   MAX_RESIDENT_ATLAS_BYTES,
   MAX_RESIDENT_CHUNKS,
@@ -25,6 +30,8 @@ export interface ChunkStoreStats {
   /** Chunks currently pulled into a fetching ring by a teleport destination
    * rather than by the camera (see `prioritizeTeleport`). */
   teleportPinned: number;
+  /** Debug/perf invariant: should stay flat while the camera and load state do. */
+  classificationPasses: number;
 }
 
 export interface ChunkStoreEvents {
@@ -42,6 +49,12 @@ interface ChunkCandidate {
   distance: number;
   ring: Ring;
   priority: number;
+}
+
+interface ChunkFailure {
+  attempts: number;
+  retryAt: number;
+  permanent: boolean;
 }
 
 /**
@@ -72,18 +85,22 @@ export class ChunkStore {
 
   private readonly resident = new Map<number, LoadedChunk>();
   private readonly loading = new Map<number, AbortController>();
-  private readonly failed = new Set<number>();
+  private readonly failures = new Map<number, ChunkFailure>();
+  private readonly retryTimers = new Map<number, number>();
 
   /** Chunk centers never move, so they're computed once rather than per pass. */
   private readonly centers = new Map<number, THREE.Vector3>();
   private readonly candidates: ChunkCandidate[] = [];
   private readonly lastUpdatePosition = new THREE.Vector3(Number.NaN, 0, 0);
+  private readonly lastUpdateQuaternion = new THREE.Quaternion();
   private readonly forward = new THREE.Vector3();
   private readonly toChunk = new THREE.Vector3();
 
   private residentBytes = 0;
   private disposed = false;
   private warnedOverBudget = false;
+  private scheduleDirty = true;
+  private classificationPasses = 0;
 
   /** Destination of an in-flight teleport, or null. Acts as a SECOND camera
    * for ring classification while set — see `prioritizeTeleport`. */
@@ -94,6 +111,7 @@ export class ChunkStore {
     private readonly manifest: Manifest,
     private readonly loader: ChunkLoader,
     private readonly events: ChunkStoreEvents = {},
+    private readonly now: () => number = () => performance.now(),
   ) {
     this.group.name = "chunks";
     // Chunk meshes carry world-space instance positions and never move, so
@@ -122,11 +140,12 @@ export class ChunkStore {
     return {
       resident: this.resident.size,
       loading: this.loading.size,
-      failed: this.failed.size,
+      failed: this.failures.size,
       instances,
       bytes: this.residentBytes,
       candidates: this.candidates.length,
       teleportPinned: this.teleportPinned,
+      classificationPasses: this.classificationPasses,
     };
   }
 
@@ -164,6 +183,7 @@ export class ChunkStore {
   clearTeleportTarget(): void {
     this.teleportTarget = null;
     this.teleportPinned = 0;
+    this.scheduleDirty = true;
   }
 
   /**
@@ -175,17 +195,23 @@ export class ChunkStore {
     if (this.disposed) return;
     const position = camera.position;
     const moved = this.lastUpdatePosition.distanceToSquared(position);
+    const turnCos = Math.abs(this.lastUpdateQuaternion.dot(camera.quaternion));
+    const turned = 2 * Math.acos(Math.min(1, turnCos));
     if (
       !force &&
+      !this.scheduleDirty &&
       Number.isFinite(this.lastUpdatePosition.x) &&
       moved < CHUNK_UPDATE_MOVE_EPSILON * CHUNK_UPDATE_MOVE_EPSILON &&
-      this.loading.size >= MAX_CONCURRENT_CHUNK_LOADS
+      turned < CHUNK_UPDATE_TURN_EPSILON_RAD
     ) {
       return;
     }
+    this.scheduleDirty = false;
     this.lastUpdatePosition.copy(position);
+    this.lastUpdateQuaternion.copy(camera.quaternion);
 
     this.forward.set(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+    this.classificationPasses++;
     this.classify(position);
     this.evictOutOfRange();
     this.startLoads();
@@ -224,6 +250,9 @@ export class ChunkStore {
       }
 
       this.candidates.push({ entry, center, distance, ring, priority });
+      this.resident
+        .get(entry.chunk_id)
+        ?.containers.setDetailVisible(distance <= CONTAINER_RENDER_DISTANCE_CHUNKS);
     }
   }
 
@@ -254,13 +283,14 @@ export class ChunkStore {
           (c.ring === Ring.Load || c.ring === Ring.Prefetch) &&
           !this.resident.has(c.entry.chunk_id) &&
           !this.loading.has(c.entry.chunk_id) &&
-          !this.failed.has(c.entry.chunk_id),
+          this.canAttempt(c.entry.chunk_id),
       )
       // R0 always beats R1, then closest/most-in-front first.
       .sort((a, b) => a.ring - b.ring || a.priority - b.priority);
 
     for (const candidate of wanted) {
       if (this.loading.size >= MAX_CONCURRENT_CHUNK_LOADS) break;
+      this.clearFailure(candidate.entry.chunk_id, false);
       void this.beginLoad(candidate.entry);
     }
   }
@@ -277,14 +307,82 @@ export class ChunkStore {
       this.group.add(chunk.mesh);
       this.resident.set(entry.chunk_id, chunk);
       this.residentBytes += chunk.bytes;
+      const center = this.centers.get(entry.chunk_id);
+      if (center && Number.isFinite(this.lastUpdatePosition.x)) {
+        chunk.containers.setDetailVisible(
+          center.distanceTo(this.lastUpdatePosition) / this.manifest.chunkWorldSize <=
+            CONTAINER_RENDER_DISTANCE_CHUNKS,
+        );
+      }
+      this.clearFailure(entry.chunk_id, true);
       this.events.onResidencyChanged?.(entry.chunk_id, true);
     } catch (error) {
       if (!isAbortError(error)) {
-        this.failed.add(entry.chunk_id);
-        console.error(`chunk ${entry.chunk_id}: load failed`, error);
+        this.recordFailure(entry.chunk_id, error);
+      } else {
+        const interruptedRetry = this.failures.get(entry.chunk_id);
+        if (interruptedRetry && !interruptedRetry.permanent) {
+          // The camera left during a retry. Keep its attempt history, but let
+          // a later revisit try immediately instead of stranding it at the
+          // in-flight Infinity sentinel installed by clearFailure().
+          interruptedRetry.retryAt = this.now();
+        }
       }
     } finally {
-      if (this.loading.get(entry.chunk_id) === controller) this.loading.delete(entry.chunk_id);
+      if (this.loading.get(entry.chunk_id) === controller) {
+        this.loading.delete(entry.chunk_id);
+        // A slot just freed. Run scheduling exactly once next frame even if
+        // the camera has not moved, then return to the stationary fast path.
+        this.scheduleDirty = true;
+      }
+    }
+  }
+
+  private canAttempt(chunkId: number): boolean {
+    const failure = this.failures.get(chunkId);
+    return !failure || (!failure.permanent && failure.retryAt <= this.now());
+  }
+
+  private recordFailure(chunkId: number, error: unknown): void {
+    const attempts = (this.failures.get(chunkId)?.attempts ?? 0) + 1;
+    const retryable = isRetryableRequestError(error) && attempts <= CHUNK_LOAD_MAX_RETRIES;
+    if (!retryable) {
+      this.failures.set(chunkId, { attempts, retryAt: Number.POSITIVE_INFINITY, permanent: true });
+      console.error(`chunk ${chunkId}: load failed permanently after ${attempts} attempt(s)`, error);
+      return;
+    }
+
+    const delay = Math.min(
+      CHUNK_LOAD_RETRY_MAX_MS,
+      CHUNK_LOAD_RETRY_BASE_MS * 2 ** (attempts - 1),
+    );
+    this.failures.set(chunkId, { attempts, retryAt: this.now() + delay, permanent: false });
+    console.warn(`chunk ${chunkId}: load failed; retry ${attempts}/${CHUNK_LOAD_MAX_RETRIES} in ${delay} ms`, error);
+    const oldTimer = this.retryTimers.get(chunkId);
+    if (oldTimer !== undefined) globalThis.clearTimeout(oldTimer);
+    const timer = globalThis.setTimeout(() => {
+      this.retryTimers.delete(chunkId);
+      if (!this.disposed) this.scheduleDirty = true;
+    }, delay);
+    this.retryTimers.set(chunkId, timer);
+  }
+
+  private clearFailure(chunkId: number, resetAttempts: boolean): void {
+    const previous = this.failures.get(chunkId);
+    if (previous && !resetAttempts) {
+      // Preserve the attempt count across the retry that is about to start.
+      this.failures.set(chunkId, {
+        attempts: previous.attempts,
+        retryAt: Number.POSITIVE_INFINITY,
+        permanent: false,
+      });
+    } else {
+      this.failures.delete(chunkId);
+    }
+    const timer = this.retryTimers.get(chunkId);
+    if (timer !== undefined) {
+      globalThis.clearTimeout(timer);
+      this.retryTimers.delete(chunkId);
     }
   }
 
@@ -338,11 +436,16 @@ export class ChunkStore {
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
     this.clearTeleportTarget();
     for (const controller of this.loading.values()) controller.abort();
     this.loading.clear();
+    for (const timer of this.retryTimers.values()) globalThis.clearTimeout(timer);
+    this.retryTimers.clear();
+    this.failures.clear();
     for (const chunkId of [...this.resident.keys()]) this.evict(chunkId);
     this.group.removeFromParent();
+    this.loader.dispose();
   }
 }

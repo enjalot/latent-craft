@@ -3,6 +3,9 @@ import { resolveSubsetName, resolveThumbUrl, type PointIndex } from "../streamin
 import { INVENTORY_THUMBS_PAGE_SIZE } from "../config.ts";
 import { Lightbox } from "./Lightbox.ts";
 import { applyHudPanelChrome, applyHudTitle, HUD_CLASS } from "./hudPanel.ts";
+import type { Unsubscribe } from "./store.ts";
+
+const COLLAPSE_STORAGE_KEY = "lsv-inventory-collapsed";
 
 const PANEL_STYLE: Partial<CSSStyleDeclaration> = {
   position: "fixed",
@@ -46,6 +49,7 @@ interface StackRowView {
    * the row has to be rebuilt rather than reused — comparing identity here is
    * what catches that. */
   stack: InventoryStack;
+  revision: number;
   update(): void;
 }
 
@@ -100,6 +104,8 @@ export class InventoryPanel {
   /** Right-hand half of the header strip — carries the live stack/point
    * counts, so the (static) "Inventory" title next to it never reflows. */
   private readonly headerCountEl: HTMLElement;
+  private readonly toggleGlyph: HTMLElement;
+  private readonly bodyEl: HTMLElement;
   private readonly listEl: HTMLElement;
   private readonly emptyEl: HTMLElement;
   /** Public so `main.ts` can hang it off `window.lsv` for the headless
@@ -121,6 +127,8 @@ export class InventoryPanel {
    * `validateHover` for why this is tracked rather than just fired-and-
    * forgotten. */
   private hoveredStackId: string | null = null;
+  private collapsed = false;
+  private readonly unsubscribe: Unsubscribe;
 
   constructor(
     container: HTMLElement,
@@ -141,7 +149,12 @@ export class InventoryPanel {
       gap: "10px",
       padding: "9px 12px 8px",
       flex: "none",
+      cursor: "pointer",
+      userSelect: "none",
     } satisfies Partial<CSSStyleDeclaration>);
+    this.headerEl.title = "Collapse inventory";
+    this.headerEl.tabIndex = 0;
+    this.headerEl.setAttribute("role", "button");
     const headerTitleEl = document.createElement("span");
     headerTitleEl.textContent = "Inventory";
     this.headerCountEl = document.createElement("span");
@@ -149,8 +162,31 @@ export class InventoryPanel {
     // The counts run long ("12 STACKS · 123,456 PTS"); at the title's tracking
     // that would wrap the header, so this half drops the letter-spacing.
     this.headerCountEl.style.letterSpacing = "0.04em";
-    this.headerEl.append(headerTitleEl, this.headerCountEl);
+    this.toggleGlyph = document.createElement("span");
+    this.toggleGlyph.style.letterSpacing = "0";
+    const headerRight = document.createElement("span");
+    Object.assign(headerRight.style, {
+      display: "flex",
+      alignItems: "baseline",
+      gap: "8px",
+    } satisfies Partial<CSSStyleDeclaration>);
+    headerRight.append(this.headerCountEl, this.toggleGlyph);
+    this.headerEl.append(headerTitleEl, headerRight);
+    this.headerEl.addEventListener("click", () => this.setCollapsed(!this.collapsed));
+    this.headerEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      this.setCollapsed(!this.collapsed);
+    });
     this.root.appendChild(this.headerEl);
+
+    this.bodyEl = document.createElement("div");
+    Object.assign(this.bodyEl.style, {
+      display: "flex",
+      flexDirection: "column",
+      minHeight: "0",
+    } satisfies Partial<CSSStyleDeclaration>);
+    this.root.appendChild(this.bodyEl);
 
     this.emptyEl = document.createElement("div");
     this.emptyEl.textContent = "Hold click on a voxel to extract its points into your inventory.";
@@ -159,14 +195,14 @@ export class InventoryPanel {
       padding: "10px 12px",
       letterSpacing: "0.02em",
     } satisfies Partial<CSSStyleDeclaration>);
-    this.root.appendChild(this.emptyEl);
+    this.bodyEl.appendChild(this.emptyEl);
 
     this.listEl = document.createElement("div");
     this.listEl.classList.add(HUD_CLASS.scroll);
     Object.assign(this.listEl.style, {
       overflowY: "auto",
     } satisfies Partial<CSSStyleDeclaration>);
-    this.root.appendChild(this.listEl);
+    this.bodyEl.appendChild(this.listEl);
 
     // Coarse safety net for the row-level hover handlers below: whatever the
     // per-row `pointerleave`s did or didn't fire, leaving the panel entirely
@@ -178,17 +214,9 @@ export class InventoryPanel {
     container.appendChild(this.root);
     this.lightbox = new Lightbox(container, { pointsId: options.pointsId });
 
-    void this.options
-      .getPointIndex()
-      .then((index) => {
-        this.pointIndex = index;
-      })
-      .catch(() => {
-        /* already logged by the row that requested it */
-      });
-
     this.render(inventory.stacks);
-    inventory.store.subscribe((stacks) => this.render(stacks));
+    this.unsubscribe = inventory.store.subscribe((stacks) => this.render(stacks));
+    this.setCollapsed(this.readPersistedCollapsed());
   }
 
   /**
@@ -219,7 +247,6 @@ export class InventoryPanel {
    * row:pointerenter` fired as a unit right after the DOM mutation.
    *
    * No ordering fix wins that race reliably, because the spurious event is
-   * indistinguishable from a real one at dispatch time. So the hover state is
    * made SELF-CORRECTING instead: `:hover` is Chromium's own answer to "is the
    * pointer over this element", it is always up to date by the next frame, and
    * one frame of a stuck highlight is invisible.
@@ -238,6 +265,37 @@ export class InventoryPanel {
     if (id === this.hoveredStackId) return;
     this.hoveredStackId = id;
     this.options.onHoverStack(stack);
+  }
+
+  private readPersistedCollapsed(): boolean {
+    try {
+      return localStorage.getItem(COLLAPSE_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  private setCollapsed(collapsed: boolean): void {
+    this.collapsed = collapsed;
+    this.bodyEl.style.display = collapsed ? "none" : "flex";
+    this.headerEl.classList.toggle(HUD_CLASS.titleBar, !collapsed);
+    this.headerEl.title = collapsed ? "Expand inventory" : "Collapse inventory";
+    this.headerEl.setAttribute("aria-expanded", String(!collapsed));
+    this.toggleGlyph.textContent = collapsed ? "[+]" : "[-]";
+    if (collapsed) this.setHovered(null);
+    try {
+      localStorage.setItem(COLLAPSE_STORAGE_KEY, collapsed ? "1" : "0");
+    } catch {
+      // Persistence is optional in locked-down/private contexts.
+    }
+  }
+
+  private getPointIndex(): Promise<PointIndex> {
+    if (this.pointIndex) return Promise.resolve(this.pointIndex);
+    return this.options.getPointIndex().then((index) => {
+      this.pointIndex = index;
+      return index;
+    });
   }
 
   private render(stacks: InventoryStack[]): void {
@@ -280,7 +338,10 @@ export class InventoryPanel {
       const view = this.rows.get(stacks[i].id)!;
       const current = this.listEl.children[i];
       if (current !== view.el) this.listEl.insertBefore(view.el, current ?? null);
-      view.update();
+      if (view.revision !== stacks[i].revision) {
+        view.update();
+        view.revision = stacks[i].revision;
+      }
     }
   }
 
@@ -323,8 +384,7 @@ export class InventoryPanel {
       flex: "none",
     } satisfies Partial<CSSStyleDeclaration>);
     summary.appendChild(thumb);
-    this.options
-      .getPointIndex()
+    this.getPointIndex()
       .then((index) => {
         const url = resolveThumbUrl(index, stack.reprRowId);
         if (url) thumb.src = url;
@@ -494,7 +554,7 @@ export class InventoryPanel {
      * behaves correctly both when the stack GREW (a new extraction cycle
      * appended points) and when it SHRANK (points were returned). */
     const appendPage = async (): Promise<void> => {
-      const index = await this.options.getPointIndex();
+      const index = await this.getPointIndex();
       const frag = document.createDocumentFragment();
       let added = 0;
       for (const rowId of stack.rowIds) {
@@ -511,6 +571,12 @@ export class InventoryPanel {
       updateGridControls();
     };
 
+    const appendPageSafely = (): void => {
+      void appendPage().catch((error: unknown) => {
+        console.error("[InventoryPanel] point_index load failed", error);
+      });
+    };
+
     const updateGridControls = (): void => {
       const remaining = stack.rowIds.length - cells.size;
       showMoreBtn.textContent = `Show ${Math.min(remaining, INVENTORY_THUMBS_PAGE_SIZE).toLocaleString()} more (${remaining.toLocaleString()} left)`;
@@ -520,7 +586,7 @@ export class InventoryPanel {
 
     showMoreBtn.addEventListener("click", (event) => {
       event.stopPropagation();
-      void appendPage();
+      appendPageSafely();
     });
 
     returnAllBtn.addEventListener("click", (event) => {
@@ -535,7 +601,7 @@ export class InventoryPanel {
       if (expanded && !builtOnce) {
         builtOnce = true;
         grid.append(hint, showMoreBtn, returnAllBtn);
-        void appendPage();
+        appendPageSafely();
       }
     });
 
@@ -560,6 +626,14 @@ export class InventoryPanel {
     };
 
     update();
-    return { el: row, stack, update };
+    return { el: row, stack, revision: stack.revision, update };
+  }
+
+  dispose(): void {
+    this.unsubscribe();
+    this.setHovered(null);
+    this.lightbox.dispose();
+    this.root.remove();
+    this.rows.clear();
   }
 }

@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import struct
 from types import SimpleNamespace
 
 import numpy as np
@@ -15,6 +16,7 @@ import pytest
 from PIL import Image
 
 from lsvoxel.chunkpack.build import assign_and_build, derive_voxel_proxy, validate_chunks
+from lsvoxel.chunkpack.atlas import compact_tiles_per_side
 from lsvoxel.chunkpack.manifest import file_entry
 from lsvoxel.chunkpack.metablob import read_chunk_meta
 from lsvoxel.chunkpack.pointindex import read_point_index
@@ -92,6 +94,15 @@ def test_assign_and_build_synthetic(pack):
     assert result["n_points"] == n
     assert result["n_chunks"] > 0
     assert (out_dir / "manifest.json").exists()
+    assert pack.manifest["atlas"]["layout"] == "compact-occupied-v1"
+    for chunk in pack.manifest["chunks"]:
+        side = chunk["atlas_tiles_per_side"]
+        assert side == compact_tiles_per_side(chunk["n_occupied_voxels"], 64)
+        assert chunk["atlas_size_px"] == side * pack.manifest["atlas"]["tile_px"]
+        # KTX2 levelCount is the u32 at byte offset 40. Atlases deliberately
+        # carry level 0 only; lower mips cross tile boundaries and are unused.
+        raw = (out_dir / chunk["atlas_path"]).read_bytes()
+        assert struct.unpack_from("<I", raw, 40)[0] == 1
 
     # validate_chunks re-derives every byte count/hash and must agree
     v = validate_chunks(out_dir)

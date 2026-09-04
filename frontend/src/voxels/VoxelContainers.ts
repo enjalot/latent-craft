@@ -273,6 +273,8 @@ export class VoxelContainers {
   /** 1 while the Effector Field is hiding voxel `i` (see `setSuppressed`). */
   private readonly suppressed: Uint8Array;
   private suppressedCount = 0;
+  private xrayActive = false;
+  private detailVisible = true;
 
   private readonly geometry: THREE.BoxGeometry;
   private readonly material: THREE.ShaderMaterial;
@@ -404,7 +406,20 @@ export class VoxelContainers {
    * hidden.
    */
   setXrayActive(active: boolean): void {
-    this.mesh.visible = !active;
+    this.xrayActive = active;
+    this.syncMeshVisibility();
+  }
+
+  /** Distance LOD: cages are close-range detail and disappear before their
+   * full-face discard shader becomes expensive for tiny on-screen voxels. */
+  setDetailVisible(visible: boolean): void {
+    if (visible === this.detailVisible) return;
+    this.detailVisible = visible;
+    this.syncMeshVisibility();
+  }
+
+  private syncMeshVisibility(): void {
+    this.mesh.visible = !this.xrayActive && this.detailVisible;
   }
 
   dispose(): void {

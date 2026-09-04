@@ -142,16 +142,23 @@ export class MinimapPack {
     for (let i = 0; i < records; i++) {
       const packed = words[i * 2 + 1];
       const rowId = packed & ROW_ID_MASK;
-      if (rowId >= this.nPoints) continue; // corrupt record; skip rather than throw
+      if (rowId >= this.nPoints) {
+        throw new Error(`xy_id.bin: record ${i} has out-of-range row_id ${rowId}`);
+      }
+      if (seen[rowId] !== 0) {
+        throw new Error(`xy_id.bin: duplicate row_id ${rowId} at record ${i}`);
+      }
       this.qx[rowId] = shorts[i * 4];
       this.qy[rowId] = shorts[i * 4 + 1];
       this.corpus[rowId] = packed >>> 28;
-      if (seen[rowId] === 0) {
-        seen[rowId] = 1;
-        filled++;
-      }
+      seen[rowId] = 1;
+      filled++;
     }
     this.rowsFilled = filled;
+
+    if (filled !== this.nPoints) {
+      throw new Error(`xy_id.bin filled ${filled}/${this.nPoints} row_ids`);
+    }
 
     // Counting sort into the bucket grid: one pass to count, a prefix sum, one
     // pass to scatter.
@@ -169,15 +176,6 @@ export class MinimapPack {
     this.binStart = binStart;
     this.binRows = binRows;
 
-    if (filled !== this.nPoints) {
-      // Not fatal — an unfilled row_id just reads as q=(0,0), i.e. the pack's
-      // top-left corner — but it means the pack and the chunk pack disagree
-      // about the row_id space, which is worth shouting about.
-      console.warn(
-        `[minimap] xy_id.bin filled ${filled}/${this.nPoints} row_ids — ` +
-          `unfilled rows will resolve to the frame's top-left corner`,
-      );
-    }
   }
 
   get datasetId(): string {

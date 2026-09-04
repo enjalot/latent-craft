@@ -69,7 +69,8 @@ export class Hud {
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       position: "fixed",
-      top: "14px",
+      // DatasetPicker occupies the first strip in this top-left dock.
+      top: "58px",
       left: "14px",
       fontSize: "11px",
       lineHeight: "1.65",
@@ -90,6 +91,8 @@ export class Hud {
       userSelect: "none",
     } satisfies Partial<CSSStyleDeclaration>);
     this.header.title = "Toggle HUD";
+    this.header.tabIndex = 0;
+    this.header.setAttribute("role", "button");
 
     const label = document.createElement("span");
     label.textContent = "Telemetry";
@@ -102,6 +105,11 @@ export class Hud {
     this.header.appendChild(label);
     this.header.appendChild(this.toggleGlyph);
     this.header.addEventListener("click", () => this.setCollapsed(!this.collapsed));
+    this.header.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      this.setCollapsed(!this.collapsed);
+    });
 
     this.body = document.createElement("div");
     this.body.classList.add(HUD_CLASS.readout);
@@ -136,6 +144,7 @@ export class Hud {
     this.header.classList.toggle(HUD_CLASS.titleBar, !collapsed);
     this.header.style.padding = collapsed ? "5px 10px" : "5px 10px 4px";
     this.toggleGlyph.textContent = collapsed ? "[+]" : "[-]";
+    this.header.setAttribute("aria-expanded", String(!collapsed));
     try {
       localStorage.setItem(COLLAPSE_STORAGE_KEY, collapsed ? "1" : "0");
     } catch {
@@ -178,5 +187,9 @@ export class Hud {
       this.body.textContent = text;
       this.lastText = text;
     }
+  }
+
+  dispose(): void {
+    this.root.remove();
   }
 }

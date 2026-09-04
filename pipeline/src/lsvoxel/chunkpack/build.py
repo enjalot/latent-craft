@@ -1,16 +1,20 @@
 """Orchestrates a full chunk-pack build: frame -> assign -> per-chunk atlas+meta ->
 whole-dataset point_index/row_to_voxel/proxy/voxel_proxy -> manifest.json.
 
-One memmap-safe sorted-boundary pass for the point_ids storage order (np.lexsort +
-np.diff/np.flatnonzero over sorted keys), mirroring map_pack.py's own idiom rather
-than a per-chunk pandas groupby for the (potentially ~1M-row) point-level work. The
-smaller (~1 row per occupied voxel) representative-selection table does use a pandas
-groupby (see assign.select_representatives) — fine at that scale.
+Sorted-boundary NumPy passes are used for both representative selection and point-id
+storage order, avoiding full N-row pandas groupby/sort intermediates for million-row
+packs.
 """
 from __future__ import annotations
 
+import ctypes
+import errno
 import json
+import os
 from pathlib import Path
+import shutil
+import tempfile
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -28,6 +32,123 @@ from . import voxel_proxy as voxel_proxy_mod
 
 
 def assign_and_build(
+    dataset_id: str,
+    points_df: pd.DataFrame,
+    coords3d: np.ndarray,
+    num_voxels: int,
+    thumb_source: ThumbnailSource,
+    out_dir: Path,
+    subsets: dict[str, int],
+    thumb_url_template: str,
+    umap_run: str,
+    points_table_path: Path,
+    voxels_per_chunk: int = 16,
+    atlas_px: int = 2048,
+    tile_px: int = 32,
+    basisu_bin: str = "basisu",
+    tmp_dir: Path | None = None,
+) -> dict:
+    """Build and validate in a sibling staging directory, then publish as one pack.
+
+    On Linux an existing pack is exchanged with the staged pack atomically via
+    ``renameat2(RENAME_EXCHANGE)``. Other platforms use a rollback-safe two-rename
+    fallback: clients may briefly see no directory, but can never see half a build.
+    """
+    out_dir = Path(out_dir)
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{out_dir.name}.building-", dir=out_dir.parent))
+    build_tmp_dir = tmp_dir
+    if tmp_dir is not None:
+        try:
+            if Path(tmp_dir).resolve().is_relative_to(out_dir.resolve()):
+                build_tmp_dir = staging / "_tmp"
+        except OSError:
+            pass
+
+    published = False
+    try:
+        result = _assign_and_build_into(
+            dataset_id=dataset_id,
+            points_df=points_df,
+            coords3d=coords3d,
+            num_voxels=num_voxels,
+            thumb_source=thumb_source,
+            out_dir=staging,
+            subsets=subsets,
+            thumb_url_template=thumb_url_template,
+            umap_run=umap_run,
+            points_table_path=points_table_path,
+            voxels_per_chunk=voxels_per_chunk,
+            atlas_px=atlas_px,
+            tile_px=tile_px,
+            basisu_bin=basisu_bin,
+            tmp_dir=build_tmp_dir,
+        )
+        manifest_mod.validate_manifest(staging)
+        _publish_staged_pack(staging, out_dir)
+        published = True
+        return {**result, "manifest_path": out_dir / "manifest.json"}
+    finally:
+        if not published and staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+
+
+def _rename_exchange(left: Path, right: Path) -> bool:
+    """Atomically exchange two paths on Linux; return false when unsupported."""
+    if os.name != "posix":
+        return False
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        return False
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.restype = ctypes.c_int
+    at_fdcwd = -100
+    rename_exchange = 2
+    result = renameat2(
+        at_fdcwd,
+        os.fsencode(left),
+        at_fdcwd,
+        os.fsencode(right),
+        rename_exchange,
+    )
+    if result == 0:
+        return True
+    error = ctypes.get_errno()
+    if error in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}:
+        return False
+    raise OSError(error, os.strerror(error), f"{left} <-> {right}")
+
+
+def _publish_staged_pack(staging: Path, out_dir: Path) -> None:
+    if not out_dir.exists():
+        staging.replace(out_dir)
+        return
+    if not out_dir.is_dir() or out_dir.is_symlink():
+        raise ValueError(f"refusing to replace non-directory pack target: {out_dir}")
+    if _rename_exchange(staging, out_dir):
+        try:
+            shutil.rmtree(staging)
+        except OSError as error:
+            warnings.warn(f"published pack but could not remove previous build at {staging}: {error}")
+        return
+
+    backup = out_dir.with_name(f".{out_dir.name}.previous")
+    if backup.exists():
+        raise FileExistsError(f"stale publication backup exists: {backup}")
+    out_dir.replace(backup)
+    try:
+        staging.replace(out_dir)
+    except BaseException:
+        backup.replace(out_dir)
+        raise
+    try:
+        shutil.rmtree(backup)
+    except OSError as error:
+        warnings.warn(f"published pack but could not remove previous build at {backup}: {error}")
+
+
+def _assign_and_build_into(
     dataset_id: str,
     points_df: pd.DataFrame,
     coords3d: np.ndarray,
@@ -64,6 +185,15 @@ def assign_and_build(
     print("[build] assigning points to voxels/chunks ...", flush=True)
     assign = assign_mod.assign_points_to_chunks(coords_norm, num_voxels, voxels_per_chunk)
     reps = assign_mod.select_representatives(coords_norm, assign, num_voxels)
+
+    max_voxel_count = int(reps["n_points"].max()) if len(reps) else 0
+    if max_voxel_count > np.iinfo(np.uint16).max:
+        worst = reps.loc[reps["n_points"].idxmax()]
+        raise ValueError(
+            "voxel occupancy exceeds meta.bin's uint16 limit: "
+            f"chunk={int(worst['chunk_id'])} local_voxel={int(worst['local_voxel_id'])} "
+            f"count={max_voxel_count}; increase num_voxels or revise the binary format"
+        )
 
     voxels_per_chunk3 = voxels_per_chunk**3
     chunks_per_axis = num_voxels // voxels_per_chunk
@@ -107,7 +237,7 @@ def assign_and_build(
         c_row_ids = row_id_sorted[s:e]
         n_points_chunk = e - s
 
-        g = reps_by_chunk[int(chunk_id)]
+        g = reps_by_chunk[int(chunk_id)].sort_values("local_voxel_id")
         occ_local_ids = g["local_voxel_id"].to_numpy()
         occ_repr_row_ids = g["repr_row_id"].to_numpy()
         occ_counts = g["n_points"].to_numpy()
@@ -123,18 +253,22 @@ def assign_and_build(
         for lid, repr_row, cnt in zip(
             occ_local_ids.tolist(), occ_repr_row_ids.tolist(), occ_counts.tolist()
         ):
-            voxel_records[lid]["count"] = min(cnt, 65535)
+            voxel_records[lid]["count"] = cnt
             voxel_records[lid]["point_offset"] = offset_by_local_id[lid]
             voxel_records[lid]["repr_row_id"] = repr_row
             voxel_records[lid]["flags"] = metablob.FLAG_HAS_ATLAS_TILE
 
-        atlas_img, n_blank = atlas_mod.build_chunk_atlas_png(
-            occ_local_ids, occ_repr_row_ids, thumb_source, tile_px=tile_px, atlas_px=atlas_px
+        atlas_img, n_blank, chunk_tiles_per_side = atlas_mod.build_compact_chunk_atlas_png(
+            occ_local_ids,
+            occ_repr_row_ids,
+            thumb_source,
+            tile_px=tile_px,
+            max_atlas_px=atlas_px,
         )
         n_blank_tiles += n_blank
-        for lid in occ_local_ids.tolist():
+        for tile_index, lid in enumerate(occ_local_ids.tolist()):
             voxel_records[lid]["color_rgb"] = atlas_mod.mean_tile_color(
-                atlas_img, lid, tile_px, tiles_per_side
+                atlas_img, tile_index, tile_px, chunk_tiles_per_side
             )
         voxel_proxy_runs.append(voxel_proxy_mod.records_for_chunk(int(chunk_id), voxel_records))
 
@@ -173,6 +307,8 @@ def assign_and_build(
             {
                 "chunk_id": int(chunk_id), "cx": cx, "cy": cy, "cz": cz, "bbox": bbox,
                 "n_occupied_voxels": len(occ_local_ids), "n_points": n_points_chunk,
+                "atlas_size_px": atlas_img.width,
+                "atlas_tiles_per_side": chunk_tiles_per_side,
                 "atlas_path": atlas_fe["path"], "atlas_bytes": atlas_fe["bytes"],
                 "atlas_sha256": atlas_fe["sha256"],
                 "meta_path": meta_fe["path"], "meta_bytes": meta_fe["bytes"],
@@ -233,7 +369,7 @@ def assign_and_build(
     }
     atlas_cfg = {
         "size_px": atlas_px, "tile_px": tile_px, "tiles_per_side": tiles_per_side,
-        "format": "ktx2-etc1s", "alpha": False,
+        "format": "ktx2-etc1s", "alpha": False, "layout": "compact-occupied-v1",
     }
     point_source = {"points_table": str(points_table_path), "umap_run": umap_run, "n_points": n}
 

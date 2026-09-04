@@ -58,12 +58,16 @@ export function parsePointIndex(
   subsets: Record<string, number>,
   thumbUrlTemplate: string,
   thumbsBaseUrl: string = THUMBS_BASE_PATH,
+  expectedRecords?: number,
 ): PointIndex {
   const n = Math.floor(buffer.byteLength / RECORD_BYTES);
   if (n * RECORD_BYTES !== buffer.byteLength) {
     throw new Error(
       `point_index.bin: size ${buffer.byteLength}B isn't a multiple of ${RECORD_BYTES}B`,
     );
+  }
+  if (expectedRecords !== undefined && n !== expectedRecords) {
+    throw new Error(`point_index.bin has ${n} records, manifest says ${expectedRecords} points`);
   }
   const view = new DataView(buffer);
   const subsetCode = new Uint8Array(n);
@@ -87,7 +91,13 @@ export async function loadPointIndex(
   signal?: AbortSignal,
 ): Promise<PointIndex> {
   const buffer = await fetchArrayBuffer(manifest.url(manifest.raw.point_index.path), signal);
-  return parsePointIndex(buffer, manifest.raw.subsets, manifest.raw.thumb_url_template, thumbsBaseUrl);
+  return parsePointIndex(
+    buffer,
+    manifest.raw.subsets,
+    manifest.raw.thumb_url_template,
+    thumbsBaseUrl,
+    manifest.totalPoints,
+  );
 }
 
 /**

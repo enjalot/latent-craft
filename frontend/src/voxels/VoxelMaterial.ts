@@ -4,8 +4,8 @@ import { ATLAS_TILE_INSET_TEXELS, VOXEL_COVERAGE_DITHER, VOXEL_UNDERLIGHT } from
 
 /**
  * Per-instance uniform schema every voxel chunk mesh declares. `tileIndex` is
- * the voxel's `local_voxel_id`, which the pipeline guarantees IS its atlas tile
- * index (16^3 voxels per chunk == 64^2 tiles per atlas).
+ * either local_voxel_id (legacy fixed atlases) or the occupied instance index
+ * (compact atlases).
  *
  * We use `InstancedMesh2.initUniformsPerInstance` rather than hand-rolling an
  * `InstancedBufferAttribute`: InstancedMesh2 renders *indirectly* (instances
@@ -101,7 +101,7 @@ const VOXEL_OUTPUT_FRAGMENT = /* glsl */ `
 export interface VoxelMaterialParams {
   /** The chunk's KTX2 atlas. */
   atlas: THREE.Texture;
-  /** `manifest.atlas.tiles_per_side` (64 for a 2048px sheet of 32px tiles). */
+  /** This chunk's atlas tiles per side. */
   tilesPerSide: number;
   /** `manifest.atlas.tile_px`, used only to size the anti-bleed inset. */
   tilePx: number;

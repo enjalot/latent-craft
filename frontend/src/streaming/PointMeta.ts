@@ -1,4 +1,5 @@
-import { resolvePointMetaUrl } from "../config.ts";
+import { POINT_META_CACHE_MAX_ROWS, resolvePointMetaUrl } from "../config.ts";
+import { WeightedLruCache } from "../utils/WeightedLruCache.ts";
 
 /**
  * One row of a points table's `point_meta.bin`, as served by the data
@@ -66,25 +67,43 @@ export type PointMetaLookup = PointMeta | null | undefined;
  * `console.warn`: that is the server's answer, however malformed, and
  * retrying would only warn again.
  */
-const cache = new Map<string, PointMeta | null>();
+const cache = new WeightedLruCache<string, PointMeta | null>({
+  maxEntries: POINT_META_CACHE_MAX_ROWS,
+  maxWeight: Number.MAX_SAFE_INTEGER,
+  weightOf: () => 1,
+});
 const inFlight = new Map<string, Promise<PointMetaLookup>>();
 
-export async function fetchPointMeta(pointsId: string, rowId: number): Promise<PointMetaLookup> {
+export async function fetchPointMeta(
+  pointsId: string,
+  rowId: number,
+  signal?: AbortSignal,
+): Promise<PointMetaLookup> {
   const key = `${pointsId}:${rowId}`;
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
+
+  // A caller with a lifetime signal wants ownership of its request so it can
+  // actually stop stale carousel navigation. Unsignaled callers retain the
+  // shared in-flight path below.
+  if (signal) return fetchAndCache(key, pointsId, rowId, signal);
   const pending = inFlight.get(key);
   if (pending) return pending;
 
-  const request = fetchPointMetaUncached(pointsId, rowId)
-    .catch(() => undefined)
-    .then((meta) => {
-      if (meta !== undefined) cache.set(key, meta);
-      inFlight.delete(key);
-      return meta;
-    });
+  const request = fetchAndCache(key, pointsId, rowId).finally(() => inFlight.delete(key));
   inFlight.set(key, request);
   return request;
+}
+
+async function fetchAndCache(
+  key: string,
+  pointsId: string,
+  rowId: number,
+  signal?: AbortSignal,
+): Promise<PointMetaLookup> {
+  const meta = await fetchPointMetaUncached(pointsId, rowId, signal).catch(() => undefined);
+  if (meta !== undefined) cache.set(key, meta);
+  return meta;
 }
 
 /** The cached answer for a row, if it has already been fetched — for callers
@@ -92,11 +111,15 @@ export async function fetchPointMeta(pointsId: string, rowId: number): Promise<P
  * a keypress) without waiting a round-trip they already paid for. `undefined`
  * when the row has never been looked up, or its last lookup failed. */
 export function peekPointMeta(pointsId: string, rowId: number): PointMetaLookup {
-  return cache.get(`${pointsId}:${rowId}`);
+  return cache.peek(`${pointsId}:${rowId}`);
 }
 
-async function fetchPointMetaUncached(pointsId: string, rowId: number): Promise<PointMetaLookup> {
-  const response = await fetch(resolvePointMetaUrl(pointsId, rowId));
+async function fetchPointMetaUncached(
+  pointsId: string,
+  rowId: number,
+  signal?: AbortSignal,
+): Promise<PointMetaLookup> {
+  const response = await fetch(resolvePointMetaUrl(pointsId, rowId), { signal });
   // 404 is the server's "no such row / no such table" — silent, final. Any
   // other failure status is the proxy or the server being unwell, not an
   // answer about the row.

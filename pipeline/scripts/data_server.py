@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Static file server for /data/latent-scope-3d, with CORS enabled so the frontend
-(served from a different port by Vite) can fetch chunk manifests/atlases/meta.bin
-directly. Same "static files, no backend" pattern as mapviewer's gsv:8800 host.
+"""Static file server for /data/latent-scope-3d. The Vite development server
+proxies the frontend's same-origin pack requests here; CORS remains enabled for
+direct clients and production arrangements that use a separate data origin.
+Same "static files, no backend" pattern as mapviewer's gsv:8800 host.
 
 Two dynamic routes sit alongside the static tree:
 
@@ -34,10 +35,11 @@ or pandas — `lsvoxel.monet_thumbs` and `lsvoxel.point_meta`'s reader are delib
 stdlib-only so they can be imported here. Don't add a numpy/pandas import to this
 file or to those modules.
 
-Usage: python3 data_server.py [port] [root]
+Run ``python3 data_server.py --help`` for options.
 """
 from __future__ import annotations
 
+import argparse
 import functools
 import json
 import re
@@ -200,13 +202,38 @@ def configure(root: str) -> None:
         print(f"WARNING: /meta route disabled ({_META_IMPORT_ERROR})", flush=True)
 
 
-def main() -> int:
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8802
-    root = sys.argv[2] if len(sys.argv) > 2 else "/data/latent-scope-3d"
-    configure(root)
-    handler = functools.partial(CORSRequestHandler, directory=root)
-    httpd = ThreadingHTTPServer(("0.0.0.0", port), handler)
-    print(f"serving {root} on 0.0.0.0:{port} (CORS enabled)", flush=True)
+def _port(value: str) -> int:
+    port = int(value)
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+    return port
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Serve latent-scope-3d packs, metadata, and MONET thumbnails.",
+        epilog=(
+            "Positional order remains compatible with the original script: "
+            "data_server.py [port] [root]."
+        ),
+    )
+    parser.add_argument("port", nargs="?", type=_port, default=8802, help="TCP port (default: 8802)")
+    parser.add_argument(
+        "root",
+        nargs="?",
+        default="/data/latent-scope-3d",
+        help="static data root (default: /data/latent-scope-3d)",
+    )
+    parser.add_argument("--bind", default="0.0.0.0", help="listen address (default: 0.0.0.0)")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    configure(args.root)
+    handler = functools.partial(CORSRequestHandler, directory=args.root)
+    httpd = ThreadingHTTPServer((args.bind, args.port), handler)
+    print(f"serving {args.root} on {args.bind}:{args.port} (CORS enabled)", flush=True)
     httpd.serve_forever()
     return 0
 

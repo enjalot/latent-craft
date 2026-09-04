@@ -28,6 +28,8 @@ export interface HoldProgressRing {
   setProgress(fraction: number): void;
   /** Cursor position in CSS pixels, viewport-relative. */
   setPosition(xPx: number, yPx: number): void;
+  /** Removes the ring from the document. */
+  dispose(): void;
 }
 
 const SIZE = 34;
@@ -162,6 +164,9 @@ export function createHoldProgressRing(container: HTMLElement): HoldProgressRing
     },
     setPosition(xPx, yPx) {
       root.style.transform = `translate(${xPx}px, ${yPx}px)`;
+    },
+    dispose() {
+      root.remove();
     },
   };
 }
