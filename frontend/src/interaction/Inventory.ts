@@ -135,8 +135,8 @@ export class Inventory {
     return true;
   }
 
-  /** Removes a stack outright (whole-voxel restore, see
-   * `MiningController.restoreAll`) — a no-op if the id isn't present, so
+  /** Removes a stack outright (a whole voxel's worth going back at once, see
+   * `MiningController.returnStack`) — a no-op if the id isn't present, so
    * callers don't need to check first. */
   removeStack(id: string): void {
     if (!this.byId.delete(id)) return;

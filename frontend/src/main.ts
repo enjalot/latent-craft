@@ -207,7 +207,7 @@ const pointerController = new PointerController(engine.renderer.domElement, flig
     // voxels that can be held are ones with points still in them: a fully
     // drained voxel is pass-through to the cursor (see `raycaster` above), so
     // it can never be the target here.
-    holdRing.show("mine");
+    holdRing.show();
   },
   onHoldCancel: () => {
     holdElapsedSeconds = 0;

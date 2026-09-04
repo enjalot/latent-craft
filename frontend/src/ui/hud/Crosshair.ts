@@ -1,5 +1,5 @@
 /**
- * Cursor-anchored mine/restore progress ring.
+ * Cursor-anchored extraction progress ring.
  *
  * Phase 1-3 had a fixed center-screen crosshair, because the pointer was
  * locked/hidden and hover targeting always fired from the middle of the
@@ -7,16 +7,21 @@
  * dropped pointer lock (see `FlightControls.ts`), so the OS cursor is always
  * visible and IS the reticle now; a redundant fixed-center or
  * cursor-mirroring dot would just double up on what the browser already
- * draws. What the OS cursor can't show is hold-to-mine/restore *progress*,
- * so this component is repurposed for exactly that: a small ring, positioned
+ * draws. What the OS cursor can't show is hold-to-extract *progress*, so
+ * this component is repurposed for exactly that: a small ring, positioned
  * at the live cursor location, hidden except while a hold is actually armed.
  * Idle hover feedback (is anything targetable here at all) is handled far
  * more cheaply via `main.ts` swapping the canvas's CSS `cursor` style —
  * no DOM/position updates needed for that case.
+ *
+ * There used to be a second, amber "restore" tint for holding on a drained
+ * voxel to push its stack back; drained voxels are pass-through to the
+ * cursor now and returns go through the inventory, so the ring has one job
+ * and one colour.
  */
 export interface HoldProgressRing {
-  /** Shows the ring at zero progress, tinted for the given action. */
-  show(kind: "mine" | "restore"): void;
+  /** Shows the ring at zero progress. */
+  show(): void;
   /** Hides the ring. Safe to call even if already hidden. */
   hide(): void;
   /** 0..1 fraction of the hold's duration elapsed so far. */
@@ -29,14 +34,10 @@ const SIZE = 34;
 const RADIUS = 12;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
-const RING_COLORS: Record<"mine" | "restore", string> = {
-  // FUNCTIONAL colors, not chrome: the teal is the same hover-highlight teal
-  // the 3D wireframe uses, and the amber is the same amber as the minimap
-  // flashlight. Phase 6's cyan skin deliberately does not touch these — the
-  // ring's whole job is to say *which* action is arming.
-  mine: "#7fffe0",
-  restore: "#ffb15c",
-};
+// FUNCTIONAL colour, not chrome: the same hover-highlight teal the 3D
+// wireframe uses. Phase 6's cyan skin deliberately does not touch it — the
+// ring's job is to say "extraction is arming on the thing you're pointing at".
+const RING_COLOR = "#7fffe0";
 
 /** Chrome (static parts of the reticle) — dim cyan so the functional arc
  * above always wins the eye. Mirrors `--hud-accent` / `--hud-line` from
@@ -144,11 +145,11 @@ export function createHoldProgressRing(container: HTMLElement): HoldProgressRing
   container.appendChild(root);
 
   return {
-    show(kind) {
-      progress.setAttribute("stroke", RING_COLORS[kind]);
-      // Phosphor bloom in the action's own color, so the arc reads as lit
+    show() {
+      progress.setAttribute("stroke", RING_COLOR);
+      // Phosphor bloom in the arc's own colour, so it reads as lit
       // instrumentation against the dim chrome track underneath it.
-      progress.style.filter = `drop-shadow(0 0 3px ${RING_COLORS[kind]})`;
+      progress.style.filter = `drop-shadow(0 0 3px ${RING_COLOR})`;
       progress.setAttribute("stroke-dashoffset", String(CIRCUMFERENCE));
       root.style.display = "block";
     },
