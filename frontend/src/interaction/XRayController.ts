@@ -4,14 +4,15 @@ import { combinedVoxelOpacity } from "../voxels/VoxelOpacity.ts";
 /**
  * Hotbar Item 1 — "X-Ray": a global, chunk-wide translucency toggle.
  * Equipping it makes every resident voxel render translucent — still fully
- * interactive, since hover/mine/restore raycast against the visibility
- * gate, never against opacity (Phase 3.5's discovery that
+ * interactive, since hover/extract raycast against the visibility gate,
+ * never against opacity (Phase 3.5's discovery that
  * `InstancedMesh2.setOpacityAt` is completely independent of
  * `getActiveAndVisibilityAt`, see `MiningController`'s doc comment). This is
  * the "existing per-instance opacity mechanism applied globally" tool, as
  * opposed to Item 2 (`EffectorField.ts`), which suppresses raycasts/renders
  * entirely for a moving volume — the two are deliberately different
- * mechanisms for different jobs.
+ * mechanisms for different jobs. The container cages are the one thing X-Ray
+ * removes outright rather than fading: see `VoxelContainers.setXrayActive`.
  *
  * Deliberately does NOT own the per-voxel opacity math itself — that lives
  * in `combinedVoxelOpacity()` (`voxels/VoxelOpacity.ts`), shared with
@@ -71,9 +72,11 @@ export class XRayController {
   private applyChunk(chunkId: number): void {
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk) return;
-    // Phase 6.8: the container cages are a separate mesh with their own
-    // (material-level) X-Ray opacity — see `CONTAINER_XRAY_OPACITY` for why
-    // they deliberately do NOT follow the cubes down to `XRAY_OPACITY`.
+    // The container cages vanish under X-Ray ("xray should hide the greeble
+    // completely") — a per-chunk mesh visibility flip, not an opacity, so a
+    // hidden chunk's worth of cages costs nothing to not draw. Re-applied on
+    // residency like everything else here, so a chunk streamed in while X-Ray
+    // is equipped comes up cageless too.
     chunk.containers.setXrayActive(this.active);
     const occupied = chunk.meta.occupied;
     for (let instanceId = 0; instanceId < occupied.length; instanceId++) {

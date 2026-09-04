@@ -6,7 +6,10 @@ import {
   CONTAINER_BRACKET_LENGTH_MAX,
   CONTAINER_BRACKET_LENGTH_MIN,
   CONTAINER_BRACKET_WIDTH_MULT,
-  CONTAINER_FILL_COLOR,
+  CONTAINER_DEPLETION_BRIGHTNESS_END,
+  CONTAINER_DEPLETION_BRIGHTNESS_FLOOR,
+  CONTAINER_DEPLETION_OPACITY_FLOOR,
+  CONTAINER_DEPLETION_OPACITY_START,
   CONTAINER_FRAME_BRIGHTNESS_MAX,
   CONTAINER_FRAME_BRIGHTNESS_MIN,
   CONTAINER_FRAME_COLOR,
@@ -15,7 +18,6 @@ import {
   CONTAINER_SCALE,
   CONTAINER_TICKS_MAX,
   CONTAINER_TICKS_MIN,
-  CONTAINER_XRAY_OPACITY,
   SUN_DIRECTION,
   VOXEL_FILL,
   capacityForPoints,
@@ -27,7 +29,7 @@ import {
  *
  * - `capacity` — `capacityForPoints(count)`, 0..1: how heavy the cage is.
  * - `fullness` — `(total - extracted) / total`, 1 untouched … 0 drained: how
- *   high the fill-line sits.
+ *   far along the depletion ramp (dim, then fade) the whole cage is.
  *
  * These are per-instance *uniforms* (InstancedMesh2's uniform texture), not
  * `InstancedBufferAttribute`s, for the reason `VoxelMaterial.ts` gives for
@@ -95,27 +97,26 @@ void main() {
  *    is discarded, so the cube's thumbnail shows through untouched and the
  *    cage never occludes a neighbour. All boundaries are `fwidth`-anti-aliased
  *    so a distant hairline fades rather than shimmers.
- * 2. **Rail body.** Steel tint × capacity brightness × a rounded-bar profile
+ * 2. **Rail body.** Frame tint × capacity brightness × a rounded-bar profile
  *    (highlight a third of the way in, shadow at the inner boundary) × the
  *    scene's sun on the face normal.
  * 3. **Texture.** Rails (not brackets) carry `ticks` segments: a dark notch
  *    across the rail at each boundary and a rivet — dark ring, bright head — at
  *    each centre.
- * 4. **Fill-line.** A groove along the inner side of every rail, a sixth of
- *    the rail's width. Below the fill level (`fullness`, measured on local Y:
- *    0 at the bottom face, 1 at the top) it glows the warm accent, scaled by
- *    capacity; above it it is a dark unlit channel, and the rail body dims
- *    with it so the level still reads once the groove is sub-pixel. The level
- *    is stretched by a small epsilon so fullness 1 lights the top face's rails
- *    (which sit at exactly y == 1) and fullness 0 darkens the bottom face's
- *    (y == 0), with no half-lit seam at either extreme.
+ * 4. **Depletion.** Two linear ramps on `fullness` applied to the WHOLE cage,
+ *    one after the other (`CONTAINER_DEPLETION_*` in config.ts): from 1 down
+ *    to the brightness breakpoint the colour is scaled toward the brightness
+ *    floor, and from the opacity breakpoint down to 0 the alpha is scaled
+ *    toward the opacity floor. The brightness scale is applied to the
+ *    sRGB-encoded output (after `colorspace_fragment`), so the floor is a
+ *    fraction of what is seen, not of linear light. No positional readout —
+ *    the old top-down fill-line is gone — so a face-local Y never enters into
+ *    it; every fragment of a cage is dimmed and faded by the same two factors.
  */
 const CONTAINER_FRAGMENT_SHADER = /* glsl */ `
 #include <fog_pars_fragment>
 uniform vec3 uFrameColor;
-uniform vec3 uFillColor;
 uniform vec3 uSunDir;
-uniform float uOpacity;
 varying vec3 vLocal;
 varying vec3 vNormalLocal;
 
@@ -165,23 +166,25 @@ void main() {
 	body = mix( body, body * 0.45, rivet );
 	body = mix( body, uFrameColor * bright * light * 1.35, rivetHead );
 
-	// --- fill-line -------------------------------------------------------------
-	float yN = vLocal.y + 0.5;
-	float level = fullness * 1.04 - 0.02;
-	float lit = 1.0 - smoothstep( level - 0.01, level + 0.01, yN );
-	float aaP = fwidth( prof ) * 0.8;
-	float pipe = smoothstep( 0.63 - aaP, 0.63 + aaP, prof ) * ( 1.0 - smoothstep( 0.79 - aaP, 0.79 + aaP, prof ) );
-	// Lit intensity follows capacity too: a hairline cage's gauge is a faint
-	// warm thread, a heavy crate's a clear orange line — so 14,000 full cages
-	// read as warm-edged steel from a distance, not as an orange lattice.
-	vec3 pipeLit = uFillColor * ( 0.78 + 0.17 * light ) * mix( 0.7, 1.0, capacity );
-	vec3 pipeDark = uFrameColor * bright * 0.12;
-	vec3 col = mix( body, mix( pipeDark, pipeLit, lit ), pipe );
-	col *= mix( 0.72, 1.0, lit );
+	// --- depletion -------------------------------------------------------------
+	// Brightness first (fullness 1 → BRIGHTNESS_END), then opacity
+	// (OPACITY_START → 0); each ramp is linear and clamps flat outside its span.
+	float dim = mix(
+		${f(CONTAINER_DEPLETION_BRIGHTNESS_FLOOR)}, 1.0,
+		clamp( ( fullness - ${f(CONTAINER_DEPLETION_BRIGHTNESS_END)} ) / ${f(1 - CONTAINER_DEPLETION_BRIGHTNESS_END)}, 0.0, 1.0 ) );
+	float alpha = mix(
+		${f(CONTAINER_DEPLETION_OPACITY_FLOOR)}, 1.0,
+		clamp( fullness / ${f(CONTAINER_DEPLETION_OPACITY_START)}, 0.0, 1.0 ) );
 
-	gl_FragColor = vec4( col, coverage * uOpacity );
+	gl_FragColor = vec4( body, coverage * alpha );
 	#include <tonemapping_fragment>
 	#include <colorspace_fragment>
+	// The brightness ramp is applied AFTER the output transform, so the floor
+	// is a fraction of on-screen (sRGB) brightness — 0.35 means the cage looks
+	// 35% as bright, not 35% of the linear-light value (which the transform
+	// would lift to ~60% on screen). Before fog, so a dim cage still fogs
+	// toward the fog colour like everything else.
+	gl_FragColor.rgb *= dim;
 	#include <fog_fragment>
 }
 `;
@@ -204,9 +207,7 @@ function createContainerMaterial(): THREE.ShaderMaterial {
       THREE.UniformsLib.fog,
       {
         uFrameColor: { value: new THREE.Color().setHex(CONTAINER_FRAME_COLOR, THREE.SRGBColorSpace) },
-        uFillColor: { value: new THREE.Color().setHex(CONTAINER_FILL_COLOR, THREE.SRGBColorSpace) },
         uSunDir: { value: new THREE.Vector3(...SUN_DIRECTION).normalize() },
-        uOpacity: { value: 1 },
       },
     ]),
     vertexShader: CONTAINER_VERTEX_SHADER,
@@ -219,7 +220,7 @@ function createContainerMaterial(): THREE.ShaderMaterial {
     depthWrite: false,
     fog: true,
   });
-  material.customProgramCacheKey = () => "ls-voxel-container-v1";
+  material.customProgramCacheKey = () => "ls-voxel-container-v2";
   return material;
 }
 
@@ -227,8 +228,8 @@ const _scratchCenter = new THREE.Vector3();
 
 /**
  * One chunk's container layer: a persistent cage around every occupied voxel's
- * cube, whose heft says how many thumbnails are inside and whose fill-line
- * drains as they are extracted (see `config.ts`'s "Voxel containers" section
+ * cube, whose heft says how many thumbnails are inside and which dims, then
+ * fades, as they are extracted (see `config.ts`'s "Voxel containers" section
  * for the ask and the tuning surface, and the shader above for the look).
  *
  * ## Structure
@@ -344,22 +345,24 @@ export class VoxelContainers {
     return this.fullness.length - this.suppressedCount;
   }
 
-  /** Cages the last frame actually drew, after per-instance frustum culling. */
+  /** Cages the last frame actually drew, after per-instance frustum culling
+   * — zero while X-Ray has the whole mesh hidden (the renderer never visits
+   * an invisible object, so `mesh.count` would otherwise report the stale
+   * pre-X-Ray culling result). */
   get drawnInstanceCount(): number {
-    return this.mesh.count;
+    return this.mesh.visible ? this.mesh.count : 0;
   }
 
-  /** Current fill level of cage `instanceId`, 1 full … 0 drained. */
+  /** Current fullness of cage `instanceId`, 1 full … 0 drained. */
   fullnessAt(instanceId: number): number {
     return this.fullness[instanceId] ?? 1;
   }
 
   /**
-   * Sets a cage's fill level from its voxel's extraction state — the SAME
+   * Sets a cage's fullness from its voxel's extraction state — the SAME
    * fraction `MiningController` feeds `combinedVoxelOpacity` for the cube's
    * fade, so the two readouts can never disagree. Stored as fullness
-   * (`1 - fraction`) because that is what the shader draws: the level the
-   * fill-line is lit up to.
+   * (`1 - fraction`) because that is what the shader's depletion ramps read.
    */
   setExtractedFraction(instanceId: number, extractedFraction: number): void {
     if (instanceId < 0 || instanceId >= this.fullness.length) return;
@@ -387,14 +390,21 @@ export class VoxelContainers {
   }
 
   /**
-   * X-Ray hook: one material-level opacity write per chunk (there is no
-   * per-cage component to X-Ray, so the per-instance channel would be 4,096
-   * writes for one number). `CONTAINER_XRAY_OPACITY` is 1 — cages stay opaque
-   * while their cubes go translucent, see that constant — so today this is a
-   * no-op write kept so the decision lives in config, not in a missing call.
+   * X-Ray hook: the cages vanish entirely while X-Ray is equipped ("xray
+   * should hide the greeble completely"). The mesh is switched off at the
+   * object level rather than drawn at zero alpha — the renderer skips an
+   * invisible object outright, so a resident world's worth of cages (up to
+   * ~4,096 per chunk, tens of thousands in total) costs no draw calls, no
+   * culling pass and no fragment work while X-Ray is on, whereas a 0-alpha
+   * draw would still rasterize every rail and discard it. There is no
+   * per-cage component to X-Ray, so one flag per chunk is exactly the right
+   * granularity, and the Effector Field's per-instance `setVisibilityAt`
+   * state underneath is untouched by it: un-equipping X-Ray shows the mesh
+   * again with whatever instances the field is still suppressing still
+   * hidden.
    */
   setXrayActive(active: boolean): void {
-    this.material.uniforms.uOpacity.value = active ? CONTAINER_XRAY_OPACITY : 1;
+    this.mesh.visible = !active;
   }
 
   dispose(): void {

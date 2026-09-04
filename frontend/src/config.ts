@@ -350,10 +350,12 @@ export const HEADLAMP_RANGE = WORLD_SCALE * 0.5;
 //
 // So: every voxel cube sits inside a persistent cage — the hover wireframe's
 // idea generalized into a shell with real rails, corner brackets and surface
-// detail — whose weight says how many thumbnails are inside and whose lit
-// fill-line drains as they are extracted. All of it is drawn procedurally in
-// one shader (`voxels/VoxelContainers.ts`) from two per-instance numbers,
-// `capacity` and `fullness`; everything below is the tuning surface.
+// detail — whose weight says how many thumbnails are inside and which dims,
+// then fades, as they are extracted. All of it is drawn procedurally in one
+// shader (`voxels/VoxelContainers.ts`) from two per-instance numbers,
+// `capacity` and `fullness`; everything below is the tuning surface. The cage
+// has no X-Ray opacity of its own: X-Ray hides the cages outright (see
+// `VoxelContainers.setXrayActive`), which is not a tunable.
 
 /**
  * Container edge as a multiple of the cube edge (`manifest.voxelWorldSize *
@@ -430,40 +432,67 @@ export const CONTAINER_TICKS_MAX = 11;
 /**
  * Frame tint (sRGB) and the brightness it is scaled by at capacity 0 and 1.
  *
- * The same cool neutral steel Phase 6.7's detail pieces used, for the same
- * reason: unmistakably "not the thumbnail" against BL's warm paper/ink scans, and a
- * step duller/greyer than both the hover teal (`#7fffe0`) and the HUD chrome
- * cyan so a hovered cage still lights up against its neighbours. The
- * brightness ramp is the third capacity cue after rail width and tick count —
- * a 1-point cage is a dim hairline, a dense one gleams — and its floor is set
- * where the thinnest cage is still visible against the void, not below.
+ * A neutral near-white — no hue at all. It was a cool blue-grey steel
+ * (`0x9aa6b4`) with a warm orange fill-line running along every rail, until
+ * direct feedback: "i dont want orange on the greeble texture, lets use a more
+ * neutral white." So the cage is now one material, a plain pale metal, and
+ * every tone on it (rail body, rivet heads at 1.35x, the dark notches) is
+ * this colour at some brightness. Still unmistakably "not the thumbnail"
+ * against BL's warm paper/ink scans and MONET's paintings — a grey frame reads
+ * as hardware around a picture, not as part of it — and still a clear step
+ * from both the hover teal (`#7fffe0`) and the HUD chrome cyan, so a hovered
+ * cage lights up against its neighbours. The brightness ramp is the third
+ * capacity cue after rail width and tick count — a 1-point cage is a dim
+ * hairline, a dense one gleams — and its floor is set where the thinnest cage
+ * is still visible against the void, not below.
  */
-export const CONTAINER_FRAME_COLOR = 0x9aa6b4;
+export const CONTAINER_FRAME_COLOR = 0xc4c6c8;
 export const CONTAINER_FRAME_BRIGHTNESS_MIN = 0.42;
 export const CONTAINER_FRAME_BRIGHTNESS_MAX = 1.05;
 
 /**
- * Fill-gauge accent (sRGB): the colour of the lit fill-line that runs along the
- * inner side of every rail and drains from the top down as thumbnails are
- * extracted (see `VoxelContainers` for the level math). Warm on purpose — the
- * frame is cool steel and the two must read as different materials — and a
- * plain orange rather than the minimap flashlight's yellow-amber (`#ffb347`),
- * which is an additive overlay that lights up whole cubes; a cage whose gauge
- * were the same hue would look permanently flashlit. Kept to a narrow line
- * (rather than tinting whole rails) so 14,000 full containers don't turn the
- * world orange: at browsing distance the line blends into a faint warmth in
- * the frame, and only up close resolves into a gauge.
+ * Depletion ramp: how the WHOLE cage changes as its voxel drains, driven by
+ * the per-instance `fullness` (1 untouched … 0 every thumbnail extracted).
+ * Two ramps in sequence, per direct feedback ("instead of top-down fading of
+ * the greeble lets have brightness then opacity ramp down"):
+ *
+ *   1. brightness — from fullness 1 down to `CONTAINER_DEPLETION_BRIGHTNESS_END`
+ *      the cage's colour is scaled linearly from 1 to
+ *      `CONTAINER_DEPLETION_BRIGHTNESS_FLOOR` and then holds there;
+ *   2. opacity — from `CONTAINER_DEPLETION_OPACITY_START` down to fullness 0
+ *      the cage's alpha is scaled linearly from 1 to
+ *      `CONTAINER_DEPLETION_OPACITY_FLOOR`.
+ *
+ * So the first half of a drain is a cage going dark and the second half is a
+ * dark cage going faint, and a drained voxel wears a dim, ghostly frame — a
+ * frame, still, so the block reads as "emptied" rather than "gone", which
+ * matters now that a drained voxel is pass-through to the cursor (see
+ * `engine/Raycast.ts`) and the frame is the only thing left saying it exists.
+ * The two breakpoints are the same number so the ramps hand off exactly; they
+ * are separate constants so the ramps could overlap or leave a plateau
+ * between them without touching the shader. Each ramp needs a nonzero span:
+ * the brightness end must stay below 1 and the opacity start above 0 (the
+ * shader divides by those spans).
+ *
+ * Domains: the brightness floor is DISPLAY-referred — the shader multiplies
+ * the sRGB-encoded output by it, after the colour-space transform — so 0.35
+ * means a cage that looks 35% as bright on screen. (Applied to linear light
+ * like `CONTAINER_FRAME_BRIGHTNESS_*` are, the transform would lift the same
+ * 0.35 to ~60% on screen and the first half of a drain would barely read.)
+ * The opacity floor is a plain alpha, which blends linearly on screen anyway.
+ *
+ * Floors: on screen, 35% is well under the dimmest untouched cage — a
+ * 1-point voxel's `CONTAINER_FRAME_BRIGHTNESS_MIN` of 0.42 in linear light
+ * displays at roughly 68% — so a half-drained dense cage can't be mistaken
+ * for a full sparse one, and it is above the level where a grey frame merges
+ * with the fog. 0.15 alpha over a cube that is itself at
+ * `EXTRACTION_FLOOR_OPACITY` (0.3) keeps the frame just visible against the
+ * void without the two together reading as a solid.
  */
-export const CONTAINER_FILL_COLOR = 0xff8c42;
-
-/**
- * Container opacity while X-Ray is equipped. Cages are deliberately NOT faded
- * to `XRAY_OPACITY` along with their cubes: the whole point of a persistent
- * frame is to stay legible when the thing inside it goes translucent, and the
- * rails are narrow enough (see `CONTAINER_RAIL_WIDTH_*`) that a fully-opaque
- * lattice still shows the cluster behind it. 1 == unchanged.
- */
-export const CONTAINER_XRAY_OPACITY = 1;
+export const CONTAINER_DEPLETION_BRIGHTNESS_END = 0.5;
+export const CONTAINER_DEPLETION_BRIGHTNESS_FLOOR = 0.35;
+export const CONTAINER_DEPLETION_OPACITY_START = 0.5;
+export const CONTAINER_DEPLETION_OPACITY_FLOOR = 0.15;
 
 // ---------------------------------------------------------------------------
 // Streaming rings
