@@ -29,7 +29,10 @@ export interface VoxelHit {
  * Phase 2 raycasts against a whole `THREE.Group` of per-chunk
  * `InstancedMesh2`es rather than one mesh — each chunk carries its own BVH, so
  * this stays cheap even with every chunk resident, and the returned hit names
- * the mesh so callers can resolve it back to a chunk/voxel.
+ * the mesh so callers can resolve it back to a chunk/voxel. Phase 8 adds the
+ * whole-dataset voxel proxy mesh as a second target (`main.ts` passes both as
+ * an array): a hover lands on a flat stand-in exactly as it lands on a
+ * thumbnail, and `hit.mesh` is how the caller tells the two apart.
  */
 export class VoxelRaycaster {
   private readonly raycaster = new THREE.Raycaster();

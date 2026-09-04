@@ -4,14 +4,16 @@ import { FlightControls } from "./engine/FlightControls.ts";
 import { VoxelRaycaster, type VoxelHit } from "./engine/Raycast.ts";
 import { createSyntheticVoxelField } from "./voxels/VoxelField.ts";
 import { AtlasCache } from "./voxels/AtlasCache.ts";
-import { loadProxyCloud, type ProxyCloud } from "./voxels/ProxyCloud.ts";
+import { VoxelProxyCloud } from "./voxels/VoxelProxyCloud.ts";
 import { loadManifest, type Manifest } from "./streaming/Manifest.ts";
+import { loadVoxelProxy } from "./streaming/VoxelProxy.ts";
 import { ChunkLoader, type ChunkMeshUserData } from "./streaming/ChunkLoader.ts";
 import { ChunkStore } from "./streaming/ChunkStore.ts";
 import { loadPointIndex, resolveThumbUrl, type PointIndex } from "./streaming/PointIndex.ts";
 import { loadRowToVoxel } from "./streaming/RowToVoxel.ts";
 import { loadMinimapPack } from "./minimap/Manifest.ts";
 import { MinimapBridge } from "./interaction/MinimapBridge.ts";
+import type { ProxyVoxel } from "./voxels/VoxelProxyCloud.ts";
 import { MiningController, type ExtractionCycle } from "./interaction/MiningController.ts";
 import { PointerController, type VoxelTarget } from "./interaction/PointerController.ts";
 import { XRayController } from "./interaction/XRayController.ts";
@@ -75,10 +77,15 @@ const flightControls = new FlightControls(engine.camera);
 const raycaster = new VoxelRaycaster(engine.camera);
 
 /** Resolves a raycast hit back to its chunk/voxel identity, or `null` if the
- * hit isn't against a chunk-voxel mesh (e.g. the Phase 1 `?synthetic=1`
- * field, whose userData carries no `chunkId`). Shared by the per-frame hover
- * logic below and `PointerController`'s mousedown-time hit test, so the two
- * never disagree about what counts as "a voxel." */
+ * hit isn't against a TEXTURED chunk-voxel mesh — the Phase 1 `?synthetic=1`
+ * field and the Phase 8 proxy mesh both carry no `chunkId` in their userData
+ * and so resolve to nothing here. That is load-bearing for the proxies:
+ * `PointerController` arms a hold on exactly what this returns, so a proxy
+ * voxel (no point ids to extract) can never arm one, and `MiningController`
+ * can never be handed a proxy hit. Shared by the per-frame hover logic below
+ * and the mousedown-time hit test, so the two never disagree about what
+ * counts as "a voxel." A proxy hover is resolved separately, by
+ * `resolveProxyVoxel`. */
 function resolveVoxelTarget(hit: VoxelHit | null): VoxelTarget | null {
   if (!hit) return null;
   const userData = hit.mesh.userData as Partial<ChunkMeshUserData>;
@@ -88,11 +95,18 @@ function resolveVoxelTarget(hit: VoxelHit | null): VoxelTarget | null {
   return { chunkId: userData.chunkId, localVoxelId };
 }
 
+/** The proxy voxel a hit landed on, or `null` if the hit is against anything
+ * else. Identity is by mesh, not userData: there is exactly one proxy mesh. */
+function resolveProxyVoxel(hit: VoxelHit | null): ProxyVoxel | null {
+  if (!hit || !voxelProxy || hit.mesh !== voxelProxy.mesh) return null;
+  return voxelProxy.voxelAt(hit.instanceId);
+}
+
 /** Raycasts from an arbitrary NDC position against whatever the world's
- * current raycast target is (`raycastTarget`/`raycastRecursive`, set once
+ * current raycast targets are (`raycastTargets`/`raycastRecursive`, set once
  * the streamed world or the synthetic field is up). */
 function raycastAt(ndc: THREE.Vector2): VoxelHit | null {
-  return raycastTarget ? raycaster.raycast(raycastTarget, raycastRecursive, ndc) : null;
+  return raycastTargets ? raycaster.raycast(raycastTargets, raycastRecursive, ndc) : null;
 }
 
 // Hover highlight: a separate wireframe box repositioned to match the
@@ -138,11 +152,11 @@ let status: string | undefined = "loading manifest…";
 
 // --- world, either synthetic (Phase 1) or streamed (Phase 2) ----------------
 
-let raycastTarget: THREE.Object3D | null = null;
+let raycastTargets: THREE.Object3D | THREE.Object3D[] | null = null;
 let raycastRecursive = false;
 let manifest: Manifest | null = null;
 let chunkStore: ChunkStore | null = null;
-let proxyCloud: ProxyCloud | null = null;
+let voxelProxy: VoxelProxyCloud | null = null;
 let syntheticInstances = 0;
 let miningController: MiningController | null = null;
 let xrayController: XRayController | null = null;
@@ -215,7 +229,7 @@ function loadPointIndexOnce(): Promise<PointIndex> {
 if (useSynthetic) {
   const voxelField = createSyntheticVoxelField(engine.renderer);
   engine.scene.add(voxelField);
-  raycastTarget = voxelField;
+  raycastTargets = voxelField;
   syntheticInstances = voxelField.instancesCount;
   engine.camera.position.set(0, 6, WORLD_HALF_EXTENT * 1.7);
   status = undefined;
@@ -224,10 +238,18 @@ if (useSynthetic) {
 }
 
 /**
- * Phase 2 startup: manifest → proxy cloud (immediately visible, so the world
- * is never blank) → chunk streaming. Each step is awaited in order because the
- * later ones need the earlier ones' geometry constants, but the render loop is
- * already running throughout, so the page is interactive the whole time.
+ * Phase 2 startup: manifest → voxel proxies (every occupied voxel, immediately
+ * visible, so the world is never blank) → chunk streaming. Each step is
+ * awaited in order because the later ones need the earlier ones' geometry
+ * constants, but the render loop is already running throughout, so the page
+ * is interactive the whole time.
+ *
+ * The order of the last two is also a correctness requirement, not just a
+ * convenience: the proxy layer hides a chunk's run from `ChunkStore`'s
+ * `onResidencyChanged` hook, and the store is constructed (and starts its
+ * first loads) only AFTER the proxies are up, so there is no chunk that could
+ * become resident before the layer exists to hear about it — every residency
+ * change in the session flows through the hook.
  */
 async function bootstrapStreamedWorld(): Promise<void> {
   try {
@@ -244,14 +266,14 @@ async function bootstrapStreamedWorld(): Promise<void> {
     void loadPointIndexOnce();
 
     status = "loading proxy…";
-    proxyCloud = await loadProxyCloud(manifest, engine.renderer);
-    engine.scene.add(proxyCloud.mesh);
+    voxelProxy = new VoxelProxyCloud(manifest, await loadVoxelProxy(manifest), engine.renderer);
+    engine.scene.add(voxelProxy.mesh);
 
     const atlasCache = new AtlasCache(engine.renderer);
     const chunkLoader = new ChunkLoader(manifest, atlasCache, engine.renderer);
     chunkStore = new ChunkStore(manifest, chunkLoader, {
       onResidencyChanged: (chunkId, resident) => {
-        proxyCloud?.setChunkResident(chunkId, resident);
+        voxelProxy?.setChunkResident(chunkId, resident);
         // Re-apply whatever this chunk's voxels should look like/be visible
         // as before it was evicted — mined-but-not-restored opacity
         // (MiningController), the global X-Ray toggle (XRayController), and
@@ -268,7 +290,11 @@ async function bootstrapStreamedWorld(): Promise<void> {
       },
     });
     engine.scene.add(chunkStore.group);
-    raycastTarget = chunkStore.group;
+    // Both layers are hover targets. The raycaster returns the nearest hit
+    // across all of them, and a chunk's proxy run is un-raycastable while its
+    // textured mesh is resident (`VoxelProxyCloud.setChunkResident`), so the
+    // two can never both be hit at one voxel's position.
+    raycastTargets = [chunkStore.group, voxelProxy.mesh];
     raycastRecursive = true;
 
     // All four constructed synchronously right after chunkStore, with no
@@ -324,7 +350,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
     // row_to_voxel.bin) that nothing else in the app depends on, so awaiting
     // it here would delay the world for a panel. A dataset with no minimap
     // pack configured simply runs without one.
-    void bootstrapMinimap(manifest, chunkStore);
+    void bootstrapMinimap(manifest, chunkStore, voxelProxy);
   } catch (error) {
     console.error("[latent-scope-3d] failed to load dataset", error);
     status = `ERROR: ${(error as Error).message}`;
@@ -338,7 +364,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
  * composites after that, so the panel appears (with live markers) before its
  * background picture does.
  */
-async function bootstrapMinimap(m: Manifest, store: ChunkStore): Promise<void> {
+async function bootstrapMinimap(m: Manifest, store: ChunkStore, proxies: VoxelProxyCloud): Promise<void> {
   const minimapBaseUrl = resolveMinimapBaseUrl(datasetKey);
   if (!minimapBaseUrl) {
     console.info(`[latent-scope-3d] dataset ${datasetKey} has no minimap pack — panel disabled`);
@@ -365,6 +391,7 @@ async function bootstrapMinimap(m: Manifest, store: ChunkStore): Promise<void> {
       pack,
       manifest: m,
       chunkStore: store,
+      voxelProxy: proxies,
       rowToVoxel,
       engine,
       flightControls,
@@ -442,7 +469,7 @@ const streamingState: HudStreamingState = {
   chunksLoading: 0,
   chunksTotal: 0,
   chunksFailed: 0,
-  proxyInstances: 0,
+  proxyVoxelsShown: 0,
   atlasBytes: 0,
 };
 
@@ -508,6 +535,7 @@ engine.start((dt) => {
   const hit = raycastAt(pointerController.ndc);
   currentHit = hit;
   const target = resolveVoxelTarget(hit);
+  const proxyVoxel = target ? null : resolveProxyVoxel(hit);
   const hoveredFraction = target
     ? (miningController?.extractedFraction(target.chunkId, target.localVoxelId) ?? 0)
     : 0;
@@ -543,6 +571,14 @@ engine.start((dt) => {
         `chunk ${target.chunkId} voxel ${target.localVoxelId} · ${points} pts · row ${reprRowId} · ` +
         `${hitPosition.x.toFixed(1)}, ${hitPosition.y.toFixed(1)}, ${hitPosition.z.toFixed(1)}` +
         `${extractedHint}${actionHint}`;
+    } else if (proxyVoxel) {
+      // A flat stand-in for a chunk that hasn't streamed in: same teal box
+      // (it is the same voxel, just not fetched yet), but no action hint, no
+      // representative row (the proxy file carries none, so the minimap
+      // crosshair stays off) and — see `resolveVoxelTarget` — no hold.
+      hoverLabel =
+        `chunk ${proxyVoxel.chunkId} voxel ${proxyVoxel.localVoxelId} · ${proxyVoxel.count} pts · ` +
+        `not loaded — fly closer`;
     } else {
       hoverLabel = `instance #${hit.instanceId}`;
     }
@@ -630,6 +666,8 @@ engine.start((dt) => {
     const yPx = (1 - (pointerController.ndc.y * 0.5 + 0.5)) * window.innerHeight;
     holdRing.setPosition(xPx, yPx);
   }
+  // A proxy voxel deliberately gets the plain arrow, not the crosshair: the
+  // crosshair means "hold here does something", and on a proxy it doesn't.
   if (pointerController.isDragging) {
     setCursorStyle("grabbing");
   } else if (target) {
@@ -650,7 +688,7 @@ engine.start((dt) => {
     streamingState.chunksFailed = stats.failed;
     streamingState.chunksTotal = manifest?.chunks.length ?? 0;
     streamingState.atlasBytes = stats.bytes;
-    streamingState.proxyInstances = proxyCloud?.instanceCount ?? 0;
+    streamingState.proxyVoxelsShown = voxelProxy?.shownCount ?? 0;
     residentInstances = stats.instances;
     visibleInstances = 0;
     for (const mesh of chunkStore.meshes) visibleInstances += mesh.count;
@@ -710,8 +748,8 @@ Object.assign(window as unknown as Record<string, unknown>, {
     get chunkStore() {
       return chunkStore;
     },
-    get proxyCloud() {
-      return proxyCloud;
+    get voxelProxy() {
+      return voxelProxy;
     },
     get miningController() {
       return miningController;

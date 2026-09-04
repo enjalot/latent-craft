@@ -18,9 +18,10 @@ function clamp(value: number, min: number, max: number): number {
 function buildGizmo(): THREE.Group {
   const group = new THREE.Group();
   group.name = "effector-field-gizmo";
-  // Drawn after the opaque voxels (renderOrder 0, the default) and the
-  // proxy cloud (renderOrder 1, see ProxyCloud.ts) — translucent geometry
-  // drawn back-to-front only looks right relative to what's already there.
+  // Drawn after the opaque voxels (textured and proxy, renderOrder 0, the
+  // default) and the container cages (renderOrder 1, see VoxelContainers.ts)
+  // — translucent geometry drawn back-to-front only looks right relative to
+  // what's already there.
   group.renderOrder = 2;
 
   // Unit sphere, scaled per-frame to `radius` — avoids rebuilding geometry

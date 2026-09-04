@@ -477,28 +477,63 @@ export const MAX_RESIDENT_ATLAS_BYTES = 1280 * 1024 * 1024;
 export const CHUNK_UPDATE_MOVE_EPSILON = 1.5;
 
 // ---------------------------------------------------------------------------
-// Proxy cloud
+// Voxel proxies (Phase 8 — LOD)
 // ---------------------------------------------------------------------------
+//
+// The far-LOD layer: every occupied voxel of the dataset, drawn as a flat cube
+// of its mean thumbnail colour from the always-resident `voxel_proxy.bin`
+// (`voxels/VoxelProxyCloud.ts`), hidden chunk-by-chunk as the textured chunks
+// stream in and shown again as they evict. This replaces the Phase 2 proxy
+// cloud (one translucent box per CHUNK from `proxy.bin`), which gave the world
+// a silhouette but nothing you could point at: a proxy voxel sits exactly where
+// its thumbnail will, at the same size, so the hover box lands on it and the
+// minimap flashlight lights it — "still highlight when turning to them but not
+// showing images". The two knobs below are the whole look; the proxies take
+// the scene lights, the headlamp and the fog through the same
+// `MeshStandardMaterial` path the textured cubes use, so nothing about
+// distance is tuned separately for them.
 
 /**
- * Opacity of the always-resident coarse proxy cubes.
+ * How much of a proxy voxel's mean-colour saturation survives (1 = the colour
+ * as stored, 0 = the equivalent grey) and what its brightness is scaled by, in
+ * linear light.
  *
- * 0.3 -> 0.18, purely as a consequence of the `VOXEL_FILL` 0.92 -> 0.32 change.
- * The proxy layer's sizing needed nothing (it is chunk-scale, and
- * `manifest.chunkWorldSize` scales with `WORLD_SCALE` on its own), but its
- * relative visual WEIGHT inverted: 0.3 read as a light haze behind a solid wall
- * of thumbnails, and against the new sparse specks the same cubes became the
- * heaviest thing on screen — the coarse placeholder outshouting the real data
- * it stands in for. 0.18 restores the hierarchy while still drawing a clearly
- * readable silhouette of the un-streamed world from across the map (verified on
- * the same wide screenshot vantage used to pick VOXEL_FILL).
+ * The brief is "reads as unloaded next to a loaded voxel without looking
+ * broken". A flat matte cube with no cage already reads as a placeholder next
+ * to a thumbnail, so this only has to make sure it never reads as the REAL
+ * block seen from too far to resolve. Brightness is the knob that does that:
+ * BL's mean colours are pale paper (median sRGB luminance ~200), and at full
+ * brightness a wall of them is a bright beige mass that outshouts the textured
+ * ring in front of it. At 0.6 (≈ 0.79 in sRGB, so that median goes ~200 ->
+ * ~160) a proxy face at 26-32 units measured luminance 57-76 against 93-119
+ * for a textured face at 21-24 — a clear step behind, still plainly a block.
+ * Below ~0.45 the far map went muddy under the fog (a fogged block is already
+ * at 50% by 50 units).
+ *
+ * Saturation turned out to be nearly a no-op on BL — its means are so close to
+ * neutral that an in-page A/B of 0.55 vs 0.8 changed 37 pixels of a 900x560
+ * crop — and it is what keeps MONET's palette (blues, ochres, whites) readable
+ * as a fogged coloured silhouette from across the map, which is the point of
+ * drawing the far map in colour at all. So only a light pull toward grey: 0.75
+ * takes the edge off a saturated painting's mean without flattening the map.
+ * Checked on the wide and browsing-distance screenshots in the Phase 8
+ * verification.
  */
-export const PROXY_OPACITY = 0.18;
-/** Proxy cube edge as a fraction of a chunk edge, at min and max density. */
-export const PROXY_MIN_FILL = 0.3;
-export const PROXY_MAX_FILL = 0.94;
-/** `density_log2` value treated as "fully dense" when scaling proxy cubes. */
-export const PROXY_DENSITY_LOG2_MAX = 18;
+export const VOXEL_PROXY_SATURATION = 0.75;
+export const VOXEL_PROXY_BRIGHTNESS = 0.6;
+
+/**
+ * Flashlight on a proxy voxel: its colour is pulled this fraction of the way
+ * toward the minimap flashlight amber (`MINIMAP_FLASHLIGHT_COLOR_3D`) and its
+ * brightness multiplied by this much, on top of the additive glow box the
+ * flashlight already draws there. The tint makes a lit proxy the same amber
+ * as everything else the flashlight touches; the brightness bump is what
+ * keeps it visible through the fog at the distances proxies live at (a 2.4x
+ * albedo at 40% fog attenuation still lands brighter than an unlit proxy up
+ * close). Restored to the base colour when the flashlight moves on.
+ */
+export const VOXEL_PROXY_LIT_TINT = 0.6;
+export const VOXEL_PROXY_LIT_BRIGHTNESS = 2.4;
 
 // ---------------------------------------------------------------------------
 // Environment — depth cues (Phase 6.6, retuned Phase 7)

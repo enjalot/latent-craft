@@ -53,8 +53,8 @@ export class HighlightCubes {
     this.mesh.name = "minimap-flashlight";
     this.mesh.count = 0;
     this.mesh.frustumCulled = false;
-    // Drawn after the voxels and the proxy cloud so the additive pass lands on
-    // top of whatever is already in the frame.
+    // Drawn after the voxels (textured and proxy) and the container cages so
+    // the additive pass lands on top of whatever is already in the frame.
     this.mesh.renderOrder = 2;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   }

@@ -79,8 +79,8 @@ export class Manifest {
 
   /**
    * World-space center of a chunk slot. Derived from the chunk grid rather
-   * than the manifest's `bbox`, so it also works for the empty slots that
-   * `proxy.bin` covers but `manifest.chunks` omits.
+   * than the manifest's `bbox`, so a bare chunk_id is enough — no lookup in
+   * `chunksById` needed.
    */
   chunkCenterWorld(chunkId: number, target: THREE.Vector3): THREE.Vector3 {
     const { cx, cy, cz } = this.chunkGridCoords(chunkId);
@@ -95,9 +95,9 @@ export class Manifest {
   /**
    * Chunk grid coords for a chunk_id (row-major, x-fastest — the pipeline's
    * own ordering). Occupied chunks also carry these as `cx`/`cy`/`cz` in the
-   * manifest, but this works for the empty slots too, and is what lets
-   * anything holding only a bare chunk_id (`row_to_voxel.bin`, `proxy.bin`)
-   * get to a world position without a manifest lookup.
+   * manifest, but this is what lets anything holding only a bare chunk_id
+   * (`row_to_voxel.bin`, `voxel_proxy.bin`) get to a world position without a
+   * manifest lookup.
    */
   chunkGridCoords(chunkId: number): { cx: number; cy: number; cz: number } {
     const n = this.chunksPerAxis;

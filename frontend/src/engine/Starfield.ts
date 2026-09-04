@@ -54,9 +54,8 @@ function mulberry32(seed: number): () => number {
  *   as nearby dust.
  * - **`depthWrite: false` + `transparent: true`.** The shell is the farthest
  *   thing in the scene, so three's back-to-front transparent sort draws it
- *   first, and with depth testing still on, any voxel or proxy cube in front of
- *   a star correctly occludes it — no depth buffer pollution, no sorting fight
- *   with the proxy cloud.
+ *   first, and with depth testing still on, any voxel — textured or proxy — in
+ *   front of a star correctly occludes it, with no depth buffer pollution.
  * - **Per-star brightness via vertex colors.** A field of identically bright
  *   dots reads as a regular texture/screen artifact; varied magnitudes read as
  *   a sky. The distribution is biased dim (x^2.2) so only a handful are at full
@@ -126,7 +125,7 @@ export class Starfield {
     // Behind everything: renderOrder is only consulted within the transparent
     // pass, where this is already the farthest object, but pinning it makes the
     // intent explicit and survives anything else claiming a renderOrder later
-    // (the proxy cloud uses 1, the minimap flashlight 2).
+    // (the container cages use 1, the minimap flashlight and hover box 2).
     this.points.renderOrder = -1;
   }
 

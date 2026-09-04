@@ -7,6 +7,7 @@ import type { Manifest } from "../streaming/Manifest.ts";
 import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import type { RowToVoxel } from "../streaming/RowToVoxel.ts";
 import { HighlightCubes } from "../voxels/HighlightCubes.ts";
+import type { VoxelProxyCloud } from "../voxels/VoxelProxyCloud.ts";
 import { EMPTY_REPR_ROW_ID } from "../types.ts";
 import {
   MINIMAP_AVATAR_MOVE_EPSILON,
@@ -43,6 +44,10 @@ export interface FlashlightResult {
   voxels: number;
   /** How many of those voxels are in a currently-resident chunk. */
   residentVoxels: number;
+  /** How many are currently drawn as flat proxies instead (chunk not
+   * resident) — the ones whose proxy colour got the flashlight bump, so
+   * turning toward them shows the highlight before anything loads. */
+  proxyVoxels: number;
   /** Wall time of the row scan + dedupe, ms — the thing worth watching if the
    * point count ever grows by an order of magnitude. */
   scanMs: number;
@@ -58,6 +63,9 @@ export interface VoxelHighlightResult {
   /** Whether a 3D glow box was actually placed (always true for a voxel the
    * manifest knows about — see `highlightVoxel`'s doc comment). */
   lit3d: boolean;
+  /** Whether the voxel's proxy instance got the flashlight colour bump —
+   * true for every occupied voxel; it is only SEEN while the chunk is out. */
+  litProxy: boolean;
   /** Whether a marker was drawn on the 2D minimap. */
   lit2d: boolean;
   world: { x: number; y: number; z: number };
@@ -124,6 +132,7 @@ export interface MinimapBridgeDeps {
   pack: MinimapPack;
   manifest: Manifest;
   chunkStore: ChunkStore;
+  voxelProxy: VoxelProxyCloud;
   rowToVoxel: RowToVoxel;
   engine: Engine;
   flightControls: FlightControls;
@@ -137,7 +146,7 @@ export interface MinimapBridgeDeps {
  *
  * | direction | path |
  * | --- | --- |
- * | flashlight (2D hover → 3D) | cursor px → q → row_ids in radius → `row_to_voxel` → glow boxes |
+ * | flashlight (2D hover → 3D) | cursor px → q → row_ids in radius → `row_to_voxel` → glow boxes + proxy colour bump |
  * | crosshair (3D hover → 2D) | hovered voxel's `repr_row_id` → `qx/qy[row_id]` → overlay marker |
  * | avatar (camera → 2D) | nearest resident voxel → its `repr_row_id` → overlay marker (approximate, see below) |
  * | teleport (2D click → 3D) | q → nearest row_id → `row_to_voxel` → voxel center → prefetch + fly |
@@ -151,6 +160,13 @@ export interface MinimapBridgeDeps {
  * (`hoverPanToQ`); the two flights share `planFlight` and the Engine, and
  * differ only in what starts them, how fast they go, and what may interrupt
  * them — see `cancelHoverPan`.
+ *
+ * Phase 8 adds the second half of the 3D flashlight: besides the additive
+ * glow box (which was always placed from grid math, chunk resident or not),
+ * the lit voxels' PROXY instances (`voxels/VoxelProxyCloud.ts`) get a
+ * brighter amber colour, so a region the map is pointing at reads as lit when
+ * you turn toward it even though nothing there has streamed in — "still
+ * highlight when turning to them but not showing images".
  *
  * This class owns the panel rather than being handed one, which keeps the
  * callback wiring acyclic: the panel's hover/click callbacks need the bridge,
@@ -166,12 +182,15 @@ export class MinimapBridge {
 
   private readonly manifest: Manifest;
   private readonly chunkStore: ChunkStore;
+  private readonly voxelProxy: VoxelProxyCloud;
   private readonly engine: Engine;
   private readonly flightControls: FlightControls;
 
   private readonly highlight: HighlightCubes;
   private readonly rowScratch = new Uint32Array(MINIMAP_FLASHLIGHT_MAX_ROWS);
   private readonly litVoxels = new Set<number>();
+  /** Proxy instance ids of the current flashlight set, rebuilt per query. */
+  private readonly litProxyIds: number[] = [];
   private readonly scratch = new THREE.Vector3();
   private readonly scratchB = new THREE.Vector3();
 
@@ -214,6 +233,7 @@ export class MinimapBridge {
     this.pack = deps.pack;
     this.manifest = deps.manifest;
     this.chunkStore = deps.chunkStore;
+    this.voxelProxy = deps.voxelProxy;
     this.rowToVoxel = deps.rowToVoxel;
     this.engine = deps.engine;
     this.flightControls = deps.flightControls;
@@ -398,6 +418,8 @@ export class MinimapBridge {
     }
 
     let residentVoxels = 0;
+    let proxyVoxels = 0;
+    this.litProxyIds.length = 0;
     this.highlight.begin();
     for (const key of this.litVoxels) {
       const chunkId = Math.floor(key / 65536);
@@ -408,8 +430,17 @@ export class MinimapBridge {
       // when the flashlight points somewhere the camera has never been.
       this.manifest.voxelCenterWorldById(chunkId, localVoxelId, this.scratch);
       if (!this.highlight.add(this.scratch)) break;
+      // …and its proxy cube — the thing actually on screen out there — gets
+      // the colour bump too. Lit regardless of residency (see
+      // `VoxelProxyCloud.setLit`); the count only reports the ones showing.
+      const proxyId = this.voxelProxy.instanceIdOf(chunkId, localVoxelId);
+      if (proxyId >= 0) {
+        this.litProxyIds.push(proxyId);
+        if (!this.voxelProxy.isChunkHidden(chunkId)) proxyVoxels++;
+      }
     }
     this.highlight.commit();
+    this.voxelProxy.setLit(this.litProxyIds);
 
     const scanMs = performance.now() - started;
     this.lastFlashlightResult = {
@@ -419,19 +450,21 @@ export class MinimapBridge {
       rows,
       voxels: this.litVoxels.size,
       residentVoxels,
+      proxyVoxels,
       scanMs,
     };
 
     this.panel.setCaption(
       `${rows.toLocaleString()} pts → ${this.litVoxels.size} voxels lit\n` +
         `2D ${this.pack.rawX(qx).toFixed(2)}, ${this.pack.rawY(qy).toFixed(2)} · ` +
-        `${residentVoxels} in loaded chunks`,
+        `${residentVoxels} loaded · ${proxyVoxels} not loaded`,
     );
   }
 
   private clearFlashlight(): void {
     this.pendingHover = null;
     this.highlight.clear();
+    this.voxelProxy.clearLit();
     this.panel.setFlashlight(null);
     this.lastFlashlightResult = null;
     this.lastVoxelHighlightResult = null;
@@ -459,10 +492,10 @@ export class MinimapBridge {
    *   so the minimap could light up regions the camera has never visited), and
    *   `HighlightCubes` is an independent overlay mesh with `depthTest: false`
    *   — not the chunk's own per-instance opacity channel. So the box is drawn
-   *   at the right place either way; the only thing missing when the chunk is
-   *   out is the textured voxel inside it, which is exactly the honest signal
-   *   ("your points came from over there, but there's nothing loaded there
-   *   right now").
+   *   at the right place either way; when the chunk is out, what sits inside
+   *   it is the voxel's flat proxy cube (Phase 8), which gets the flashlight
+   *   colour bump like any other lit voxel — the honest signal is now "your
+   *   points came from that block over there, which hasn't loaded".
    * - 2D: the marker needs a row_id, and the stack's `reprRowId` was captured
    *   when the voxel was first extracted, so it survives eviction too. The
    *   `rowIdHint` parameter is how the inventory passes it in; if it's absent
@@ -491,6 +524,8 @@ export class MinimapBridge {
     this.highlight.begin();
     const lit3d = this.highlight.add(this.scratch);
     this.highlight.commit();
+    const proxyId = this.voxelProxy.instanceIdOf(chunkId, localVoxelId);
+    this.voxelProxy.setLit(proxyId >= 0 ? [proxyId] : []);
 
     if (rowId >= 0) {
       this.panel.setFlashlight({
@@ -506,7 +541,7 @@ export class MinimapBridge {
       `inventory → chunk ${chunkId} voxel ${localVoxelId}\n` +
         (chunk
           ? `loaded · row ${rowId >= 0 ? rowId : "—"}`
-          : `chunk not loaded · 3D marker only${rowId >= 0 ? "" : " · no 2D fix"}`),
+          : `chunk not loaded · lit as proxy${rowId >= 0 ? "" : " · no 2D fix"}`),
     );
 
     const result: VoxelHighlightResult = {
@@ -515,6 +550,7 @@ export class MinimapBridge {
       rowId,
       chunkResident: chunk !== undefined,
       lit3d,
+      litProxy: proxyId >= 0,
       lit2d: rowId >= 0,
       world: { x: this.scratch.x, y: this.scratch.y, z: this.scratch.z },
     };
@@ -677,7 +713,9 @@ export class MinimapBridge {
    * Order matters and is load-bearing: `prioritizeTeleport` runs
    * synchronously BEFORE `teleportTo`, so the destination's chunk fetches are
    * already in flight while the camera is still flying. The always-resident
-   * `ProxyCloud` covers whatever hasn't arrived by touchdown.
+   * voxel proxies (`VoxelProxyCloud`) cover whatever hasn't arrived by
+   * touchdown — a destination that hasn't loaded yet is a flat-coloured block
+   * you land in front of, not a hole.
    *
    * @returns how many chunks the destination pinned into a fetching ring.
    */

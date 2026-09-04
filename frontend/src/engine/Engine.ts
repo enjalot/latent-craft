@@ -180,8 +180,8 @@ export class Engine {
     // `customProgramCacheKey`. Establishing the fog before a single material
     // exists means nothing has to depend on three noticing a later change (or
     // on someone remembering a `needsUpdate` on every chunk material as it
-    // streams in), and no frame can render fogged proxy cubes against unfogged
-    // voxels. `createSceneFog` also swaps in the fog curve (see `Fog.ts`),
+    // streams in), and no frame can render fogged proxy voxels against
+    // unfogged textured ones. `createSceneFog` also swaps in the fog curve (see `Fog.ts`),
     // which has to precede the first compile for the same reason.
     this.scene.fog = createSceneFog();
     // The sky renders its cubemap right here, before the starfield or anything

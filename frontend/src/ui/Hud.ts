@@ -8,7 +8,9 @@ export interface HudStreamingState {
   chunksLoading: number;
   chunksTotal: number;
   chunksFailed: number;
-  proxyInstances: number;
+  /** Voxels currently drawn as flat proxies — every occupied voxel whose
+   * chunk is not resident (see `voxels/VoxelProxyCloud.ts`). */
+  proxyVoxelsShown: number;
   atlasBytes: number;
 }
 
@@ -149,9 +151,10 @@ export class Hud {
       lines.push(
         `chunks: ${s.chunksResident}/${s.chunksTotal} resident` +
           (s.chunksLoading > 0 ? `, ${s.chunksLoading} loading` : "") +
-          (s.chunksFailed > 0 ? `, ${s.chunksFailed} failed` : ""),
+          (s.chunksFailed > 0 ? `, ${s.chunksFailed} failed` : "") +
+          ` · proxy voxels: ${s.proxyVoxelsShown.toLocaleString()} shown`,
       );
-      lines.push(`atlases: ${formatBytes(s.atlasBytes)}   proxy: ${s.proxyInstances} cubes`);
+      lines.push(`atlases: ${formatBytes(s.atlasBytes)}`);
     }
     lines.push(`FPS: ${state.fps.toFixed(0)}`);
     lines.push(`voxels: ${state.residentInstances.toLocaleString()} resident`);

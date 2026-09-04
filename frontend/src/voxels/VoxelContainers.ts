@@ -41,10 +41,10 @@ import {
 const CONTAINER_UNIFORM_SCHEMA = { vertex: { capacity: "float", fullness: "float" } } as const;
 
 /**
- * Drawn after the cubes (renderOrder 0) — a translucent cage has to composite
- * over the finished block inside it. Same slot as the proxy cloud; the two never
- * overlap (a chunk's proxy cube hides while its containers exist), so their
- * mutual order is irrelevant.
+ * Drawn after the cubes (renderOrder 0 — the textured ones and the opaque
+ * voxel proxies alike) — a translucent cage has to composite over the finished
+ * block inside it. Proxies never get a cage: the cage is the visible "this
+ * block has been fetched" difference between the two layers.
  */
 const CONTAINER_RENDER_ORDER = 1;
 

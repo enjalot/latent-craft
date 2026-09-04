@@ -28,8 +28,10 @@ export interface ChunkStoreStats {
 }
 
 export interface ChunkStoreEvents {
-  /** Fired when a chunk becomes resident or is evicted — the ProxyCloud
-   * subscribes so its coarse cube can step aside for the real thing. */
+  /** Fired when a chunk becomes resident or is evicted — the voxel proxy
+   * layer subscribes so the chunk's flat stand-ins step aside for the real
+   * thing (and come back when it is evicted), and the per-voxel controllers
+   * re-apply their state to a freshly built mesh. */
   onResidencyChanged?: (chunkId: number, resident: boolean) => void;
 }
 

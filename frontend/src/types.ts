@@ -1,7 +1,7 @@
 /**
  * TypeScript mirror of the pipeline↔frontend byte/JSON contract described in
  * the project plan's Phase 4 section and implemented by
- * `pipeline/src/lsvoxel/chunkpack/{manifest,metablob,proxy}.py`.
+ * `pipeline/src/lsvoxel/chunkpack/{manifest,metablob,proxy,voxel_proxy}.py`.
  *
  * Nothing here is inferred at runtime — if the pipeline changes a layout, this
  * file and the parsers in `streaming/` must change with it.
@@ -67,11 +67,17 @@ export interface ManifestJson {
   point_source: { points_table: string; umap_run: string; n_points: number };
   subsets: Record<string, number>;
   thumb_url_template: string;
+  /** The chunk-level `proxy.bin` (one record per chunk slot). Still written
+   * by the pipeline; the frontend no longer reads it — the per-voxel
+   * `voxel_proxy` below superseded it as the far-LOD layer. */
   proxy: ManifestBlobRef;
   point_index: ManifestBlobRef;
   row_to_voxel: ManifestBlobRef;
-  /** ONLY occupied chunks appear here — empty slots are omitted entirely
-   * (they are still present, zeroed, in the dense `proxy.bin`). */
+  /** Whole-dataset `voxel_proxy.bin` — see `streaming/VoxelProxy.ts`.
+   * `n_voxels` is the record count, which must equal the sum of
+   * `n_occupied_voxels` over `chunks`. */
+  voxel_proxy: ManifestBlobRef & { n_voxels: number };
+  /** ONLY occupied chunks appear here — empty slots are omitted entirely. */
   chunks: ManifestChunk[];
 }
 
@@ -102,16 +108,35 @@ export interface ChunkMeta {
 }
 
 /**
- * Decoded `proxy.bin`. Dense over the FULL `chunks_per_axis^3` grid including
- * empty slots, indexed by chunk_id.
+ * Decoded `voxel_proxy.bin`: one record per OCCUPIED voxel of the whole
+ * dataset, sorted by `(chunk_id, local_voxel_id)` so every chunk's records
+ * form one contiguous run — `runStart[chunkId] .. runEnd[chunkId]` (a half-open
+ * range; `runStart` is -1 for a chunk slot with no records). Because a chunk's
+ * `meta.occupied` list is that same ascending order, the i-th record of a run
+ * is instance i of that chunk's textured mesh.
+ *
+ * Parallel typed arrays, index == record index, for the same reason
+ * `ChunkMeta` uses them.
  */
-export interface ProxyData {
-  chunksPerAxis: number;
-  /** 3 bytes per chunk slot. */
+export interface VoxelProxyData {
+  /** World grid per axis (`manifest.world.num_voxels`). */
+  numVoxels: number;
+  /** Voxels per chunk axis (`manifest.world.voxels_per_chunk`). */
+  voxelsPerChunk: number;
+  chunkId: Uint32Array;
+  localVoxelId: Uint16Array;
+  /** Points in the voxel, saturated at 65535 like `ChunkMeta.count`. */
+  count: Uint16Array;
+  /** Mean thumbnail color, 3 sRGB bytes per record. */
   colorRgb: Uint8Array;
-  densityLog2: Uint8Array;
-  nPoints: Uint32Array;
-  nOccupiedVoxels: Uint16Array;
+  /** bit0 = has_atlas_tile, as in `ChunkMeta.flags`. */
+  flags: Uint8Array;
+  /** First record index of each chunk slot's run, or -1; sized to the full
+   * `chunks_per_axis^3` grid so a bare chunk_id indexes it directly. */
+  runStart: Int32Array;
+  /** One past the last record index of each chunk slot's run (0 where there
+   * is no run). */
+  runEnd: Int32Array;
 }
 
 export const FLAG_HAS_ATLAS_TILE = 1 << 0;

@@ -67,7 +67,8 @@ const ATLAS_MAP_FRAGMENT = /* glsl */ `
  * of the voxel material's own contract (one tile, six faces), not of whatever
  * lighting rig the scene happens to have. Keeping it here means the atlas stays
  * legible if the scene's lights are ever retuned, and it doesn't silently
- * brighten the translucent proxy cloud or the effector gizmo along with it.
+ * brighten the flat voxel proxies or the effector gizmo along with it (a
+ * proxy's underside going dark is fine — it is a stand-in, not a thumbnail).
  *
  * `normal` (view-space, already normalized by `<normal_fragment_begin>`) and
  * `viewMatrix` (declared in three's own fragment prefix) are both in scope
@@ -141,8 +142,8 @@ export interface VoxelMaterialParams {
  * showed through fine. The user-visible symptom was "a transparent block makes
  * some, but not all, of the blocks behind it disappear." Turning depth writes
  * off instead would have needed per-instance back-to-front sorting every frame
- * (~10K+ instances in X-Ray) and still left the proxy cloud/gizmo compositing
- * wrong against un-written depth. Coverage is order-independent: no sorting,
+ * (~10K+ instances in X-Ray) and still left the cages/gizmo compositing wrong
+ * against un-written depth. Coverage is order-independent: no sorting,
  * correct depth for raycasts and for everything drawn after, and one code path
  * whether zero or every voxel in a chunk is faded.
  *

@@ -12,7 +12,7 @@ import { FOG_COLOR, FOG_DENSITY } from "../config.ts";
  * three has exactly two fog models, linear and exp2, and picks between them
  * with `isFogExp2` in the renderer, so a third curve can't be added as a new
  * fog class. Meanwhile every fogged material in the scene — the voxel cubes
- * (`MeshStandardMaterial`), the proxy cloud (same), the container cages (a
+ * (`MeshStandardMaterial`), the voxel proxies (same), the container cages (a
  * `ShaderMaterial` that `#include`s this chunk), the hover wireframe, the
  * effector gizmo — resolves `#include <fog_fragment>` from
  * `THREE.ShaderChunk` at compile time, so one assignment here gives all of
