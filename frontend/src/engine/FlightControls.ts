@@ -19,20 +19,48 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
   return tag === "input" || tag === "textarea" || tag === "select" || element.isContentEditable === true;
 }
 
-/** Every key `update()` turns into motion. `keys` records EVERY keydown (the
- * hotbar digits, effector brackets, …), so "is the player flying" has to be
- * asked against this list rather than against `keys` being non-empty. */
-const MOVEMENT_KEY_CODES = [
-  "KeyW",
-  "KeyA",
-  "KeyS",
-  "KeyD",
-  "Space",
-  "ShiftLeft",
-  "ShiftRight",
-  "KeyE",
-  "KeyQ",
-] as const;
+/**
+ * A scripted look turn in progress (`lookTransitionTo`): yaw/pitch sweep from
+ * a snapshot toward a target over a fixed duration. Kept as yaw/pitch deltas
+ * rather than quaternions to slerp, for the same reason `Engine`'s teleport
+ * does: a slerp between two roll-free poses rolls the cockpit in between,
+ * whereas sweeping the two angles the camera is actually parameterized by
+ * keeps roll at exactly zero throughout and lands on the yaw/pitch a
+ * `lookAt` at the target would derive.
+ */
+interface LookTransition {
+  fromYaw: number;
+  fromPitch: number;
+  /** Wrapped into (-π, π] — the short way round. */
+  deltaYaw: number;
+  deltaPitch: number;
+  elapsedS: number;
+  durationS: number;
+  /** Fired once, on the frame the turn completes; not on cancel. */
+  onArrive?: () => void;
+}
+
+/**
+ * Smallest yaw/pitch sweep (radians, hypot of the two) `lookTransitionTo`
+ * will animate — ~0.25°. Below this the camera is already looking there for
+ * every practical purpose, and animating it would only occupy the turn slot
+ * for a full duration (blocking the next queued hover-look, see
+ * `MinimapBridge`) to move the view by less than a pixel. A perception bound,
+ * not a feel knob — hence here rather than in config.
+ */
+const LOOK_TRANSITION_MIN_SWEEP_RAD = 0.0044;
+
+/** Same easing `Engine.teleportTo` uses for a flight from rest — a turn
+ * that starts and stops smoothly reads as the camera turning, not cutting. */
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+/** Wraps an angle difference into (-π, π] so a yaw sweep takes the short way
+ * round rather than spinning the long way through the back. */
+function wrapAngle(delta: number): number {
+  return delta - Math.round(delta / (2 * Math.PI)) * 2 * Math.PI;
+}
 
 /**
  * Spectator-style 6-DOF flight: no gravity, no collision, nothing to stand
@@ -58,6 +86,19 @@ const MOVEMENT_KEY_CODES = [
  * Nothing outside this class should assign `camera.quaternion` directly —
  * use `lookAt()`, which re-derives yaw/pitch afterward so the next
  * `applyLookDelta()` composes from the right baseline instead of snapping.
+ * (The one exception is `Engine.stepTeleport`, which sweeps the quaternion
+ * itself for the duration of a click-teleport; the flight's `onArrive`
+ * re-syncs through `lookAt`, and this class's `update` is not called while
+ * one is in progress.)
+ *
+ * Besides the player's own drag, the look direction has one scripted driver:
+ * `lookTransitionTo()`, a timed eased turn toward a world point with no
+ * translation — what the minimap's hover-look uses (`MinimapBridge`). It is
+ * advanced from `update()` like flight is, so the two compose: a turn keeps
+ * turning while WASD flies, and the movement that frame is along the
+ * direction the turn has reached. A drag cancels it (the player's hand wins);
+ * nothing else does implicitly — the caller that started it stops it with
+ * `cancelLookTransition()` when its own reasons say so.
  *
  * Key bindings: WASD = forward/back/strafe (full 3D, follows look pitch),
  * Space = ascend, Shift = descend (world-space, not camera-relative — keeps
@@ -93,6 +134,7 @@ export class FlightControls {
 
   private yaw = 0;
   private pitch = 0;
+  private lookTransition: LookTransition | null = null;
 
   private sprinting = false;
   /** `performance.now()` of the last non-auto-repeat W keydown — the first
@@ -111,6 +153,7 @@ export class FlightControls {
   private readonly up = new THREE.Vector3(0, 1, 0);
   private readonly targetVelocity = new THREE.Vector3();
   private readonly scratchEuler = new THREE.Euler(0, 0, 0, "YXZ");
+  private readonly scratchMatrix = new THREE.Matrix4();
 
   constructor(camera: THREE.Camera) {
     this.camera = camera;
@@ -156,13 +199,9 @@ export class FlightControls {
     return this.sprinting;
   }
 
-  /** True while any movement key is held — i.e. the next `update()` will
-   * accelerate the camera. What the minimap's hover-pan polls to yield to the
-   * player (see `main.ts`); a look-drag is reported separately by
-   * `PointerController`, since it never passes through the key set. */
-  get isMovementInputHeld(): boolean {
-    for (const code of MOVEMENT_KEY_CODES) if (this.keys.has(code)) return true;
-    return false;
+  /** True while a `lookTransitionTo` turn is in progress. */
+  get isLookTransitioning(): boolean {
+    return this.lookTransition !== null;
   }
 
   /** Re-derives yaw/pitch from the camera's current quaternion. */
@@ -172,28 +211,23 @@ export class FlightControls {
     this.yaw = this.scratchEuler.y;
   }
 
-  /**
-   * Takes over from wherever `camera.quaternion` currently points — the
-   * counterpart of `lookAt()` for a flight that was cancelled rather than
-   * completed (`Engine.cancelTeleport`). Yaw/pitch are re-derived from the
-   * quaternion and written straight back through the pitch clamp, so the next
-   * drag composes from the pose the player is actually looking at, in range,
-   * instead of from the stale pre-flight one and snapping.
-   */
-  adoptCameraOrientation(): void {
-    this.syncFromCamera();
-    this.applyLookDelta(0, 0);
+  /** Writes the current yaw/pitch (pitch clamped in place) to the camera. */
+  private writeOrientation(): void {
+    this.pitch = Math.max(-LOOK_PITCH_LIMIT_RAD, Math.min(LOOK_PITCH_LIMIT_RAD, this.pitch));
+    this.scratchEuler.set(this.pitch, this.yaw, 0, "YXZ");
+    this.camera.quaternion.setFromEuler(this.scratchEuler);
   }
 
   /**
    * Points the camera at `target` and keeps yaw/pitch in sync with the
-   * result — the only sanctioned way for external code (currently just
-   * `main.ts`'s spawn framing) to re-aim the camera outright. A raw
+   * result — the only sanctioned way for external code (`main.ts`'s spawn
+   * framing, a teleport's arrival) to re-aim the camera outright. A raw
    * `camera.lookAt()` would silently desync yaw/pitch from the quaternion it
    * just set, so the next `applyLookDelta()` would compose from stale state
-   * and snap the view back.
+   * and snap the view back. A hard re-aim supersedes any turn in progress.
    */
   lookAt(target: THREE.Vector3): void {
+    this.lookTransition = null;
     this.camera.lookAt(target);
     this.syncFromCamera();
   }
@@ -202,14 +236,82 @@ export class FlightControls {
    * Applies one pointermove's worth of screen-pixel delta to yaw/pitch and
    * writes the result to `camera.quaternion`. Called by `PointerController`
    * only while an active look-drag is in progress — never on every
-   * pointermove, and never while a mine/restore hold is armed.
+   * pointermove, and never while an extraction hold is armed. The player's
+   * hand wins over a scripted turn: any `lookTransitionTo` in progress is
+   * dropped where it is, so the drag composes from the pose on screen rather
+   * than fighting the turn for the quaternion.
    */
   applyLookDelta(dxPixels: number, dyPixels: number): void {
+    this.lookTransition = null;
     this.yaw -= dxPixels * LOOK_SENSITIVITY_RAD_PER_PX;
     this.pitch -= dyPixels * LOOK_SENSITIVITY_RAD_PER_PX;
-    this.pitch = Math.max(-LOOK_PITCH_LIMIT_RAD, Math.min(LOOK_PITCH_LIMIT_RAD, this.pitch));
-    this.scratchEuler.set(this.pitch, this.yaw, 0, "YXZ");
-    this.camera.quaternion.setFromEuler(this.scratchEuler);
+    this.writeOrientation();
+  }
+
+  /**
+   * Starts an eased turn (yaw/pitch only — the camera does not move) that
+   * ends looking at `target` after `durationMs`, advanced by `update()`. The
+   * end pose is the roll-free `lookAt` orientation from the camera's CURRENT
+   * position and is not re-planned, so if the camera flies during the turn it
+   * ends pointing where the target was relative to where the turn started.
+   * At `FLIGHT_SPEED` that is ~1.7 units of travel over a 350 ms turn — a
+   * miss of tens of degrees for a target a few voxels away, a fraction of a
+   * degree for one across the map. Deliberate: the turn is a gesture toward
+   * a spot, not a lock-on, and the caller that wants the camera on the spot
+   * re-aims (`lookAt`) or turns again from the new position. Yaw goes the
+   * short way round; pitch is clamped to the usual limit at the end pose, so
+   * a target straight overhead turns as far up as a drag could.
+   *
+   * Replaces any turn already in progress (its `onArrive` never fires — it
+   * never arrived). Returns `false`, starting nothing, when the camera is
+   * already looking there to within `LOOK_TRANSITION_MIN_SWEEP_RAD`, so a
+   * caller queuing turns can tell a no-op from a turn it has to wait for.
+   */
+  lookTransitionTo(target: THREE.Vector3, durationMs: number, onArrive?: () => void): boolean {
+    // Matrix4.lookAt with a world up gives a roll-free orientation — the
+    // same one `Object3D.lookAt` (and therefore `lookAt` above) produces, so
+    // the turn lands exactly where a hard re-aim at the target would.
+    this.scratchMatrix.lookAt(this.camera.position, target, this.up);
+    this.scratchEuler.setFromRotationMatrix(this.scratchMatrix, "YXZ");
+    const toPitch = Math.max(-LOOK_PITCH_LIMIT_RAD, Math.min(LOOK_PITCH_LIMIT_RAD, this.scratchEuler.x));
+    const deltaYaw = wrapAngle(this.scratchEuler.y - this.yaw);
+    const deltaPitch = toPitch - this.pitch;
+    if (Math.hypot(deltaYaw, deltaPitch) < LOOK_TRANSITION_MIN_SWEEP_RAD) {
+      this.lookTransition = null;
+      return false;
+    }
+    this.lookTransition = {
+      fromYaw: this.yaw,
+      fromPitch: this.pitch,
+      deltaYaw,
+      deltaPitch,
+      elapsedS: 0,
+      durationS: Math.max(1e-3, durationMs) / 1000,
+      onArrive,
+    };
+    return true;
+  }
+
+  /** Abandons a turn in progress where it currently points; its `onArrive`
+   * does not fire. Yaw/pitch are already the pose on screen (the turn writes
+   * them every frame), so nothing needs re-syncing. */
+  cancelLookTransition(): void {
+    this.lookTransition = null;
+  }
+
+  private stepLookTransition(deltaSeconds: number): void {
+    const turn = this.lookTransition;
+    if (!turn) return;
+    turn.elapsedS += deltaSeconds;
+    const raw = Math.min(1, turn.elapsedS / turn.durationS);
+    const t = easeInOutCubic(raw);
+    this.yaw = turn.fromYaw + turn.deltaYaw * t;
+    this.pitch = turn.fromPitch + turn.deltaPitch * t;
+    this.writeOrientation();
+    if (raw >= 1) {
+      this.lookTransition = null;
+      turn.onArrive?.();
+    }
   }
 
   /**
@@ -227,6 +329,10 @@ export class FlightControls {
    * (thruster inertia) better than an instant stop.
    */
   update(deltaSeconds: number): void {
+    // A scripted turn advances first, so this frame's flight is along the
+    // direction the camera has turned to, not the one it had last frame.
+    this.stepLookTransition(deltaSeconds);
+
     // Full 3D look direction (includes pitch) so W/S fly exactly where
     // you're looking, like Minecraft spectator / a space-sim, not an
     // FPS-style XZ-locked walk.

@@ -1440,52 +1440,46 @@ export const TELEPORT_MIN_MS = 260;
 export const TELEPORT_MAX_MS = 800;
 
 // ---------------------------------------------------------------------------
-// Minimap hover-pan (Phase 6.9)
+// Minimap hover-look
 // ---------------------------------------------------------------------------
 //
-// Direct feedback: "i want to try it so that hovering over the 2d map causes
-// the camera to pan to that part of the map (where it would teleport you to)
-// and have the pan be transitioned not instant and debounced."
+// Hovering the 2D map TURNS the camera toward the voxel a click would fly to
+// — yaw and pitch only, no translation (see `MinimapBridge` and
+// `FlightControls.lookTransitionTo`). This replaces Phase 6.9's hover-pan,
+// which flew the camera there after a 350 ms linger, on direct feedback: "i
+// dont like that hovering on the umap teleports, i just want it to rotate the
+// camera towards where it would teleport, and it should happen faster, it
+// seems delayed, i just want the debounce to be if you hover many it wont
+// spastically rotate but it will catch up as the transition ends."
 //
-// So: let the cursor rest on a spot of the 2D map and the camera drifts to
-// exactly where a click would have teleported it — same destination
-// resolution, same chunk prefetch, same Engine flight (see
-// `MinimapBridge.hoverPanToQ`) — only later (debounced), slower (its own
-// duration constants below) and revocable (any flight input cancels it,
-// whereas a click's teleport is a deliberate command and always lands). The
-// flashlight is untouched; the pan is layered on top of it.
+// So the debounce is not a linger before anything happens; it is coalescing.
+// A turn starts almost at once, a hover that arrives while a turn is in
+// progress does NOT restart it but is remembered, and when the turn ends the
+// camera turns to the latest remembered position — a rapid sweep across the
+// map is one turn after another, each ending where the cursor was when the
+// previous one finished. Click still teleports, unchanged. The flashlight is
+// untouched; the look is layered on top of it.
 
 /**
- * How long the cursor has to rest on one spot of the minimap before a hover
- * pan fires, ms. Every pointermove over the panel restarts the clock, so a
- * sweep across the map — which delivers a move every ~8-16 ms — never fires
- * one; only a deliberate pause does.
- *
- * 350 is the same order as `FLIGHT_SPRINT_DOUBLE_TAP_MS` (300), the app's
- * other "two events this close are one gesture" window, and about the time it
- * takes to register the flashlight highlight the hover already produced and
- * decide to stay there. Shorter (~200) starts firing on the natural
- * micro-pauses of a scan across the map, turning browsing into a camera that
- * lurches after the cursor; longer (500+) reads as the map not responding,
- * since the flight it then starts takes the better part of a second on top.
+ * Duration of one hover-look turn, ms, eased in and out. Long enough that a
+ * 90° swing reads as the camera turning rather than cutting, short enough
+ * that the sweep-coalescing above catches up with the cursor within a couple
+ * of turns. 350 is also the old linger debounce: what used to be waiting is
+ * now the motion itself.
  */
-export const MINIMAP_HOVER_PAN_DEBOUNCE_MS = 350;
+export const MINIMAP_HOVER_LOOK_MS = 350;
 
 /**
- * Hover-pan flight duration: derived from distance and clamped exactly like
- * the click-teleport's (`TELEPORT_*` above), but gentler on every axis —
- * ~1.5x the ms-per-unit and ~2x both clamps. A click is a command and its
- * flight should feel like arriving; a pan is a consequence of where the cursor
- * happens to rest, so the camera drifts over rather than lunges: for the same
- * unclamped distance its peak speed is 9/14 ≈ 2/3 of the click's. The floor
- * (600) keeps a pan to the next voxel over reading as motion rather than a
- * cut, and the ceiling (1600) is where a corner-to-corner crossing (~173
- * units) starts feeling like waiting on a cutscene — especially since the
- * debounce already sits in front of it.
+ * How long after the cursor enters (or, from idle, moves on) the map before
+ * the first turn starts, ms — the latest hover position at that moment is the
+ * one turned to. NOT a restart-on-every-move debounce: a continuous sweep
+ * would then never turn at all. It exists only so that the first few
+ * pointermoves of a sweep, ~8-16 ms apart, don't each start a turn toward a
+ * spot the cursor has already left; at 60 ms it is well under anything that
+ * reads as delay (the pan's 350 ms linger did). While a turn is in progress
+ * this does not apply — the next turn starts the moment the current one ends.
  */
-export const MINIMAP_HOVER_PAN_MS_PER_WORLD_UNIT = 14;
-export const MINIMAP_HOVER_PAN_MIN_MS = 600;
-export const MINIMAP_HOVER_PAN_MAX_MS = 1600;
+export const MINIMAP_HOVER_LOOK_SETTLE_MS = 60;
 
 /**
  * Resolves the chunk-pack base URL for a dataset key, honouring

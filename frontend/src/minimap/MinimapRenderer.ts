@@ -31,11 +31,11 @@ export interface MinimapCallbacks {
 
 /** Two lines because that's the caption box's fixed height (see below) —
  * every readout written into it is also two lines, so nothing ever reflows.
- * "linger" is the hover-pan (Phase 6.9): rest the cursor and the camera pans
- * to where a click would teleport it. The first line (33 chars) was checked
- * against the box's 220px clip edge; it is still shorter than the flashlight
- * readout's "… in loaded chunks" line that set the box's zero tracking. */
-const HINT = "hover = flashlight · linger = pan\nclick = teleport";
+ * "look" is the hover-look: hovering the map turns the camera toward where a
+ * click would teleport it (`MinimapBridge`). Split across the two lines
+ * rather than joined with a separator — at 10px monospace the one-line form
+ * would run ~250px, past the box's 220px clip edge. */
+const HINT = "hover = flashlight + look\nclick = teleport";
 
 /**
  * The minimap panel: a static density base canvas with a cheap marker overlay

@@ -33,8 +33,6 @@ export interface TeleportOptions {
    * (roll-free, see `TeleportState`); if omitted the camera keeps its current
    * orientation. */
   lookAt?: THREE.Vector3;
-  /** Override the distance-derived duration. */
-  durationMs?: number;
   /** Fired once, on the frame the flight completes. */
   onArrive?: () => void;
 }
@@ -50,10 +48,12 @@ interface TeleportState {
    * quaternions to slerp. A slerp between two roll-free poses is not itself
    * roll-free in between — for a big yaw change with a pitch change it goes
    * "over the top" and rolled the cockpit by up to ~20° mid-flight, which was
-   * invisible on a 260-800 ms click-teleport and plainly visible on a 1.6 s
-   * hover-pan. Sweeping yaw (the short way round, `deltaYaw` is wrapped) and
-   * pitch directly is how the camera turns under the player's own look-drag,
-   * keeps roll at exactly zero throughout, and lands on the same yaw/pitch
+   * invisible on a 260-800 ms click-teleport and plainly visible on the 1.6 s
+   * hover-pan flights of the time (since replaced by a hover-LOOK that turns
+   * the camera the same way, in `FlightControls.lookTransitionTo`). Sweeping
+   * yaw (the short way round, `deltaYaw` is wrapped) and pitch directly is
+   * how the camera turns under the player's own look-drag, keeps roll at
+   * exactly zero throughout, and lands on the same yaw/pitch
    * `FlightControls.lookAt` derives on arrival, so that re-sync is a no-op.
    */
   fromYaw: number;
@@ -262,9 +262,11 @@ export class Engine {
    * and angular velocity, on a cubic Hermite curve that decays that velocity
    * into the usual come-to-rest arrival. Without this a retarget mid-flight
    * would stop dead and ease out again from zero — no snap in position, but a
-   * visible hitch in every retarget, and the minimap's hover-pan retargets on
-   * every new place the cursor rests. A flight that starts from rest is
-   * unchanged (ease-in-out cubic, zero tangents).
+   * visible hitch in every retarget. Today only a second map click before the
+   * first flight lands reaches this path (it was built for the minimap's
+   * hover-pan, which retargeted on every new place the cursor rested and has
+   * since become a hover-look), and it still serves that click. A flight that
+   * starts from rest is unchanged (ease-in-out cubic, zero tangents).
    *
    * Only the magnitude of the angular rate is carried, along the new yaw/pitch
    * sweep; the position tangent is carried as a full vector, clipped to
@@ -290,9 +292,7 @@ export class Engine {
     }
 
     const distance = fromPosition.distanceTo(toPosition);
-    const durationMs =
-      options.durationMs ??
-      Math.min(TELEPORT_MAX_MS, Math.max(TELEPORT_MIN_MS, distance * TELEPORT_MS_PER_WORLD_UNIT));
+    const durationMs = Math.min(TELEPORT_MAX_MS, Math.max(TELEPORT_MIN_MS, distance * TELEPORT_MS_PER_WORLD_UNIT));
 
     const carried = this.teleport !== null;
     const positionTangent = new THREE.Vector3();
@@ -335,20 +335,6 @@ export class Engine {
     return this.teleport !== null;
   }
 
-  /** Abandons an in-flight teleport where it currently is; `onArrive` does
-   * not fire. Whoever owns yaw/pitch (`FlightControls`) has to re-adopt the
-   * camera's mid-flight orientation afterwards, for the same reason `onArrive`
-   * re-syncs it on a completed flight. */
-  cancelTeleport(): void {
-    this.endFlight();
-  }
-
-  private endFlight(): void {
-    this.teleport = null;
-    this.flightVelocity.set(0, 0, 0);
-    this.flightAngularRate = 0;
-  }
-
   private stepTeleport(dt: number): void {
     const state = this.teleport;
     if (!state) return;
@@ -369,7 +355,9 @@ export class Engine {
     this.camera.quaternion.setFromEuler(this.flightEuler);
 
     if (raw >= 1) {
-      this.endFlight();
+      this.teleport = null;
+      this.flightVelocity.set(0, 0, 0);
+      this.flightAngularRate = 0;
       state.onArrive?.();
       return;
     }
