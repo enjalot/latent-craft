@@ -31,6 +31,7 @@ import {
   HEMISPHERE_INTENSITY,
   HEMISPHERE_SKY_COLOR,
   RESTORE_HOLD_DURATION_MS,
+  RING_R0_CHUNKS,
   SUN_COLOR,
   SUN_DIRECTION,
   SUN_INTENSITY,
@@ -411,10 +412,17 @@ function frameDensestChunk(m: Manifest): void {
   const densest = m.densestChunk();
   if (!densest) return;
   const center = m.chunkCenterWorld(densest.chunk_id, new THREE.Vector3());
-  // Stand-off distance is floored against the world size, not just the chunk
-  // size: at higher num_voxels a chunk is small enough that "1.6 chunks back"
-  // would spawn the camera *inside* the densest cluster, nose against a voxel.
-  const back = Math.max(m.chunkWorldSize * 1.6, m.worldScale * 0.5);
+  // Stand-off is tied to the R0 streaming ring, not to the world size: the
+  // whole point of framing the densest chunk is that the first thing on
+  // screen is TEXTURED, and with the Phase 7 rings (R0 = 1.5 chunk edges) a
+  // spawn any farther out than that shows the densest cluster as grey proxy
+  // blocks at screen centre while its atlas is still outside the load ring
+  // (measured: the old `max(1.6 chunks, 0.5 * worldScale)` put the camera
+  // 30.7 u out on bl-160, against an R0 of 15 u). 0.8 of R0 along the
+  // (0.55, 0.45, 1) approach lands the camera at ~0.97 R0 from the chunk
+  // centre — inside the ring with a little margin, and still well clear of
+  // the chunk's own faces (its half-edge is 0.5 chunk).
+  const back = RING_R0_CHUNKS * m.chunkWorldSize * 0.8;
   engine.camera.position.set(center.x + back * 0.55, center.y + back * 0.45, center.z + back);
   // Go through FlightControls so its yaw/pitch stay in sync with the
   // quaternion this sets — see `FlightControls.lookAt`'s doc comment.

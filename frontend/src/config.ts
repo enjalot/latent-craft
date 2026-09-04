@@ -563,12 +563,17 @@ export const VOXEL_PROXY_BRIGHTNESS = 0.6;
  * brightness multiplied by this much, on top of the additive glow box the
  * flashlight already draws there. The tint makes a lit proxy the same amber
  * as everything else the flashlight touches; the brightness bump is what
- * keeps it visible through the fog at the distances proxies live at (a 2.4x
- * albedo at 40% fog attenuation still lands brighter than an unlit proxy up
- * close). Restored to the base colour when the flashlight moves on.
+ * keeps it visible through the fog at the distances proxies live at.
+ * Restored to the base colour when the flashlight moves on.
+ *
+ * 2.4 -> 1.6: at 2.4 the bump stacked with the additive glow box and clipped
+ * to pure white (a (255,255,255) probe pixel at 30 u in the Phase 8 review),
+ * so a lit region read as a white-yellow blob rather than as amber blocks.
+ * 1.6x on a 0.6-brightness proxy is ~0.96 albedo — the brightness of an
+ * unlit textured cube — which the glow box then lifts without saturating.
  */
 export const VOXEL_PROXY_LIT_TINT = 0.6;
-export const VOXEL_PROXY_LIT_BRIGHTNESS = 2.4;
+export const VOXEL_PROXY_LIT_BRIGHTNESS = 1.6;
 
 // ---------------------------------------------------------------------------
 // Environment — depth cues (Phase 6.6, retuned Phase 7)
@@ -736,8 +741,8 @@ export const SKY_BRIGHTNESS = 0.075;
  * a 1600 px-wide 70° view magnifies that ~4x, which is invisible on fBm this
  * soft — the finest octave the shader evaluates is ~1.3 cycles per degree,
  * still 4+ texels per cycle — and there are no hard edges anywhere in the sky
- * to reveal it. 1024 would cost 4x the VRAM (6 MB vs 1.5 MB) for a texture
- * that is only ever looked up.
+ * to reveal it. 1024 would cost 4x the VRAM (24 MiB vs 6 MiB for six RGBA8
+ * faces) for a texture that is only ever looked up.
  */
 export const SKY_FACE_PX = 512;
 

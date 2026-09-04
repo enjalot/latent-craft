@@ -43,6 +43,18 @@ const BEER_LAMBERT_FOG_FRAGMENT = /* glsl */ `
  * exponential's (see `FOG_DENSITY` in config.ts for the curve and the numbers).
  */
 export function createSceneFog(): THREE.FogExp2 {
+  // The override reuses three's own identifiers (`fogDensity`, `vFogDepth`,
+  // `fogColor`, `FOG_EXP2`, `fogNear`/`fogFar`). A three upgrade that renamed
+  // any of them would surface as a GLSL compile failure in every fogged
+  // material at first render — far from here. Check the stock chunk still
+  // uses the names we depend on, so the failure is one clear message at
+  // startup instead.
+  const stock = THREE.ShaderChunk.fog_fragment;
+  for (const name of ["fogDensity", "vFogDepth", "fogColor", "FOG_EXP2", "fogNear", "fogFar"]) {
+    if (!stock.includes(name)) {
+      throw new Error(`three's fog_fragment no longer references '${name}' — Fog.ts's Beer-Lambert override needs updating`);
+    }
+  }
   THREE.ShaderChunk.fog_fragment = BEER_LAMBERT_FOG_FRAGMENT;
   return new THREE.FogExp2(FOG_COLOR, FOG_DENSITY);
 }
