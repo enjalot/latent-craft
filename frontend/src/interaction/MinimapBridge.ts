@@ -8,6 +8,7 @@ import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import type { RowToVoxel } from "../streaming/RowToVoxel.ts";
 import { HighlightCubes } from "../voxels/HighlightCubes.ts";
 import type { VoxelProxyCloud } from "../voxels/VoxelProxyCloud.ts";
+import type { HierarchicalProxies } from "../voxels/HierarchicalProxies.ts";
 import { EMPTY_REPR_ROW_ID } from "../types.ts";
 import {
   MINIMAP_AVATAR_MOVE_EPSILON,
@@ -133,7 +134,7 @@ export interface MinimapBridgeDeps {
   pack: MinimapPack;
   manifest: Manifest;
   chunkStore: ChunkStore;
-  voxelProxy: VoxelProxyCloud;
+  voxelProxy: VoxelProxyCloud | HierarchicalProxies;
   rowToVoxel: RowToVoxel;
   engine: Engine;
   flightControls: FlightControls;
@@ -176,6 +177,38 @@ export interface MinimapBridgeDeps {
  * and the bridge needs the panel to convert pixels to q.
  */
 export class MinimapBridge {
+  private queryController: AbortController | null = null;
+  private queryIsSelect = false;
+  private queryTimer: ReturnType<typeof setTimeout> | null = null;
+  private coordinateToken = 0;
+  private dead = false;
+
+  private voxelOf(row: number): { chunk: number; local: number } {
+    return this.pack.rowVoxel?.(row) ?? { chunk: this.rowToVoxel.chunkId[row], local: this.rowToVoxel.localVoxelId[row] };
+  }
+
+  private prepareInput(qx: number, qy: number, select: boolean): void {
+    if (!select && this.queryIsSelect) return;
+    this.queryController?.abort();
+    if (this.queryTimer) clearTimeout(this.queryTimer);
+    const controller = new AbortController();
+    this.queryController = controller;
+    this.queryIsSelect = select;
+    const complete = () => {
+      if (this.dead || controller.signal.aborted) return;
+      if (select) { this.queryIsSelect = false; this.teleportToQ(qx, qy); }
+      else { this.pendingHover = { qx, qy }; this.queueHoverLook(qx, qy); }
+    };
+    if (!this.pack.prepareQ) { complete(); return; }
+    this.queryTimer = setTimeout(() => {
+      this.panel.setCaption("Loading map neighbourhood…");
+      void this.pack.prepareQ!(qx, qy, select ? 0 : this.panel.radiusQFromPx(MINIMAP_FLASHLIGHT_RADIUS_PX), controller.signal)
+        .then(complete).catch(error => {
+          if (this.queryController === controller) this.queryIsSelect = false;
+          if (!controller.signal.aborted && !this.dead) this.panel.setCaption(`Map lookup failed: ${String(error)}`);
+        });
+    }, select ? 0 : 100);
+  }
   readonly panel: MinimapRenderer;
 
   /** Public so the world can be poked at from the devtools console and from
@@ -185,7 +218,7 @@ export class MinimapBridge {
 
   private readonly manifest: Manifest;
   private readonly chunkStore: ChunkStore;
-  private readonly voxelProxy: VoxelProxyCloud;
+  private readonly voxelProxy: VoxelProxyCloud | HierarchicalProxies;
   private readonly engine: Engine;
   private readonly flightControls: FlightControls;
 
@@ -241,10 +274,13 @@ export class MinimapBridge {
 
     this.panel = new MinimapRenderer(deps.container, deps.pack, {
       onHover: (qx, qy) => {
-        this.pendingHover = { qx, qy };
-        this.queueHoverLook(qx, qy);
+        this.prepareInput(qx, qy, false);
       },
       onLeave: () => {
+        if (!this.queryIsSelect) {
+          this.queryController?.abort();
+          if (this.queryTimer) clearTimeout(this.queryTimer);
+        }
         this.clearFlashlight();
         // A turn that hasn't started yet was about where the cursor is, and
         // it isn't there any more. A turn in progress is a different matter:
@@ -255,7 +291,7 @@ export class MinimapBridge {
         // nothing in particular.
         this.pendingLook = null;
       },
-      onSelect: (qx, qy) => this.teleportToQ(qx, qy),
+      onSelect: (qx, qy) => this.prepareInput(qx, qy, true),
     });
 
     this.highlight = new HighlightCubes(
@@ -338,8 +374,7 @@ export class MinimapBridge {
   } | null {
     const { rowId, distanceQ } = this.pack.nearestRow(qx, qy);
     if (rowId < 0) return null;
-    const chunkId = this.rowToVoxel.chunkId[rowId];
-    const localVoxelId = this.rowToVoxel.localVoxelId[rowId];
+    const { chunk: chunkId, local: localVoxelId } = this.voxelOf(rowId);
     this.manifest.voxelCenterWorldById(chunkId, localVoxelId, this.scratch);
     return {
       rowId,
@@ -364,6 +399,13 @@ export class MinimapBridge {
     const next = rowId === null || rowId === EMPTY_REPR_ROW_ID ? -1 : rowId;
     if (next === this.crosshairRowId) return;
     this.crosshairRowId = next;
+    if (next >= 0 && this.pack.ensureRow && !this.pack.hasRow(next)) {
+      this.panel.setCrosshair(null);
+      void this.pack.ensureRow(next).then(() => {
+        if (!this.dead && this.crosshairRowId === next) this.panel.setCrosshair({ qx: this.pack.rowQx(next), qy: this.pack.rowQy(next) });
+      }).catch(() => { if (this.crosshairRowId === next) this.crosshairRowId = -1; });
+      return;
+    }
     if (next < 0 || !this.pack.hasRow(next)) {
       this.panel.setCrosshair(null);
       return;
@@ -417,7 +459,8 @@ export class MinimapBridge {
     this.litVoxels.clear();
     for (let i = 0; i < rows; i++) {
       const row = this.rowScratch[i];
-      const key = voxelKey(this.rowToVoxel.chunkId[row], this.rowToVoxel.localVoxelId[row]);
+      const location = this.voxelOf(row);
+      const key = voxelKey(location.chunk, location.local);
       if (this.litVoxels.size >= MINIMAP_FLASHLIGHT_MAX_VOXELS && !this.litVoxels.has(key)) break;
       this.litVoxels.add(key);
     }
@@ -460,7 +503,7 @@ export class MinimapBridge {
     };
 
     this.panel.setCaption(
-      `${rows.toLocaleString()} pts → ${this.litVoxels.size} voxels lit\n` +
+      `${rows.toLocaleString()} ${this.pack.prepareQ ? "sampled " : ""}pts → ${this.litVoxels.size} voxels lit\n` +
         `2D ${this.pack.rawX(qx).toFixed(2)}, ${this.pack.rawY(qy).toFixed(2)} · ` +
         `${residentVoxels} loaded · ${proxyVoxels} not loaded`,
     );
@@ -512,6 +555,12 @@ export class MinimapBridge {
    * state, not as a broken hover.
    */
   highlightVoxel(chunkId: number, localVoxelId: number, rowIdHint = -1): VoxelHighlightResult {
+    const token = ++this.coordinateToken;
+    if (rowIdHint >= 0 && this.pack.ensureRow && !this.pack.hasRow(rowIdHint)) {
+      void this.pack.ensureRow(rowIdHint).then(() => {
+        if (!this.dead && token === this.coordinateToken) this.highlightVoxel(chunkId, localVoxelId, rowIdHint);
+      }).catch(() => undefined);
+    }
     // A pending 2D hover would otherwise overwrite this highlight on the very
     // next frame (see `update`), since both write the same overlay.
     this.pendingHover = null;
@@ -566,6 +615,7 @@ export class MinimapBridge {
   /** Clears whatever `highlightVoxel` last lit up. Same teardown as leaving
    * the minimap, deliberately — one flashlight, two ways to aim it. */
   clearVoxelHighlight(): void {
+    ++this.coordinateToken;
     this.clearFlashlight();
   }
 
@@ -626,6 +676,15 @@ export class MinimapBridge {
     const chunk = this.chunkStore.chunk(nearest.chunkId);
     const rowId = chunk ? chunk.meta.reprRowId[nearest.localVoxelId] : EMPTY_REPR_ROW_ID;
     this.avatarVoxel = key;
+    if (rowId !== EMPTY_REPR_ROW_ID && this.pack.ensureRow && !this.pack.hasRow(rowId)) {
+      void this.pack.ensureRow(rowId).then(() => {
+        if (!this.dead && this.avatarVoxel === key) {
+          this.avatarRowId = rowId;
+          this.panel.setAvatar({ qx: this.pack.rowQx(rowId), qy: this.pack.rowQy(rowId) });
+        }
+      }).catch(() => { if (this.avatarVoxel === key) this.avatarVoxel = -1; });
+      return;
+    }
     if (rowId === EMPTY_REPR_ROW_ID || !this.pack.hasRow(rowId)) {
       this.avatarRowId = -1;
       this.panel.setAvatar(null);
@@ -691,8 +750,7 @@ export class MinimapBridge {
     const { rowId } = this.pack.nearestRow(qx, qy);
     if (rowId < 0) return null;
 
-    const chunkId = this.rowToVoxel.chunkId[rowId];
-    const localVoxelId = this.rowToVoxel.localVoxelId[rowId];
+    const { chunk: chunkId, local: localVoxelId } = this.voxelOf(rowId);
     if (!this.manifest.chunksById.has(chunkId)) {
       console.warn(`[minimap] row ${rowId} maps to chunk ${chunkId}, which the manifest omits`);
       return null;
@@ -852,6 +910,9 @@ export class MinimapBridge {
    *   dropped doesn't count — nothing had moved yet).
    */
   cancelHoverLook(): boolean {
+    this.queryIsSelect = false;
+    this.queryController?.abort();
+    if (this.queryTimer) clearTimeout(this.queryTimer);
     this.pendingLook = null;
     const turning = this.flightControls.isLookTransitioning;
     this.flightControls.cancelLookTransition();
@@ -860,6 +921,9 @@ export class MinimapBridge {
   }
 
   dispose(): void {
+    this.dead = true;
+    this.queryController?.abort();
+    if (this.queryTimer) clearTimeout(this.queryTimer);
     this.highlight.dispose();
     this.panel.dispose();
   }

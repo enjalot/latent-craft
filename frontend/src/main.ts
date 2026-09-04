@@ -7,6 +7,7 @@ import { createSyntheticVoxelField } from "./voxels/VoxelField.ts";
 import { AtlasCache } from "./voxels/AtlasCache.ts";
 import { MiningPreview } from "./voxels/MiningPreview.ts";
 import { VoxelProxyCloud } from "./voxels/VoxelProxyCloud.ts";
+import { HierarchicalProxies } from "./voxels/HierarchicalProxies.ts";
 import { loadManifest, type Manifest } from "./streaming/Manifest.ts";
 import { loadVoxelProxy } from "./streaming/VoxelProxy.ts";
 import { ChunkLoader, type ChunkMeshUserData } from "./streaming/ChunkLoader.ts";
@@ -14,6 +15,8 @@ import { ChunkStore } from "./streaming/ChunkStore.ts";
 import { loadPointIndex, resolveThumbUrl, type PointIndex } from "./streaming/PointIndex.ts";
 import { loadRowToVoxel } from "./streaming/RowToVoxel.ts";
 import { loadMinimapPack } from "./minimap/Manifest.ts";
+import { StreamingMinimap } from "./minimap/StreamingMinimap.ts";
+import { rangeReader } from "./streaming/RangeReader.ts";
 import { isAbortError } from "./net/fetchTyped.ts";
 import { MinimapBridge } from "./interaction/MinimapBridge.ts";
 import type { ProxyVoxel } from "./voxels/VoxelProxyCloud.ts";
@@ -121,7 +124,8 @@ const raycaster = new VoxelRaycaster(engine.camera, (mesh, instanceId) => {
 /** The proxy voxel a hit landed on, or `null` if the hit is against anything
  * else. Identity is by mesh, not userData: there is exactly one proxy mesh. */
 function resolveProxyVoxel(hit: VoxelHit | null): ProxyVoxel | null {
-  if (!hit || !voxelProxy || hit.mesh !== voxelProxy.mesh) return null;
+  if (hit && voxelProxy instanceof HierarchicalProxies) return voxelProxy.resolveHit(hit.mesh, hit.instanceId);
+  if (!hit || !(voxelProxy instanceof VoxelProxyCloud) || hit.mesh !== voxelProxy.mesh) return null;
   return voxelProxy.voxelAt(hit.instanceId);
 }
 
@@ -177,7 +181,7 @@ let raycastTargets: THREE.Object3D | THREE.Object3D[] | null = null;
 let raycastRecursive = false;
 let manifest: Manifest | null = null;
 let chunkStore: ChunkStore | null = null;
-let voxelProxy: VoxelProxyCloud | null = null;
+let voxelProxy: VoxelProxyCloud | HierarchicalProxies | null = null;
 let syntheticInstances = 0;
 let miningController: MiningController | null = null;
 let xrayController: XRayController | null = null;
@@ -291,7 +295,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
         `num_voxels=${manifest.numVoxels}`,
     );
     status = "loading proxy…";
-    voxelProxy = new VoxelProxyCloud(
+    voxelProxy = manifest.raw.streaming ? await HierarchicalProxies.load(manifest, engine.renderer, appLifetime.signal) : new VoxelProxyCloud(
       manifest,
       await loadVoxelProxy(manifest, appLifetime.signal),
       engine.renderer,
@@ -346,6 +350,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
       chunkStore,
       () => xrayController?.isActive ?? false,
       () => hotbar.equippedTool === "pickaxe",
+      manifest,
     );
     xrayController = new XRayController(chunkStore, (chunkId, localVoxelId) =>
       miningController?.extractedFraction(chunkId, localVoxelId) ?? 0,
@@ -412,7 +417,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
  * composites after that, so the panel appears (with live markers) before its
  * background picture does.
  */
-async function bootstrapMinimap(m: Manifest, store: ChunkStore, proxies: VoxelProxyCloud): Promise<void> {
+async function bootstrapMinimap(m: Manifest, store: ChunkStore, proxies: VoxelProxyCloud | HierarchicalProxies): Promise<void> {
   const minimapBaseUrl = resolveMinimapBaseUrl(datasetKey);
   if (!minimapBaseUrl) {
     console.info(`[latent-scope-3d] dataset ${datasetKey} has no minimap pack — panel disabled`);
@@ -421,8 +426,8 @@ async function bootstrapMinimap(m: Manifest, store: ChunkStore, proxies: VoxelPr
   let bridge: MinimapBridge | null = null;
   try {
     const [pack, rowToVoxel] = await Promise.all([
-      loadMinimapPack(minimapBaseUrl, appLifetime.signal),
-      loadRowToVoxel(m, appLifetime.signal),
+      m.raw.streaming?.spatial ? StreamingMinimap.load(m, appLifetime.signal) : loadMinimapPack(minimapBaseUrl, appLifetime.signal),
+      m.raw.streaming?.spatial ? Promise.resolve({ chunkId: new Uint32Array(0), localVoxelId: new Uint16Array(0) }) : loadRowToVoxel(m, appLifetime.signal),
     ]);
     if (pack.nPoints !== m.totalPoints) {
       // Both packs index the same points table by row_id; if they disagree on
@@ -436,7 +441,7 @@ async function bootstrapMinimap(m: Manifest, store: ChunkStore, proxies: VoxelPr
     bridge = new MinimapBridge({
       // Non-null assertion: same module-scope `throw` narrowing limitation as
       // the InventoryPanel construction above.
-      container: app!,
+      container: inventoryPanel!.minimapDock,
       pack,
       manifest: m,
       chunkStore: store,
@@ -581,6 +586,7 @@ engine.start((dt) => {
   // queued one starts.
   if (!engine.isTeleporting) flightControls.update(dt);
   chunkStore?.updateCamera(engine.camera);
+  if (voxelProxy instanceof HierarchicalProxies) voxelProxy.update(engine.camera);
   effectorField?.update(engine.camera);
   minimap?.update(engine.camera, dt);
   // Self-corrects a stuck inventory-hover flashlight; a no-op (one null check)
@@ -630,8 +636,9 @@ engine.start((dt) => {
       // representative row (the proxy file carries none, so the minimap
       // crosshair stays off) and — see `resolveVoxelTarget` — no hold.
       hoverLabel =
-        `chunk ${proxyVoxel.chunkId} voxel ${proxyVoxel.localVoxelId} · ${proxyVoxel.count} pts · ` +
-        `not loaded — fly closer`;
+        proxyVoxel.chunkId < 0 || proxyVoxel.localVoxelId < 0
+          ? `${proxyVoxel.count.toLocaleString()} pts · overview region — fly closer to refine`
+          : `chunk ${proxyVoxel.chunkId} voxel ${proxyVoxel.localVoxelId} · ${proxyVoxel.count} pts · not loaded — fly closer`;
     } else {
       hoverLabel = `instance #${hit.instanceId}`;
     }
@@ -640,6 +647,16 @@ engine.start((dt) => {
   }
 
   minimap?.setHoveredRow(hoveredRowId);
+
+  // The focused face is a single high-resolution texture, also while hovering.
+  if (target && !pointerController.isDragging) {
+    void loadPointIndexOnce().catch(() => undefined);
+    const next = miningController?.nextRowId(target.chunkId, target.localVoxelId) ?? null;
+    if (next !== null && pointIndexReady?.ensure) void pointIndexReady.ensure(next).catch(() => undefined);
+    const url = next === null || !pointIndexReady ? null : resolveThumbUrl(pointIndexReady, next);
+    if (next !== null && url) miningPreview.show(next, url, hitMatrix);
+    else miningPreview.hide();
+  } else miningPreview.hide();
 
   // --- hold-to-extract progress -------------------------------------------
   //
@@ -699,7 +716,7 @@ engine.start((dt) => {
           launchExtractionFlight(cycle, hitPosition);
         }
         holdElapsedSeconds = 0;
-        if (!cycle || cycle.complete) {
+        if (cycle?.complete) {
           // Stop at the moment the voxel empties (or if extraction couldn't
           // run at all). The emptied voxel is pass-through from the next
           // raycast on, so the cursor is about to land on whatever is behind
@@ -709,13 +726,11 @@ engine.start((dt) => {
           pointerController.consumeHold();
           holdRing.hide();
           miningPreview.hide();
-        } else {
+        } else if (cycle) {
           holdRing.setProgress(cycle.fraction);
         }
       }
     }
-  } else {
-    miningPreview.hide();
   }
 
   // --- cursor position/state feedback -----------------------------------
@@ -793,6 +808,7 @@ function containerStats(): { chunks: number; instances: number; visible: number;
 // headless verification harness, which reads counters off it).
 Object.assign(window as unknown as Record<string, unknown>, {
   lsv: {
+    rangeReader,
     engine,
     // Environment handles: `sky.regenerate(seed)` re-rolls the nebulae,
     // `sky.material.uniforms` / `sky.target` are there for tuning; `lights`
@@ -877,6 +893,7 @@ function disposeApp(): void {
   chunkStore?.dispose();
   chunkStore = null;
   voxelProxy?.dispose();
+  rangeReader.dispose();
   voxelProxy = null;
   if (syntheticVoxelField) {
     syntheticVoxelField.removeFromParent();

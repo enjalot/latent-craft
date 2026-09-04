@@ -21,6 +21,14 @@ function cacheWith(loader: AtlasTextureLoader): AtlasCache {
 }
 
 describe("AtlasCache", () => {
+  it("counts decoded RGBA fallback pixels rather than compressed transfer bytes", async () => {
+    const texture = new THREE.DataTexture(new Uint8Array(64), 4, 4);
+    const cache = cacheWith({ loadAsync: async () => texture, dispose: vi.fn() });
+    await cache.acquire('rgba.ktx2');
+    expect(cache.byteSize('rgba.ktx2', 8)).toBe(64);
+    cache.release('rgba.ktx2');
+    cache.dispose();
+  });
   it("disposes a decode whose only waiter aborted", async () => {
     const load = deferred<THREE.Texture>();
     const loader = { loadAsync: vi.fn(() => load.promise), dispose: vi.fn() };

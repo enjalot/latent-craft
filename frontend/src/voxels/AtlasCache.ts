@@ -132,7 +132,10 @@ export class AtlasCache {
   byteSize(url: string, fallbackBytes: number): number {
     const entry = this.entries.get(url);
     const texture = entry?.texture as THREE.CompressedTexture | undefined;
-    if (!texture?.mipmaps?.length) return fallbackBytes;
+    if (!texture?.mipmaps?.length) {
+      const source = texture?.image as { data?: ArrayBufferView; width?: number; height?: number } | undefined;
+      return source?.data?.byteLength ?? (source?.width && source.height ? source.width * source.height * 4 : fallbackBytes);
+    }
     let bytes = 0;
     for (const mip of texture.mipmaps) {
       const data = (mip as { data?: ArrayBufferView }).data;

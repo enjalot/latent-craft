@@ -36,6 +36,17 @@ export class Manifest {
       throw new Error(`Unsupported manifest format_version ${raw.format_version} (expected 1)`);
     }
     this.raw = raw;
+    if (raw.streaming) {
+      if (raw.streaming.version !== 1) throw new Error("Unsupported streaming pack version");
+      if (!Number.isSafeInteger(raw.point_source.n_points) || raw.point_source.n_points < 0 || raw.point_source.n_points >= 2 ** 28)
+        throw new Error("Streaming row count exceeds the minimap's 28-bit row identity");
+      if (raw.point_index.bytes !== raw.point_source.n_points * 8 || raw.row_to_voxel.bytes !== raw.point_source.n_points * 8)
+        throw new Error("Streaming lookup table size mismatch");
+      for (const chunk of raw.chunks) {
+        if (!chunk.postings || chunk.postings.bytes !== chunk.n_points * 4 || chunk.meta_bytes !== 32 + raw.world.voxels_per_chunk ** 3 * 16)
+          throw new Error(`chunk ${chunk.chunk_id}: invalid summary/posting sizes`);
+      }
+    }
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.worldScale = worldScale;
 

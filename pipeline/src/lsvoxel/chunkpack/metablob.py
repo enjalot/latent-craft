@@ -47,6 +47,10 @@ VOXEL_RECORD_DTYPE = np.dtype(
     ]
 )
 assert VOXEL_RECORD_DTYPE.itemsize == 16, VOXEL_RECORD_DTYPE.itemsize
+WIDE_VOXEL_RECORD_DTYPE = np.dtype([
+    ('count', '<u4'), ('point_offset', '<u4'), ('color_rgb', 'u1', (3,)),
+    ('flags', 'u1'), ('repr_row_id', '<u4'),
+])
 
 
 @dataclass
@@ -66,9 +70,9 @@ class ChunkMeta:
         return len(self.point_ids)
 
 
-def new_voxel_records(n: int) -> np.ndarray:
+def new_voxel_records(n: int, wide: bool = False) -> np.ndarray:
     """An all-empty VoxelRecord table (count=0, repr_row_id=EMPTY_REPR_ROW_ID)."""
-    recs = np.zeros(n, dtype=VOXEL_RECORD_DTYPE)
+    recs = np.zeros(n, dtype=WIDE_VOXEL_RECORD_DTYPE if wide else VOXEL_RECORD_DTYPE)
     recs["repr_row_id"] = EMPTY_REPR_ROW_ID
     return recs
 
@@ -76,12 +80,13 @@ def new_voxel_records(n: int) -> np.ndarray:
 def write_chunk_meta(path: Path, meta: ChunkMeta) -> None:
     if meta.point_ids.dtype != np.uint32:
         raise ValueError(f"point_ids must be uint32, got {meta.point_ids.dtype}")
-    if meta.voxel_records.dtype != VOXEL_RECORD_DTYPE:
+    wide = meta.voxel_records.dtype == WIDE_VOXEL_RECORD_DTYPE
+    if not wide and meta.voxel_records.dtype != VOXEL_RECORD_DTYPE:
         raise ValueError("voxel_records must use VOXEL_RECORD_DTYPE")
 
     header = np.zeros(1, dtype=HEADER_DTYPE)
     header["magic"] = MAGIC
-    header["version"] = VERSION
+    header["version"] = 2 if wide else VERSION
     header["chunk_id"] = meta.chunk_id
     header["n_voxel_records"] = meta.n_voxel_records
     header["n_points"] = meta.n_points
@@ -92,7 +97,10 @@ def write_chunk_meta(path: Path, meta: ChunkMeta) -> None:
     with open(path, "wb") as f:
         f.write(header.tobytes())
         f.write(meta.voxel_records.tobytes())
-        f.write(meta.point_ids.tobytes())
+        if not wide:
+            f.write(meta.point_ids.tobytes())
+    if wide:
+        meta.point_ids.tofile(path.with_name('postings.bin'))
 
 
 def read_chunk_meta(path: Path) -> ChunkMeta:
@@ -100,18 +108,25 @@ def read_chunk_meta(path: Path) -> ChunkMeta:
     header = raw[: HEADER_DTYPE.itemsize].view(HEADER_DTYPE)[0]
     if bytes(header["magic"]) != MAGIC:
         raise ValueError(f"{path}: bad magic {bytes(header['magic'])!r}")
-    if int(header["version"]) != VERSION:
+    wide = int(header['version']) == 2
+    if int(header["version"]) not in (VERSION, 2):
         raise ValueError(f"{path}: unsupported version {header['version']}")
 
     n_voxel_records = int(header["n_voxel_records"])
     n_points = int(header["n_points"])
     off = HEADER_DTYPE.itemsize
     vrec_bytes = n_voxel_records * VOXEL_RECORD_DTYPE.itemsize
-    voxel_records = raw[off : off + vrec_bytes].view(VOXEL_RECORD_DTYPE).copy()
+    voxel_records = raw[off : off + vrec_bytes].view(WIDE_VOXEL_RECORD_DTYPE if wide else VOXEL_RECORD_DTYPE).copy()
     off += vrec_bytes
     point_ids_bytes = n_points * 4
-    point_ids = raw[off : off + point_ids_bytes].view("<u4").copy()
-    off += point_ids_bytes
+    if wide:
+        posting_path = path.with_name('postings.bin')
+        if posting_path.stat().st_size != point_ids_bytes:
+            raise ValueError('postings size mismatch')
+        point_ids = np.memmap(posting_path, dtype='<u4', mode='r') if n_points else np.zeros(0, dtype='<u4')
+    else:
+        point_ids = raw[off : off + point_ids_bytes].view("<u4").copy()
+        off += point_ids_bytes
 
     expected_size = off
     if raw.shape[0] != expected_size:

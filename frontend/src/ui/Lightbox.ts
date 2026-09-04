@@ -17,11 +17,11 @@ export interface LightboxSource {
   /** The FULL row_id list of the stack being browsed — live, not a copy, so a
    * point returned to its voxel while the lightbox is open disappears from the
    * carousel too (the index is re-clamped on the next step). */
-  rowIds: readonly number[];
+  rowIds: { readonly length: number; at(index: number): number | undefined };
   /** Where in `rowIds` to start — the thumbnail that was actually clicked. */
   index: number;
   /** row_id → thumbnail URL. Called lazily, once per navigation step. */
-  resolveUrl: (rowId: number) => string | null;
+  resolveUrl: (rowId: number) => string | null | Promise<string | null>;
   /** row_id → the point's subset name (`covers`, `synthetic-flux-klein`, …),
    * or `null` when unknown. Only consulted for a row whose `/meta` record has
    * no original, to say WHY: a synthetic image has no larger copy anywhere,
@@ -328,7 +328,7 @@ export class Lightbox {
 
   /** row_id currently displayed, or -1 when closed. */
   get currentRowId(): number {
-    return this.source ? (this.source.rowIds[this.source.index] ?? -1) : -1;
+    return this.source ? (this.source.rowIds.at(this.source.index) ?? -1) : -1;
   }
 
   /** The status line as rendered (without the "open ↗" link text). */
@@ -404,10 +404,11 @@ export class Lightbox {
     this.cancelMetaLookup();
     this.cancelOriginalLoad();
     source.index = clampIndex(source.index, length);
-    const rowId = source.rowIds[source.index];
-    const url = source.resolveUrl(rowId);
-    // Only the CURRENT thumbnail is ever requested — see class doc.
-    this.img.src = url ?? "";
+    const rowId = source.rowIds.at(source.index)!;
+    this.img.removeAttribute("src");
+    void Promise.resolve(source.resolveUrl(rowId)).then(url => {
+      if (token === this.showToken && url) this.img.src = url;
+    }).catch(() => { if (token === this.showToken) this.img.alt = "Thumbnail lookup failed; navigate to retry"; });
     const caption = `row ${rowId} — ${source.contextLabel}`;
     this.img.alt = caption;
     this.caption.textContent = caption;

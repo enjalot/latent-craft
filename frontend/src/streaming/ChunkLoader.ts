@@ -39,7 +39,7 @@ export function parseChunkMeta(buffer: ArrayBuffer): ChunkMeta {
   );
   if (magic !== META_MAGIC) throw new Error(`meta.bin: bad magic ${JSON.stringify(magic)}`);
   const version = view.getUint16(4, true);
-  if (version !== 1) throw new Error(`meta.bin: unsupported version ${version}`);
+  if (version !== 1 && version !== 2) throw new Error(`meta.bin: unsupported version ${version}`);
 
   const chunkId = view.getUint32(6, true);
   const nVoxelRecords = view.getUint32(10, true);
@@ -47,33 +47,37 @@ export function parseChunkMeta(buffer: ArrayBuffer): ChunkMeta {
   const voxelGridN = view.getUint16(18, true);
   const atlasTilePx = view.getUint16(20, true);
 
-  const expectedBytes = META_HEADER_BYTES + nVoxelRecords * VOXEL_RECORD_BYTES + nPoints * 4;
+  const expectedBytes = META_HEADER_BYTES + nVoxelRecords * VOXEL_RECORD_BYTES + (version === 1 ? nPoints * 4 : 0);
   if (buffer.byteLength !== expectedBytes) {
     throw new Error(
       `meta.bin (chunk ${chunkId}): size mismatch — got ${buffer.byteLength}B, header implies ${expectedBytes}B`,
     );
   }
 
-  const count = new Uint16Array(nVoxelRecords);
+  const count = new Uint32Array(nVoxelRecords);
   const pointOffset = new Uint32Array(nVoxelRecords);
   const colorRgb = new Uint8Array(nVoxelRecords * 3);
   const flags = new Uint8Array(nVoxelRecords);
   const reprRowId = new Uint32Array(nVoxelRecords);
 
   let nOccupied = 0;
+  let postingEnd = 0;
   for (let i = 0; i < nVoxelRecords; i++) {
     const base = META_HEADER_BYTES + i * VOXEL_RECORD_BYTES;
-    const c = view.getUint16(base, true);
+    const c = version === 1 ? view.getUint16(base, true) : view.getUint32(base, true);
     count[i] = c;
     if (c === 0) continue; // empty slot: every other field is zero/sentinel
     nOccupied++;
-    pointOffset[i] = view.getUint32(base + 2, true);
-    colorRgb[i * 3] = view.getUint8(base + 6);
-    colorRgb[i * 3 + 1] = view.getUint8(base + 7);
-    colorRgb[i * 3 + 2] = view.getUint8(base + 8);
-    flags[i] = view.getUint8(base + 9);
-    reprRowId[i] = view.getUint32(base + 10, true);
+    pointOffset[i] = view.getUint32(base + (version === 1 ? 2 : 4), true);
+    const colorOffset = version === 1 ? 6 : 8;
+    for (let k = 0; k < 3; k++) colorRgb[i * 3 + k] = view.getUint8(base + colorOffset + k);
+    flags[i] = view.getUint8(base + colorOffset + 3);
+    reprRowId[i] = view.getUint32(base + (version === 1 ? 10 : 12), true);
+    if (pointOffset[i] + c > nPoints) throw new Error("Invalid voxel posting bounds");
+    if (pointOffset[i] !== postingEnd) throw new Error("Non-contiguous voxel postings");
+    postingEnd += c;
   }
+  if (postingEnd !== nPoints) throw new Error("Voxel counts do not match chunk total");
 
   const occupied = new Uint32Array(nOccupied);
   for (let i = 0, w = 0; i < nVoxelRecords; i++) {
@@ -85,7 +89,7 @@ export function parseChunkMeta(buffer: ArrayBuffer): ChunkMeta {
   const pointIds = new Uint32Array(
     buffer,
     META_HEADER_BYTES + nVoxelRecords * VOXEL_RECORD_BYTES,
-    nPoints,
+    version === 1 ? nPoints : 0,
   );
 
   return { chunkId, voxelGridN, atlasTilePx, count, pointOffset, colorRgb, flags, reprRowId, pointIds, occupied };
@@ -168,6 +172,10 @@ export class ChunkLoader {
       if (meta.chunkId !== entry.chunk_id) {
         throw new Error(`chunk ${entry.chunk_id}: meta.bin reports chunk_id ${meta.chunkId}`);
       }
+      let total = 0;
+      for (const count of meta.count) total += count;
+      if (meta.voxelGridN !== this.manifest.voxelsPerChunk || meta.occupied.length !== entry.n_occupied_voxels || total !== entry.n_points)
+        throw new Error(`chunk ${entry.chunk_id}: summary disagrees with manifest`);
 
       material = createVoxelMaterial({
         atlas,
@@ -233,7 +241,11 @@ export class ChunkLoader {
       // transcode finishes. In that case attach ownership cleanup now; if the
       // atlas is already ours, release it synchronously.
       if (atlasAcquired) this.atlasCache.release(atlasUrl);
-      else void atlasPromise.then(() => this.atlasCache.release(atlasUrl), () => undefined);
+      else {
+        const cleanup = atlasPromise.then(() => this.atlasCache.release(atlasUrl), () => undefined);
+        if (this.manifest.raw.streaming) await cleanup;
+        else void cleanup;
+      }
       throw error;
     }
   }

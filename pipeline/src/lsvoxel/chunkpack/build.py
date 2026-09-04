@@ -47,6 +47,7 @@ def assign_and_build(
     tile_px: int = 32,
     basisu_bin: str = "basisu",
     tmp_dir: Path | None = None,
+    wide_counts: bool = False,
 ) -> dict:
     """Build and validate in a sibling staging directory, then publish as one pack.
 
@@ -83,6 +84,7 @@ def assign_and_build(
             tile_px=tile_px,
             basisu_bin=basisu_bin,
             tmp_dir=build_tmp_dir,
+            wide_counts=wide_counts,
         )
         manifest_mod.validate_manifest(staging)
         _publish_staged_pack(staging, out_dir)
@@ -164,6 +166,7 @@ def _assign_and_build_into(
     tile_px: int = 32,
     basisu_bin: str = "basisu",
     tmp_dir: Path | None = None,
+    wide_counts: bool = False,
 ) -> dict:
     n = len(points_df)
     if coords3d.shape != (n, 3):
@@ -187,7 +190,7 @@ def _assign_and_build_into(
     reps = assign_mod.select_representatives(coords_norm, assign, num_voxels)
 
     max_voxel_count = int(reps["n_points"].max()) if len(reps) else 0
-    if max_voxel_count > np.iinfo(np.uint16).max:
+    if not wide_counts and max_voxel_count > np.iinfo(np.uint16).max:
         worst = reps.loc[reps["n_points"].idxmax()]
         raise ValueError(
             "voxel occupancy exceeds meta.bin's uint16 limit: "
@@ -249,7 +252,7 @@ def _assign_and_build_into(
         local_starts = np.concatenate(([0], local_bounds))
         offset_by_local_id = dict(zip(c_local_ids[local_starts].tolist(), local_starts.tolist()))
 
-        voxel_records = metablob.new_voxel_records(voxels_per_chunk3)
+        voxel_records = metablob.new_voxel_records(voxels_per_chunk3, wide=wide_counts)
         for lid, repr_row, cnt in zip(
             occ_local_ids.tolist(), occ_repr_row_ids.tolist(), occ_counts.tolist()
         ):
@@ -315,6 +318,8 @@ def _assign_and_build_into(
                 "meta_sha256": meta_fe["sha256"],
             }
         )
+        if wide_counts:
+            chunk_entries[-1]['postings'] = manifest_mod.file_entry(meta_path.with_name('postings.bin'), out_dir)
 
         colors = np.array(
             [voxel_records[lid]["color_rgb"] for lid in occ_local_ids.tolist()], dtype=np.float64

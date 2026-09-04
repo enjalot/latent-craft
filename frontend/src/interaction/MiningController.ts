@@ -4,6 +4,8 @@ import type { VoxelHit } from "../engine/Raycast.ts";
 import { Inventory } from "./Inventory.ts";
 import { combinedVoxelOpacity } from "../voxels/VoxelOpacity.ts";
 import { extractionBatchSize } from "../config.ts";
+import { PagedRecords } from "../streaming/RangeReader.ts";
+import type { Manifest } from "../streaming/Manifest.ts";
 
 export function voxelStackId(chunkId: number, localVoxelId: number): string {
   return `${chunkId}:${localVoxelId}`;
@@ -21,17 +23,11 @@ export interface VoxelExtraction {
   localVoxelId: number;
   /** Points in the voxel, extracted or not (from `meta.bin`'s `count`). */
   total: number;
-  /**
-   * The row_ids currently OUT of this voxel — the actual ids, not a count.
-   *
-   * A count would be enough to drive the fade, and nothing else. It is not
-   * enough to (a) pick the NEXT batch without re-extracting points already in
-   * the inventory, (b) put one specific point back from the inventory panel,
-   * or (c) survive an evict/reload and still agree with the inventory stack
-   * about which points are where. All three are Phase 6.5 requirements, so the
-   * set is the real state and the count/fraction are derived from it.
-   */
-  extracted: Set<number>;
+  /** Net extracted count. Row identities live once, in the compact inventory;
+   * the posting cursor and return queue identify the next batch without scans. */
+  extracted: { size: number };
+  cursor: number;
+  returned: Set<number>;
 }
 
 /** What one completed extraction cycle produced — enough for the caller to
@@ -133,12 +129,46 @@ export class MiningController {
   readonly inventory = new Inventory();
 
   private readonly extractionByChunk = new Map<number, Map<number, VoxelExtraction>>();
+  private prepared: { key: string; cursor: number; rows: Uint32Array } | null = null;
+  private preparing: string | null = null;
+  private prepareToken = 0;
+  private retryAt = 0;
+  pagingError: string | null = null;
 
   constructor(
     private readonly chunkStore: ChunkStore,
     private readonly isXrayActive: () => boolean = () => false,
     private readonly isPickaxeEquipped: () => boolean = () => false,
+    private readonly manifest?: Manifest,
   ) {}
+
+  /** Only the hovered voxel's next 100 IDs are retained outside the shared page cache. */
+  prepare(chunkId: number, localVoxelId: number): void {
+    const chunk = this.chunkStore.chunk(chunkId);
+    if (!chunk?.entry.postings || !this.manifest) return;
+    const state = this.extractionState(chunkId, localVoxelId);
+    const cursor = state?.cursor ?? 0;
+    const key = `${chunkId}:${localVoxelId}:${cursor}`;
+    if (this.preparing === key || (this.prepared?.key === key) || performance.now() < this.retryAt) return;
+    this.preparing = key;
+    const token = ++this.prepareToken;
+    const total = chunk.meta.count[localVoxelId];
+    const offset = chunk.meta.pointOffset[localVoxelId];
+    const table = new PagedRecords(this.manifest.url(chunk.entry.postings.path), chunk.entry.n_points, 4);
+    const count = Math.min(100, total - cursor);
+    void Promise.all(Array.from({ length: count }, (_, i) => table.record(offset + cursor + i)))
+      .then(records => {
+        if (token !== this.prepareToken) return;
+        const rows = Uint32Array.from(records, r => r.getUint32(0, true));
+        if (rows.some(row => row >= this.manifest!.totalPoints)) throw new Error("Posting row outside points table");
+        this.prepared = { key, cursor, rows };
+        this.pagingError = null;
+      }).catch((error: unknown) => {
+        if (token !== this.prepareToken) return;
+        this.pagingError = String(error);
+        this.retryAt = performance.now() + 2000;
+      }).finally(() => { if (token === this.prepareToken) this.preparing = null; });
+  }
 
   /** Number of points the current tool can take from this voxel in one cycle,
    * capped to what remains. Shared with the hold gauge so prediction and the
@@ -178,13 +208,17 @@ export class MiningController {
     if (!chunk) return null;
     const total = chunk.meta.count[localVoxelId] ?? 0;
     if (total <= 0) return null;
-    const extracted = this.extractionByChunk.get(chunkId)?.get(localVoxelId)?.extracted;
-    const offset = chunk.meta.pointOffset[localVoxelId];
-    for (let i = 0; i < total; i++) {
-      const rowId = chunk.meta.pointIds[offset + i];
-      if (!extracted?.has(rowId)) return rowId;
+    const state = this.extractionState(chunkId, localVoxelId);
+    const returned = state?.returned.values().next().value;
+    if (returned !== undefined) return returned;
+    const cursor = state?.cursor ?? 0;
+    if (cursor >= total) return null;
+    if (chunk.entry.postings) {
+      this.prepare(chunkId, localVoxelId);
+      return this.prepared?.key === `${chunkId}:${localVoxelId}:${cursor}` ? this.prepared.rows[0] ?? null : null;
     }
-    return null;
+    const offset = chunk.meta.pointOffset[localVoxelId];
+    return chunk.meta.pointIds[offset + cursor] ?? null;
   }
 
   /** Every voxel this session has touched and not fully returned. */
@@ -227,16 +261,27 @@ export class MiningController {
     const batch = this.batchSizeFor(state.total, state.extracted.size);
     const offset = chunk.meta.pointOffset[localVoxelId];
     const taken: number[] = [];
-    // Scan the voxel's own point list in file order and take the first `batch`
-    // row_ids that aren't already out. Deliberately a scan rather than a stored
-    // cursor: returns from the inventory can put arbitrary points back at any
-    // time, which a monotonic cursor would either skip over or re-extract. The
-    // scan is O(points in this voxel) — under a millisecond even for BL's
-    // densest 7,098-point voxel, and it runs roughly four times a second.
-    for (let i = 0; i < total && taken.length < batch; i++) {
-      const rowId = chunk.meta.pointIds[offset + i];
-      if (state.extracted.has(rowId)) continue;
-      state.extracted.add(rowId);
+    // Returned IDs are mined first, then the monotonic posting cursor.
+    // A cold page yields null without mutating either source of truth.
+    const prepared = this.prepared?.key === `${chunkId}:${localVoxelId}:${state.cursor}` ? this.prepared : null;
+    if (chunk.entry.postings && !prepared && state.returned.size === 0) {
+      this.prepare(chunkId, localVoxelId);
+      return null;
+    }
+    for (const rowId of state.returned) {
+      if (taken.length >= batch) break;
+      state.returned.delete(rowId);
+      state.extracted.size++;
+      taken.push(rowId);
+    }
+    const startCursor = state.cursor;
+    while (state.cursor < total && taken.length < batch) {
+      const rowId = chunk.entry.postings
+        ? prepared?.rows[state.cursor - startCursor]
+        : chunk.meta.pointIds[offset + state.cursor];
+      if (rowId === undefined) break;
+      state.cursor++;
+      state.extracted.size++;
       taken.push(rowId);
     }
     if (taken.length === 0) return null;
@@ -292,9 +337,9 @@ export class MiningController {
     if (!stack) return false;
     const { chunkId, localVoxelId } = stack;
     const state = this.extractionByChunk.get(chunkId)?.get(localVoxelId);
-    if (!state?.extracted.delete(rowId)) return false;
-
-    this.inventory.returnRow(stackId, rowId);
+    if (!state || !this.inventory.returnRow(stackId, rowId)) return false;
+    state.extracted.size--;
+    state.returned.add(rowId);
     if (state.extracted.size === 0) this.clearState(chunkId, localVoxelId);
     this.applyToResidentVoxel(chunkId, localVoxelId);
     return true;
@@ -370,7 +415,7 @@ export class MiningController {
     }
     let state = byVoxel.get(localVoxelId);
     if (!state) {
-      state = { chunkId, localVoxelId, total, extracted: new Set() };
+      state = { chunkId, localVoxelId, total, extracted: { size: 0 }, cursor: 0, returned: new Set() };
       byVoxel.set(localVoxelId, state);
     }
     return state;

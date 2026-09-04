@@ -4,7 +4,6 @@ import type { VoxelProxyData } from "../types.ts";
 
 const VOXEL_PROXY_MAGIC = "LSVV";
 const VOXEL_PROXY_HEADER_BYTES = 16;
-const VOXEL_PROXY_RECORD_BYTES = 12;
 
 /**
  * Decodes `voxel_proxy.bin` — the whole dataset's occupied voxels, each with
@@ -39,12 +38,13 @@ export function parseVoxelProxy(buffer: ArrayBuffer): VoxelProxyData {
     throw new Error(`voxel_proxy.bin: bad magic ${JSON.stringify(magic)}`);
   }
   const version = view.getUint16(4, true);
-  if (version !== 1) throw new Error(`voxel_proxy.bin: unsupported version ${version}`);
+  if (version !== 1 && version !== 2) throw new Error(`voxel_proxy.bin: unsupported version ${version}`);
+  const recordBytes = version === 1 ? 12 : 14;
   const nVoxels = view.getUint32(8, true);
   const numVoxels = view.getUint16(12, true);
   const voxelsPerChunk = view.getUint16(14, true);
 
-  const expectedBytes = VOXEL_PROXY_HEADER_BYTES + nVoxels * VOXEL_PROXY_RECORD_BYTES;
+  const expectedBytes = VOXEL_PROXY_HEADER_BYTES + nVoxels * recordBytes;
   if (buffer.byteLength !== expectedBytes) {
     throw new Error(
       `voxel_proxy.bin: size mismatch — got ${buffer.byteLength}B, header implies ${expectedBytes}B`,
@@ -61,7 +61,7 @@ export function parseVoxelProxy(buffer: ArrayBuffer): VoxelProxyData {
 
   const chunkId = new Uint32Array(nVoxels);
   const localVoxelId = new Uint16Array(nVoxels);
-  const count = new Uint16Array(nVoxels);
+  const count = new Uint32Array(nVoxels);
   const colorRgb = new Uint8Array(nVoxels * 3);
   const flags = new Uint8Array(nVoxels);
   const runStart = new Int32Array(chunkSlots).fill(-1);
@@ -69,7 +69,7 @@ export function parseVoxelProxy(buffer: ArrayBuffer): VoxelProxyData {
 
   let previousKey = -1;
   for (let i = 0; i < nVoxels; i++) {
-    const base = VOXEL_PROXY_HEADER_BYTES + i * VOXEL_PROXY_RECORD_BYTES;
+    const base = VOXEL_PROXY_HEADER_BYTES + i * recordBytes;
     const c = view.getUint32(base, true);
     const v = view.getUint16(base + 4, true);
     if (c >= chunkSlots || v >= voxelsPerChunkTotal) {
@@ -84,11 +84,10 @@ export function parseVoxelProxy(buffer: ArrayBuffer): VoxelProxyData {
 
     chunkId[i] = c;
     localVoxelId[i] = v;
-    count[i] = view.getUint16(base + 6, true);
-    colorRgb[i * 3] = view.getUint8(base + 8);
-    colorRgb[i * 3 + 1] = view.getUint8(base + 9);
-    colorRgb[i * 3 + 2] = view.getUint8(base + 10);
-    flags[i] = view.getUint8(base + 11);
+    count[i] = version === 1 ? view.getUint16(base + 6, true) : view.getUint32(base + 6, true);
+    const colorOffset = version === 1 ? 8 : 10;
+    for (let k = 0; k < 3; k++) colorRgb[i * 3 + k] = view.getUint8(base + colorOffset + k);
+    flags[i] = view.getUint8(base + colorOffset + 3);
 
     if (runStart[c] < 0) runStart[c] = i;
     runEnd[c] = i + 1;

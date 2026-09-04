@@ -6,6 +6,10 @@ while a compact proxy layer keeps the full shape visible at distance. A linked
 2D UMAP minimap, extraction inventory, lightbox, and inspection tools provide
 ways to move between overview and individual source images.
 
+The default is now `monet-sscd-160`, using hierarchical proxy bricks and paged
+byte-range data. See [streaming architecture and 100M limits](docs/streaming-architecture.md)
+for formats, working-set budgets, build commands, and measured verification scope.
+
 ## Run locally
 
 The app expects a data tree containing `/chunks`, `/minimap`, `/thumbs`, and

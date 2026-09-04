@@ -13,7 +13,8 @@ import * as THREE from "three";
 export class MiningPreview {
   readonly mesh: THREE.Mesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>;
 
-  private readonly loader = new THREE.TextureLoader();
+  private request: AbortController | null = null;
+  private bitmap: ImageBitmap | null = null;
   private readonly position = new THREE.Vector3();
   private readonly quaternion = new THREE.Quaternion();
   private readonly scale = new THREE.Vector3();
@@ -53,29 +54,29 @@ export class MiningPreview {
     this.selectedUrl = url;
     this.mesh.visible = false;
     const generation = ++this.loadGeneration;
-    const pending = this.loader.load(
-      url,
-      (loaded) => {
-        if (this.disposed || generation !== this.loadGeneration) {
-          loaded.dispose();
-          return;
-        }
-        this.texture?.dispose();
-        this.texture = loaded;
-        this.mesh.material.map = loaded;
-        this.mesh.material.needsUpdate = true;
-        this.mesh.visible = true;
-      },
-      undefined,
-      (error) => {
-        if (generation !== this.loadGeneration) return;
+    this.request?.abort();
+    const request = new AbortController();
+    this.request = request;
+    void fetch(url, { signal: request.signal }).then(async response => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const bitmap = await createImageBitmap(await response.blob(), { imageOrientation: "flipY" });
+      if (this.disposed || generation !== this.loadGeneration) { bitmap.close(); return; }
+      const texture = new THREE.Texture(bitmap);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.flipY = false;
+      texture.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy());
+      texture.needsUpdate = true;
+      this.texture?.dispose();
+      this.bitmap?.close();
+      this.bitmap = bitmap;
+      this.texture = texture;
+      this.mesh.material.map = texture;
+      this.mesh.material.needsUpdate = true;
+      this.mesh.visible = true;
+    }).catch(error => {
+      if (!request.signal.aborted && generation === this.loadGeneration)
         console.warn(`[MiningPreview] thumbnail ${rowId} failed to load`, error);
-      },
-    );
-    pending.colorSpace = THREE.SRGBColorSpace;
-    pending.minFilter = THREE.LinearMipmapLinearFilter;
-    pending.magFilter = THREE.LinearFilter;
-    pending.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy());
+    });
   }
 
   hide(): void {
@@ -83,6 +84,7 @@ export class MiningPreview {
     this.selectedRowId = null;
     this.selectedUrl = null;
     this.loadGeneration++;
+    this.request?.abort();
     this.mesh.visible = false;
   }
 
@@ -92,6 +94,7 @@ export class MiningPreview {
     this.hide();
     this.mesh.removeFromParent();
     this.texture?.dispose();
+    this.bitmap?.close();
     this.texture = null;
     this.mesh.geometry.dispose();
     this.mesh.material.dispose();

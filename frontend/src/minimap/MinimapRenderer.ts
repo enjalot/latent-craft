@@ -94,9 +94,7 @@ export class MinimapRenderer {
 
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
-      position: "fixed",
-      right: "14px",
-      bottom: "14px",
+      position: "relative",
       fontSize: "11px",
       lineHeight: "1.4",
       padding: "5px 7px 6px",

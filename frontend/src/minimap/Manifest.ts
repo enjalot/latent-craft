@@ -55,6 +55,9 @@ const BIN_SPAN_Q = 1 << BIN_SHIFT;
  *   plain linear scale with no per-zoom special-casing.
  */
 export class MinimapPack {
+  prepareQ?: (qx: number, qy: number, radius: number, signal?: AbortSignal) => Promise<void>;
+  ensureRow?: (row: number) => Promise<void>;
+  rowVoxel?: (row: number) => { chunk: number; local: number } | undefined;
   readonly raw: MinimapManifestJson;
   readonly baseUrl: string;
 
@@ -92,7 +95,7 @@ export class MinimapPack {
   private readonly binStart: Uint32Array;
   private readonly binRows: Uint32Array;
 
-  constructor(raw: MinimapManifestJson, baseUrl: string, points: ArrayBuffer) {
+  constructor(raw: MinimapManifestJson, baseUrl: string, points?: ArrayBuffer) {
     this.raw = raw;
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.extent = raw.frame.extent;
@@ -114,6 +117,11 @@ export class MinimapPack {
     this.corpusNames = [];
     for (const [code, name] of Object.entries(raw.corpus_codes)) {
       this.corpusNames[Number(code)] = name;
+    }
+    if (!points) {
+      this.qx = new Uint16Array(0); this.qy = new Uint16Array(0); this.corpus = new Uint8Array(0);
+      this.binStart = new Uint32Array(0); this.binRows = new Uint32Array(0); this.rowsFilled = 0;
+      return;
     }
 
     // `xy_id.bin` is sorted by tile/Morton order, NOT by row_id, so it has to

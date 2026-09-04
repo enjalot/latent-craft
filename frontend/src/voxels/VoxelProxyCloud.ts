@@ -22,6 +22,9 @@ export interface ProxyVoxel {
 }
 
 export interface VoxelProxyStats {
+  cachedInstances?: number;
+  cachedBricks?: number;
+  pendingBricks?: number;
   /** Occupied voxels in the dataset == instances in the mesh. */
   voxels: number;
   /** Instances currently drawn as proxies, i.e. in non-resident chunks. */

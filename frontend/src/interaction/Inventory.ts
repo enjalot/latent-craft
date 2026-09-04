@@ -1,4 +1,5 @@
 import { Store } from "../ui/store.ts";
+import { ChunkedRows } from "./ChunkedRows.ts";
 
 /**
  * One source voxel's worth of EXTRACTED points.
@@ -9,12 +10,8 @@ import { Store } from "../ui/store.ts";
  * cycles and can shrink again point-by-point when items are returned. Two
  * consequences a reader should not be surprised by:
  *
- * 1. **`rowIds` is a mutable `number[]`, not a `Uint32Array` snapshot.** It
- *    grows by one batch per extraction cycle and loses individual entries on
- *    return, so a fixed-length typed array would mean reallocating on every
- *    mutation. It is still an OWNED array (never a view over the chunk's
- *    `meta.bin` buffer, which gets released on eviction — the reason 3.5's
- *    version was a `.slice()` copy in the first place).
+ * 1. `rowIds` owns append-friendly 4K u32 pages, independent of render chunks
+ *    and network caches. A return compacts one page, not the whole inventory.
  * 2. **The stack OBJECT identity is stable for the life of the stack.** The
  *    panel builds one DOM row per stack and holds a reference to the stack in
  *    that row's closures, so mutation-in-place + a `revision` bump is what
@@ -28,7 +25,7 @@ export interface InventoryStack {
   localVoxelId: number;
   /** Owned, mutable list of every row_id currently extracted (i.e. currently
    * OUT of the voxel and in this stack), in extraction order. */
-  rowIds: number[];
+  rowIds: ChunkedRows;
   /** How many points the SOURCE VOXEL holds in total, extracted or not — the
    * denominator for "3,412 / 7,098 pts" and for the voxel's fade. */
   totalPoints: number;
@@ -95,13 +92,14 @@ export class Inventory {
       id: descriptor.id,
       chunkId: descriptor.chunkId,
       localVoxelId: descriptor.localVoxelId,
-      rowIds: [...rowIds],
+      rowIds: new ChunkedRows(),
       totalPoints: descriptor.totalPoints,
       reprRowId: descriptor.reprRowId,
       firstExtractedAt: now,
       lastExtractedAt: now,
       revision: 1,
     };
+    for (const rowId of rowIds) stack.rowIds.push(rowId);
     this.byId.set(stack.id, stack);
     this.store.set((prev) => [stack!, ...prev]);
     return stack;
@@ -119,9 +117,7 @@ export class Inventory {
   returnRow(id: string, rowId: number): boolean {
     const stack = this.byId.get(id);
     if (!stack) return false;
-    const index = stack.rowIds.indexOf(rowId);
-    if (index < 0) return false;
-    stack.rowIds.splice(index, 1);
+    if (!stack.rowIds.remove(rowId)) return false;
     stack.revision++;
     if (stack.rowIds.length === 0) {
       this.removeStack(id);

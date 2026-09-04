@@ -62,9 +62,11 @@ export interface ManifestChunk {
   meta_path: string;
   meta_bytes: number;
   meta_sha256: string;
+  postings?: ManifestBlobRef;
 }
 
 export interface ManifestJson {
+  streaming?: { version: 1; hierarchy: string; spatial?: string; row_xy?: string; minimap_base?: string };
   format_version: number;
   dataset_id: string;
   built_at: string;
@@ -98,7 +100,7 @@ export interface ChunkMeta {
   voxelGridN: number;
   atlasTilePx: number;
   /** count[localVoxelId]; 0 == empty voxel, no atlas tile. */
-  count: Uint16Array;
+  count: Uint16Array | Uint32Array;
   /** Index into `pointIds` (in elements) where this voxel's points start. */
   pointOffset: Uint32Array;
   /** Mean tile color, 3 bytes per voxel (RGB), for the cheap tinted-cube fallback. */
@@ -132,7 +134,7 @@ export interface VoxelProxyData {
   chunkId: Uint32Array;
   localVoxelId: Uint16Array;
   /** Points in the voxel; pack construction rejects counts above uint16. */
-  count: Uint16Array;
+  count: Uint16Array | Uint32Array;
   /** Mean thumbnail color, 3 sRGB bytes per record. */
   colorRgb: Uint8Array;
   /** bit0 = has_atlas_tile, as in `ChunkMeta.flags`. */

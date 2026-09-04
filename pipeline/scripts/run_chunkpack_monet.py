@@ -58,8 +58,8 @@ def main() -> int:
         )
         return 2
     arm = sys.argv[1]
-    num_voxels = int(sys.argv[2]) if len(sys.argv) > 2 else 96
-    variant_suffix = sys.argv[3] if len(sys.argv) > 3 else ""
+    num_voxels = int(sys.argv[2]) if len(sys.argv) > 2 else 160
+    variant_suffix = sys.argv[3] if len(sys.argv) > 3 else f"-{num_voxels}"
     dataset_id = monet_dataset_id(arm)
     pack_id = f"{dataset_id}{variant_suffix}"
 

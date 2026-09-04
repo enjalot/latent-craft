@@ -1,6 +1,8 @@
 import { fetchArrayBuffer } from "../net/fetchTyped.ts";
 import type { Manifest } from "./Manifest.ts";
 import { THUMBS_BASE_PATH } from "../config.ts";
+import { PagedRecords } from "./RangeReader.ts";
+import { WeightedLruCache } from "../utils/WeightedLruCache.ts";
 
 /**
  * Placeholders a chunk-pack manifest's `thumb_url_template` may use:
@@ -33,6 +35,8 @@ const RECORD_BYTES = 8;
  * image itself.
  */
 export interface PointIndex {
+  ensure?: (row: number) => Promise<void>;
+  lookup?: (row: number) => { subset: number; local: number } | undefined;
   /** subsetCode[row_id]. */
   subsetCode: Uint8Array;
   /** localIdx[row_id] — the thumbs-manifest `global_idx` within that subset. */
@@ -90,6 +94,29 @@ export async function loadPointIndex(
   thumbsBaseUrl?: string,
   signal?: AbortSignal,
 ): Promise<PointIndex> {
+  if (manifest.raw.streaming) {
+    const records = new PagedRecords(manifest.url(manifest.raw.point_index.path), manifest.totalPoints, 8, undefined, 256);
+    const cache = new WeightedLruCache<number, { subset: number; local: number }>({
+      maxEntries: 8192, maxWeight: Infinity, weightOf: () => 1,
+    });
+    const failed = new WeightedLruCache<number, number>({ maxEntries: 128, maxWeight: Infinity, weightOf: () => 1 });
+    const subsetNames: string[] = [];
+    for (const [name, code] of Object.entries(manifest.raw.subsets)) subsetNames[code] = name;
+    return {
+      subsetCode: new Uint8Array(0), localIdx: new Uint32Array(0), subsetNames,
+      thumbUrlTemplate: manifest.raw.thumb_url_template, thumbsBaseUrl: thumbsBaseUrl ?? THUMBS_BASE_PATH,
+      lookup: row => cache.get(row),
+      ensure: async row => {
+        if (cache.get(row)) return;
+        if ((failed.get(row) ?? 0) > Date.now()) return;
+        try {
+          const record = await records.record(row);
+          cache.set(row, { subset: record.getUint8(0), local: record.getUint32(2, true) });
+          failed.delete(row);
+        } catch (error) { failed.set(row, Date.now() + 2000); throw error; }
+      },
+    };
+  }
   const buffer = await fetchArrayBuffer(manifest.url(manifest.raw.point_index.path), signal);
   return parsePointIndex(
     buffer,
@@ -119,14 +146,20 @@ export async function loadPointIndex(
  * original (`SYNTHETIC_SUBSET_PREFIX` in `config.ts`).
  */
 export function resolveSubsetName(index: PointIndex, rowId: number): string | null {
+  if (index.lookup) {
+    const record = index.lookup(rowId);
+    return record ? index.subsetNames[record.subset] ?? null : null;
+  }
   if (rowId < 0 || rowId >= index.subsetCode.length) return null;
   return index.subsetNames[index.subsetCode[rowId]] ?? null;
 }
 
 export function resolveThumbUrl(index: PointIndex, rowId: number): string | null {
-  if (rowId < 0 || rowId >= index.subsetCode.length) return null;
-  const subsetName = index.subsetNames[index.subsetCode[rowId]];
-  const localIdx = index.localIdx[rowId];
+  const record = index.lookup?.(rowId);
+  if (index.lookup && !record) return null;
+  if (!index.lookup && (rowId < 0 || rowId >= index.subsetCode.length)) return null;
+  const subsetName = index.subsetNames[record?.subset ?? index.subsetCode[rowId]];
+  const localIdx = record?.local ?? index.localIdx[rowId];
   let unresolved = false;
   const path = index.thumbUrlTemplate.replace(TEMPLATE_FIELD, (_match, field, pad) => {
     if (field === "subset_name") {

@@ -228,7 +228,22 @@ export class ChunkStore {
     const target = this.teleportTarget;
     this.candidates.length = 0;
     this.teleportPinned = 0;
-    for (const entry of this.manifest.chunks) {
+    const nearby = new Map<number, ManifestChunk>();
+    const addNeighbourhood = (position: THREE.Vector3) => {
+      const n = this.manifest.chunksPerAxis;
+      const r = Math.ceil(this.radii.r2);
+      const x = Math.floor((position.x + this.manifest.worldScale) / chunkSize);
+      const y = Math.floor((position.y + this.manifest.worldScale) / chunkSize);
+      const z = Math.floor((position.z + this.manifest.worldScale) / chunkSize);
+      for (let cz = Math.max(0, z - r); cz <= Math.min(n - 1, z + r); cz++)
+        for (let cy = Math.max(0, y - r); cy <= Math.min(n - 1, y + r); cy++)
+          for (let cx = Math.max(0, x - r); cx <= Math.min(n - 1, x + r); cx++) {
+            const id = cx + n * (cy + n * cz), entry = this.manifest.chunksById.get(id);
+            if (entry) nearby.set(id, entry);
+          }
+    };
+    if (this.manifest.raw.streaming) { addNeighbourhood(cameraPosition); if (target) addNeighbourhood(target); }
+    for (const entry of this.manifest.raw.streaming ? nearby.values() : this.manifest.chunks) {
       const center = this.centers.get(entry.chunk_id)!;
       const distance = center.distanceTo(cameraPosition) / chunkSize;
       let ring = ringFor(distance, this.radii);
@@ -269,12 +284,18 @@ export class ChunkStore {
     for (const [chunkId, controller] of this.loading) {
       if (!inRange.has(chunkId)) {
         controller.abort();
-        this.loading.delete(chunkId);
+        // KTX transcodes cannot be cancelled. Count them until finalization,
+        // otherwise rapid flight could create arbitrarily many decoder jobs.
+        if (!this.manifest.raw.streaming) this.loading.delete(chunkId);
       }
     }
   }
 
   private startLoads(): void {
+    if (this.manifest.raw.streaming) {
+      this.startBudgetedLoads();
+      return;
+    }
     if (this.loading.size >= MAX_CONCURRENT_CHUNK_LOADS) return;
 
     const wanted = this.candidates
@@ -291,6 +312,32 @@ export class ChunkStore {
     for (const candidate of wanted) {
       if (this.loading.size >= MAX_CONCURRENT_CHUNK_LOADS) break;
       this.clearFailure(candidate.entry.chunk_id, false);
+      void this.beginLoad(candidate.entry);
+    }
+  }
+
+  /** Admission, not evict/reload: the same priority cut governs both residency
+   * and requests. Reserve decoded RGBA + geometry even before uploads finish. */
+  private startBudgetedLoads(): void {
+    const candidates = this.candidates.filter(c => c.ring === Ring.Load || c.ring === Ring.Prefetch)
+      .sort((a, b) => a.ring - b.ring || a.priority - b.priority);
+    const allowed = new Set<number>();
+    let bytes = 0, instances = 0;
+    for (const candidate of candidates) {
+      const entry = candidate.entry;
+      const side = entry.atlas_size_px ?? this.manifest.raw.atlas.size_px;
+      const cost = side * side * 4 + entry.meta_bytes + entry.n_occupied_voxels * 1024;
+      if (allowed.size >= 64 || bytes + cost > 256 * 1024 * 1024 || instances + entry.n_occupied_voxels > 65536) continue;
+      allowed.add(entry.chunk_id);
+      bytes += cost; instances += entry.n_occupied_voxels;
+    }
+    for (const id of this.resident.keys()) if (!allowed.has(id)) this.evict(id);
+    for (const [id, controller] of this.loading) if (!allowed.has(id)) controller.abort();
+    for (const candidate of candidates) {
+      const id = candidate.entry.chunk_id;
+      if (!allowed.has(id) || this.resident.has(id) || this.loading.has(id) || !this.canAttempt(id)) continue;
+      if (this.loading.size >= MAX_CONCURRENT_CHUNK_LOADS) break;
+      this.clearFailure(id, false);
       void this.beginLoad(candidate.entry);
     }
   }

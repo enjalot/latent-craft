@@ -63,13 +63,6 @@ export interface DatasetConfig {
 }
 
 export const DATASETS: Record<string, DatasetConfig> = {
-  bl: {
-    path: "/chunks/bl",
-    label: "BL · num_voxels=96",
-    pointsId: "bl",
-    minimapPath: "/minimap/bl",
-    thumbsBasePath: "/thumbs/bl",
-  },
   "bl-160": {
     path: "/chunks/bl-160",
     label: "BL · num_voxels=160",
@@ -84,24 +77,6 @@ export const DATASETS: Record<string, DatasetConfig> = {
   // route (MONET's are byte ranges inside packed blobs, not files), which the
   // pack's own `thumb_url_template` addresses — hence no `thumbsBasePath`
   // override here.
-  "monet-random": {
-    path: "/chunks/monet-random",
-    label: "MONET · random draw",
-    pointsId: "monet-random",
-    minimapPath: "/minimap/monet-random",
-  },
-  "monet-sscd": {
-    path: "/chunks/monet-sscd",
-    label: "MONET · sscd draw",
-    pointsId: "monet-sscd",
-    minimapPath: "/minimap/monet-sscd",
-  },
-  "monet-annfaiss": {
-    path: "/chunks/monet-annfaiss",
-    label: "MONET · annfaiss draw",
-    pointsId: "monet-annfaiss",
-    minimapPath: "/minimap/monet-annfaiss",
-  },
   // 160^3 variants of the same three arms ("I want 160 for monet"), built
   // next to the 96^3 packs the way `bl-160` sits next to `bl`. Same points
   // table, fit and minimap pack per arm — only the voxel binning differs.
@@ -112,7 +87,7 @@ export const DATASETS: Record<string, DatasetConfig> = {
     minimapPath: "/minimap/monet-random",
   },
   "monet-sscd-160": {
-    path: "/chunks/monet-sscd-160",
+    path: "/chunks/monet-sscd-160-stream-20260904b",
     label: "MONET · sscd draw · num_voxels=160",
     pointsId: "monet-sscd",
     minimapPath: "/minimap/monet-sscd",
@@ -125,12 +100,6 @@ export const DATASETS: Record<string, DatasetConfig> = {
   },
   // The fourth arm, the research project's own faiss-based rarity draw. Its
   // packs are built by the same per-arm chain as the other three.
-  "monet-theirfaiss": {
-    path: "/chunks/monet-theirfaiss",
-    label: "MONET · theirfaiss draw",
-    pointsId: "monet-theirfaiss",
-    minimapPath: "/minimap/monet-theirfaiss",
-  },
   "monet-theirfaiss-160": {
     path: "/chunks/monet-theirfaiss-160",
     label: "MONET · theirfaiss draw · num_voxels=160",
@@ -152,7 +121,7 @@ export const DATASETS: Record<string, DatasetConfig> = {
  * full 2048² texture on every sparsely occupied chunk. Existing packs remain
  * readable through the legacy local-voxel-id atlas layout.
  */
-export const DEFAULT_DATASET = "bl-160";
+export const DEFAULT_DATASET = "monet-sscd-160";
 
 /**
  * Optional data-server origin. `VITE_DATA_ORIGIN=https://data.example.org`

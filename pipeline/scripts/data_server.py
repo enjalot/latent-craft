@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import os
 import re
 import sys
 import threading
@@ -79,6 +80,64 @@ POINT_META_ROUTE = re.compile(r"^/meta/([a-z0-9-]+)/(\d{1,10})$")
 
 
 class CORSRequestHandler(SimpleHTTPRequestHandler):
+    def send_head(self):
+        """Single byte ranges; never materialize a large file in handler memory."""
+        self._range_remaining = None
+        requested = self.headers.get("Range")
+        path = Path(self.translate_path(self.path))
+        # RFC 9110 §14.2 only defines Range for GET; HEAD describes the full resource.
+        if self.command != 'GET' or not requested or not requested.startswith('bytes=') or not path.is_file():
+            return super().send_head()
+        source = path.open("rb")
+        stat = os.fstat(source.fileno())
+        size = stat.st_size
+        etag = f'"{stat.st_ino:x}-{size:x}-{stat.st_mtime_ns:x}"'
+        if self.headers.get("If-Range", etag) != etag:
+            source.close()
+            return super().send_head()
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", requested)
+        try:
+            if not match or not any(match.groups()):
+                raise ValueError("invalid range")
+            left, right = match.groups()
+            if left:
+                start, end = int(left), min(int(right) if right else size - 1, size - 1)
+            else:
+                suffix = int(right)
+                if suffix <= 0:
+                    raise ValueError("empty suffix")
+                start, end = max(0, size - suffix), size - 1
+            if start > end or start >= size:
+                raise ValueError("unsatisfiable")
+        except ValueError:
+            source.close()
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{size}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
+        source.seek(start)
+        self._range_remaining = end - start + 1
+        self.send_response(206)
+        self.send_header("Content-Type", self.guess_type(str(path)))
+        self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Content-Length", str(self._range_remaining))
+        self.send_header("ETag", etag)
+        self.send_header("Last-Modified", self.date_time_string(stat.st_mtime))
+        self.end_headers()
+        return source
+
+    def copyfile(self, source, outputfile):
+        remaining = getattr(self, "_range_remaining", None)
+        if remaining is None:
+            return super().copyfile(source, outputfile)
+        while remaining:
+            block = source.read(min(64 * 1024, remaining))
+            if not block:
+                break
+            outputfile.write(block)
+            remaining -= len(block)
+
     #: Shared across handler threads; MonetThumbStore is internally locked. Set once
     #: in main(), left None if the import above failed.
     monet_store = None
@@ -181,6 +240,8 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(data)
 
     def end_headers(self):
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, ETag, Accept-Ranges")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Cache-Control", "no-cache")
         super().end_headers()

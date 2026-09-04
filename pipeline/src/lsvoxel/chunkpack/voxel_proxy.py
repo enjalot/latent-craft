@@ -55,6 +55,10 @@ VOXEL_PROXY_RECORD_DTYPE = np.dtype(
     ]
 )
 assert VOXEL_PROXY_RECORD_DTYPE.itemsize == 12, VOXEL_PROXY_RECORD_DTYPE.itemsize
+WIDE_PROXY_DTYPE = np.dtype([
+    ('chunk_id', '<u4'), ('local_voxel_id', '<u2'), ('count', '<u4'),
+    ('color_rgb', 'u1', (3,)), ('flags', 'u1'),
+])
 
 
 @dataclass
@@ -74,7 +78,8 @@ def records_for_chunk(chunk_id: int, voxel_records: np.ndarray) -> np.ndarray:
     occupied list. Both a fresh build and a derive-from-existing-pack go through
     this, so the two paths cannot disagree about what a record holds."""
     occupied = np.flatnonzero(voxel_records["count"] > 0)
-    recs = np.zeros(len(occupied), dtype=VOXEL_PROXY_RECORD_DTYPE)
+    wide = voxel_records.dtype['count'].itemsize == 4
+    recs = np.zeros(len(occupied), dtype=WIDE_PROXY_DTYPE if wide else VOXEL_PROXY_RECORD_DTYPE)
     recs["chunk_id"] = chunk_id
     recs["local_voxel_id"] = occupied
     recs["count"] = voxel_records["count"][occupied]
@@ -89,7 +94,7 @@ def build_voxel_proxy_records(per_chunk: list[np.ndarray]) -> np.ndarray:
     if not per_chunk:
         return np.zeros(0, dtype=VOXEL_PROXY_RECORD_DTYPE)
     recs = np.concatenate(per_chunk)
-    if recs.dtype != VOXEL_PROXY_RECORD_DTYPE:
+    if recs.dtype not in (VOXEL_PROXY_RECORD_DTYPE, WIDE_PROXY_DTYPE):
         raise ValueError("per-chunk runs must use VOXEL_PROXY_RECORD_DTYPE")
     order = np.lexsort((recs["local_voxel_id"], recs["chunk_id"]))
     return recs[order]
@@ -109,7 +114,7 @@ def check_canonical_order(records: np.ndarray) -> None:
 def write_voxel_proxy(
     path: Path, num_voxels: int, voxels_per_chunk: int, records: np.ndarray
 ) -> None:
-    if records.dtype != VOXEL_PROXY_RECORD_DTYPE:
+    if records.dtype not in (VOXEL_PROXY_RECORD_DTYPE, WIDE_PROXY_DTYPE):
         raise ValueError("records must use VOXEL_PROXY_RECORD_DTYPE")
     if voxels_per_chunk <= 0 or num_voxels % voxels_per_chunk != 0:
         raise ValueError(
@@ -125,7 +130,7 @@ def write_voxel_proxy(
 
     header = np.zeros(1, dtype=VOXEL_PROXY_HEADER_DTYPE)
     header["magic"] = MAGIC
-    header["version"] = VERSION
+    header["version"] = 2 if records.dtype == WIDE_PROXY_DTYPE else VERSION
     header["n_voxels"] = len(records)
     header["num_voxels"] = num_voxels
     header["voxels_per_chunk"] = voxels_per_chunk
@@ -145,7 +150,7 @@ def read_voxel_proxy_header(path: Path) -> tuple[int, int, int]:
     h = header[0]
     if bytes(h["magic"]) != MAGIC:
         raise ValueError(f"{path}: bad magic {bytes(h['magic'])!r}")
-    if int(h["version"]) != VERSION:
+    if int(h["version"]) not in (VERSION, 2):
         raise ValueError(f"{path}: unsupported version {h['version']}")
     return int(h["num_voxels"]), int(h["voxels_per_chunk"]), int(h["n_voxels"])
 
@@ -153,11 +158,12 @@ def read_voxel_proxy_header(path: Path) -> tuple[int, int, int]:
 def read_voxel_proxy(path: Path) -> VoxelProxy:
     num_voxels, voxels_per_chunk, n_voxels = read_voxel_proxy_header(path)
     raw = np.fromfile(path, dtype=np.uint8)
-    expected_size = VOXEL_PROXY_HEADER_DTYPE.itemsize + n_voxels * VOXEL_PROXY_RECORD_DTYPE.itemsize
+    dtype = WIDE_PROXY_DTYPE if int(raw[:16].view(VOXEL_PROXY_HEADER_DTYPE)[0]['version']) == 2 else VOXEL_PROXY_RECORD_DTYPE
+    expected_size = VOXEL_PROXY_HEADER_DTYPE.itemsize + n_voxels * dtype.itemsize
     if raw.shape[0] != expected_size:
         raise ValueError(
             f"{path}: size mismatch, file is {raw.shape[0]}B, header implies {expected_size}B"
         )
-    records = raw[VOXEL_PROXY_HEADER_DTYPE.itemsize :].view(VOXEL_PROXY_RECORD_DTYPE).copy()
+    records = raw[VOXEL_PROXY_HEADER_DTYPE.itemsize :].view(dtype).copy()
     check_canonical_order(records)
     return VoxelProxy(num_voxels=num_voxels, voxels_per_chunk=voxels_per_chunk, records=records)
