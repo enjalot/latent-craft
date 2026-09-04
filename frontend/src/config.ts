@@ -293,10 +293,11 @@ export const SUN_INTENSITY = 1.2;
  *
  * `HEADLAMP_RANGE` is how far in front of the camera the light reaches (the
  * light's cutoff `distance` is `RANGE + BACKSET`, measured from the lamp).
- * Half a `WORLD_SCALE` = 25 units = 2.5 chunk edges on bl-160 — about the
- * textured-chunk ring the LOD work after this shrinks to, so the lamp runs out
- * where the textures do. Three's cutoff window `(1 - (r/cutoff)^4)^2` fades it
- * out over the last third rather than clipping.
+ * Half a `WORLD_SCALE` = 25 units = 2.5 chunk edges on bl-160 — exactly the
+ * R1 prefetch ring (`RING_R1_CHUNKS`), so the lamp runs out where the
+ * textured chunks give way to flat proxy voxels. Three's cutoff window
+ * `(1 - (r/cutoff)^4)^2` fades it out over the last third rather than
+ * clipping.
  *
  * Intensity: with the rig above, measured on the same voxel face, lamp on vs
  * lamp off (luminance /255, fog off): 1 unit 190 vs 145, 3 units 166 vs 141,
@@ -451,10 +452,38 @@ export const CONTAINER_XRAY_OPACITY = 1;
  * center, so they stay meaningful across datasets with different
  * `chunks_per_axis`. R0 = fetch now, R1 = background prefetch, R2 = keep
  * resident if already loaded, beyond R2 = evict.
+ *
+ * 3 / 5 / 8 -> 1.5 / 2.5 / 3.5 (Phase 8, LOD). Direct feedback: "are we only
+ * loading visible chunks for performance, I want to feel like we are in a big
+ * universe not able to see the whole thing at once. is there some trick to
+ * have distant chunks approximated so we can still highlight when turning to
+ * them but not showing images? in Minecraft it's possible to fly for some time
+ * before more chunks are loaded."
+ *
+ * The old radii were sized so the whole pack was effectively resident — at the
+ * bl-160 spawn, 190 of 246 chunks inside R1 and all 246 inside R2: every
+ * thumbnail in the world on the GPU at once, and nothing left to fly toward.
+ * Now every occupied voxel the camera is NOT near is drawn from
+ * `voxel_proxy.bin` as a flat mean-coloured block (`voxels/VoxelProxyCloud.ts`,
+ * the "distant chunks approximated" half of the ask), so the textured ring
+ * only has to cover what you can actually read a thumbnail on. On bl-160
+ * (chunk edge 10 units) that is textures within 15 units, prefetch out to 25,
+ * keep to 35 — the same numbers the environment pass was tuned around: the
+ * headlamp runs out at 25 (`HEADLAMP_RANGE`), and the fog is 30% at 25 and
+ * 40% at 35, so a chunk swaps from flat blocks to thumbnails while it is still
+ * in the haze rather than popping in sharp. At spawn that is ~45 resident
+ * chunks instead of ~190 (measured 44 / 91 inside R1 / R2). The one-edge band
+ * between R1 and R2 is the eviction hysteresis: a chunk fetched at 25 units is
+ * not dropped until you have backed off to 35, ~1.25 s at cruise.
+ *
+ * Distances are to a chunk's CENTER, so a chunk at the R0 edge can hold
+ * voxels 6 units away (half a chunk diagonal is 8.7) and one just outside R1
+ * can hold voxels at 17 — the swap is per chunk, not per voxel, and at these
+ * radii it happens well inside the headlamp's reach.
  */
-export const RING_R0_CHUNKS = 3.0;
-export const RING_R1_CHUNKS = 5.0;
-export const RING_R2_CHUNKS = 8.0;
+export const RING_R0_CHUNKS = 1.5;
+export const RING_R1_CHUNKS = 2.5;
+export const RING_R2_CHUNKS = 3.5;
 
 /** Max chunk fetches in flight at once. */
 export const MAX_CONCURRENT_CHUNK_LOADS = 6;
@@ -467,6 +496,12 @@ export const MAX_CONCURRENT_CHUNK_LOADS = 6;
  * not by point count. Measured on the BL num_voxels=96 pack: ~5.7 MB per
  * decoded atlas, so all 98 chunks ≈ 553 MB. 1.25 GB leaves room for that plus
  * a denser pack without the budget biting during normal flight.
+ *
+ * With the Phase 8 rings these almost never bind: a keep sphere of 3.5 chunk
+ * edges holds at most ~180 chunk slots (4/3·π·3.5³) and on every current pack
+ * far fewer are occupied (bl-160 spawn: 91 inside R2, ~520 MB), so the ring
+ * pass alone keeps residency under both caps. They stay as the safety net for
+ * a pack with larger atlases, not as a knob anything is tuned against.
  */
 export const MAX_RESIDENT_CHUNKS = 512;
 export const MAX_RESIDENT_ATLAS_BYTES = 1280 * 1024 * 1024;
@@ -570,9 +605,10 @@ export const FOG_COLOR = 0x05060a;
  *
  * Why not three's built-in exp2 (`exp(-(d * density)^2)`), which Phase 6.6
  * used: its shape can't meet the brief. The targets are ~50% attenuation at
- * 40-50 units (the textured ring the LOD pass shrinks to), clearly dim by 100,
- * and the far structure of the map still faintly there at 150-200 (the map is
- * 100 units per axis, 173 on the diagonal). An exp2 that is 50% at 48 units
+ * 40-50 units (just past the R2 keep ring, so the proxy voxels beyond the
+ * textured chunks are already half-faded), clearly dim by 100, and the far
+ * structure of the map still faintly there at 150-200 (the map is 100 units
+ * per axis, 173 on the diagonal). An exp2 that is 50% at 48 units
  * is 98% at 100 and 99.99% at 175 — the far half of the map is simply gone —
  * and one that leaves 8% at 175 is only 25% at 48. Exp2's tail is quadratic;
  * the brief needs a long one. Plain exponential is also what a uniform medium
@@ -583,10 +619,10 @@ export const FOG_COLOR = 0x05060a;
  * world). Attenuation `1 - exp(-d * density)` at 0.72/WORLD_SCALE = 0.0144:
  *
  *     d =  10 (arm's length)          -> 13% dimmed
- *     d =  25 (a quarter world axis)  -> 30%
+ *     d =  25 (the R1 prefetch edge)  -> 30%
+ *     d =  35 (the R2 keep edge)      -> 40%
  *     d =  50 (a world half-extent)   -> 51%
  *     d = 100 (a full world axis)     -> 76%
- *     d = 133 (the R2 residency edge) -> 85%
  *     d = 175 (the world diagonal)    -> 92%
  *
  * So the block you are mining is essentially untouched, the far side of a
@@ -601,9 +637,9 @@ export const FOG_DENSITY = 0.72 / WORLD_SCALE;
 
 /**
  * Radius of the starfield shell, in `WORLD_SCALE`s. 12 puts it at 600 units —
- * far outside both the world (half-extent 50) and the R2 residency ring (133),
- * so stars always read as "infinitely far away" and can never be flown into or
- * mistaken for data. It has to stay comfortably inside `CAMERA_FAR` (1200) from
+ * far outside the world (half-extent 50, 87 to a corner), so stars always read
+ * as "infinitely far away" and can never be flown into or mistaken for data.
+ * It has to stay comfortably inside `CAMERA_FAR` (1200) from
  * wherever the camera is, including its own far side: 600 + 600 = 1200 exactly
  * at the origin, so the shell's back half fades out right at the far plane
  * rather than popping — which is fine (and invisible) because fog is disabled
@@ -750,9 +786,11 @@ export const SYNTHETIC_INSTANCE_COUNT = 150_000;
  * the same trip at a higher speed, and raising the speed to compensate would
  * cancel exactly the thing that was asked for. What the doubling actually costs
  * is bounded and small: crossing a world axis goes ~3.1s -> ~6.3s, and the full
- * corner-to-corner diagonal ~5.4s -> ~11s. That is a journey, not dead time,
- * and the R2 residency ring (8 chunk edges, which scales with the world) still
- * keeps two-thirds of an axis streamed in around you the whole way.
+ * corner-to-corner diagonal ~5.4s -> ~11s. That is a journey, not dead time.
+ * (At the time the R2 ring kept two-thirds of an axis streamed in around you
+ * the whole way; since Phase 8 the textured ring is deliberately small and the
+ * rest of the trip is flat proxy voxels resolving into thumbnails as you
+ * arrive — see `RING_R0_CHUNKS`.)
  *
  * 16 -> 8, from the next round of real use: "the movement speed is still too
  * fast, we should move half as fast in all directions." Cruise is now for
@@ -806,12 +844,13 @@ export const FLIGHT_SPRINT_DOUBLE_TAP_MS = 300;
 /** Camera near/far planes and FOV.
  *
  * `CAMERA_FAR` 500 -> 1200 alongside the `WORLD_SCALE` 25 -> 50 change. The
- * world now spans 100 units per axis / 173 on the diagonal, and the R2 keep-ring
- * reaches 8 chunk edges = 133 units, so 500 was no longer the comfortable ~6x
- * margin it used to be — and the starfield shell below deliberately sits far
- * outside the play area, which needs the depth range to reach it from anywhere
- * a player is likely to be (`STARFIELD_RADIUS_WORLD_SCALES * WORLD_SCALE` plus
- * the distance they've strayed from the origin).
+ * world now spans 100 units per axis / 173 on the diagonal (and every occupied
+ * voxel of it is drawn, as a proxy if not a thumbnail — see "Voxel proxies"),
+ * so 500 was no longer the comfortable ~6x margin it used to be — and the
+ * starfield shell below deliberately sits far outside the play area, which
+ * needs the depth range to reach it from anywhere a player is likely to be
+ * (`STARFIELD_RADIUS_WORLD_SCALES * WORLD_SCALE` plus the distance they've
+ * strayed from the origin).
  *
  * Raising `far` costs essentially nothing in depth precision here: with a near
  * plane of 0.05 the `1/near - 1/far` term is 20.0 at far=500 and 19.999 at

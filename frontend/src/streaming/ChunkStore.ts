@@ -49,14 +49,16 @@ interface ChunkCandidate {
  * now, fetches them in priority order, and evicts the ones the camera has left
  * behind.
  *
- * Scale note: the BL num_voxels=96 pack has only 98 occupied chunks, so the
- * candidate pass below is a plain linear scan and, with the default radii,
- * nearly everything ends up resident anyway. That is fine and intentional —
- * the machinery exists for the datasets where it matters (higher num_voxels,
- * Monet), and a linear scan over a few hundred chunks is far cheaper than the
- * spatial index it would take to avoid it. The one thing that does not scale
- * is the scan itself; swap it for a chunk-grid neighbourhood walk when a pack
- * has tens of thousands of occupied chunks.
+ * Scale note: the packs so far have a few hundred occupied chunks (98 on the
+ * 96^3 BL pack, 246 on bl-160), so the candidate pass below is a plain linear
+ * scan — far cheaper than the spatial index it would take to avoid it. The
+ * one thing that does not scale is the scan itself; swap it for a chunk-grid
+ * neighbourhood walk when a pack has tens of thousands of occupied chunks.
+ *
+ * Since Phase 8 the rings are deliberately tight (`RING_R0_CHUNKS` and
+ * friends: ~45 of bl-160's 246 chunks resident at spawn, not ~190): what is
+ * outside them is not missing but drawn by the always-resident voxel proxy
+ * layer, which this store drives through `onResidencyChanged`.
  */
 export class ChunkStore {
   /** Every resident chunk mesh hangs off this group; add it to the scene. */
