@@ -67,10 +67,13 @@ else:
 
 #: `/thumbs/monet/<packed>.webp`. Anchored and digits-only, so nothing else under
 #: /thumbs (BL's static tree included) is affected.
-MONET_THUMB_ROUTE = re.compile(r"^/thumbs/monet/(\d+)\.webp$")
+#: Digit runs are bounded (a u32 has 10 digits) so a pathological request can't
+#: push `int()` past Python's 4300-digit limit and drop the connection with a
+#: traceback — anything longer simply doesn't match and falls through to 404.
+MONET_THUMB_ROUTE = re.compile(r"^/thumbs/monet/(\d{1,10})\.webp$")
 #: `/meta/<points_id>/<row_id>`. The id charset is the whole path-safety argument:
 #: no dots, no slashes, so `points/<id>` can't escape the served root.
-POINT_META_ROUTE = re.compile(r"^/meta/([a-z0-9-]+)/(\d+)$")
+POINT_META_ROUTE = re.compile(r"^/meta/([a-z0-9-]+)/(\d{1,10})$")
 
 
 class CORSRequestHandler(SimpleHTTPRequestHandler):
