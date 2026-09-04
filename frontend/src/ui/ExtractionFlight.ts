@@ -24,14 +24,9 @@ const TILE_PX = 44;
  * thumbnail-sized tile per completed extraction cycle, flying from the voxel's
  * on-screen position to the inventory panel and fading out.
  *
- * **One element per CYCLE, not per point.** Each cycle extracts exactly one
- * point today (`config.ts#extractionBatchSize` is pinned to 1 — "one thumb at
- * a time", by explicit design), so `count` is currently always 1 and the "+N"
- * badge always reads "+1". The count-based design is kept anyway rather than
- * simplified to a hardcoded single thumbnail: it's the same reasoning
- * `extractionBatchSize` itself was kept as a function for — if the batch size
- * ever changes again, this animation already scales (one tile, a "+N" badge,
- * not N DOM nodes per cycle) instead of needing a second pass.
+ * **One element per CYCLE, not per point.** Empty hand carries one point and
+ * Pickaxe can carry 100; either way this remains one tile with a "+N" badge,
+ * not N DOM nodes and N simultaneous transitions.
  *
  * Implementation is deliberately the cheap one the plan asked for: a plain
  * absolutely-positioned `div` with a CSS transition on `transform`/`opacity`,

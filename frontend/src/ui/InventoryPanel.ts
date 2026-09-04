@@ -51,6 +51,8 @@ interface StackRowView {
   stack: InventoryStack;
   revision: number;
   update(): void;
+  setExpanded(expanded: boolean): void;
+  setLatestRow(rowId: number): void;
 }
 
 /**
@@ -127,6 +129,7 @@ export class InventoryPanel {
    * `validateHover` for why this is tracked rather than just fired-and-
    * forgotten. */
   private hoveredStackId: string | null = null;
+  private focusedStackId: string | null = null;
   private collapsed = false;
   private readonly unsubscribe: Unsubscribe;
 
@@ -229,6 +232,23 @@ export class InventoryPanel {
     return this.root.getBoundingClientRect();
   }
 
+  /** Makes the just-mined voxel the inventory's sole open stack and promotes
+   * the batch's final image into that row's large preview. Called explicitly
+   * by the extraction path (rather than inferred from generic store updates)
+   * so returning an item never steals focus or reopens the panel. */
+  focusMined(stackId: string, lastRowId: number): void {
+    const focusChanged = this.focusedStackId !== stackId;
+    this.focusedStackId = stackId;
+    this.setCollapsed(false);
+    for (const [id, row] of this.rows) {
+      row.setExpanded(id === stackId);
+    }
+    const focused = this.rows.get(stackId);
+    if (!focused) return;
+    focused.setLatestRow(lastRowId);
+    if (focusChanged) focused.el.scrollIntoView({ block: "nearest" });
+  }
+
   /**
    * Re-checks, against the browser's own authoritative `:hover` state, that the
    * row this panel thinks is hovered really is. Called once per frame from the
@@ -321,6 +341,7 @@ export class InventoryPanel {
       if (live.has(id)) continue;
       view.el.remove();
       this.rows.delete(id);
+      if (this.focusedStackId === id) this.focusedStackId = null;
       if (this.hoveredStackId === id) this.setHovered(null);
     }
 
@@ -420,6 +441,48 @@ export class InventoryPanel {
     } satisfies Partial<CSSStyleDeclaration>);
     row.appendChild(grid);
 
+    const latest = document.createElement("div");
+    latest.className = "ls-inventory-latest";
+    Object.assign(latest.style, {
+      gridColumn: "1 / -1",
+      position: "relative",
+      width: "100%",
+      aspectRatio: "1",
+      overflow: "hidden",
+      cursor: "zoom-in",
+      background: "#04141b",
+    } satisfies Partial<CSSStyleDeclaration>);
+
+    const latestImg = document.createElement("img");
+    latestImg.width = 256;
+    latestImg.height = 256;
+    latestImg.decoding = "async";
+    latestImg.classList.add(HUD_CLASS.thumb);
+    Object.assign(latestImg.style, {
+      display: "block",
+      width: "100%",
+      height: "100%",
+      objectFit: "cover",
+      boxSizing: "border-box",
+    } satisfies Partial<CSSStyleDeclaration>);
+    latest.appendChild(latestImg);
+
+    const latestCaption = document.createElement("div");
+    latestCaption.classList.add(HUD_CLASS.readout);
+    Object.assign(latestCaption.style, {
+      position: "absolute",
+      left: "1px",
+      right: "1px",
+      bottom: "1px",
+      padding: "4px 6px",
+      fontSize: "9px",
+      letterSpacing: "0.08em",
+      color: "var(--hud-title)",
+      background: "rgba(2, 9, 13, 0.8)",
+      pointerEvents: "none",
+    } satisfies Partial<CSSStyleDeclaration>);
+    latest.appendChild(latestCaption);
+
     // Spelled out in text so the two return affordances below are discoverable
     // without the user first hovering a 28px tile to find a hidden button.
     const hint = document.createElement("div");
@@ -458,6 +521,47 @@ export class InventoryPanel {
 
     let expanded = false;
     let builtOnce = false;
+    let latestRowId: number | null = null;
+    let latestLoadToken = 0;
+
+    const openRow = (rowId: number): void => {
+      this.lightbox.open({
+        // The FULL list, not merely the rendered page.
+        rowIds: stack.rowIds,
+        index: Math.max(0, stack.rowIds.indexOf(rowId)),
+        resolveUrl: (id) => (this.pointIndex ? resolveThumbUrl(this.pointIndex, id) : null),
+        resolveSubsetName: (id) => (this.pointIndex ? resolveSubsetName(this.pointIndex, id) : null),
+        contextLabel: `chunk ${stack.chunkId} · voxel ${stack.localVoxelId}`,
+      });
+    };
+
+    const renderLatest = (): void => {
+      const rowId = latestRowId;
+      latest.hidden = rowId === null;
+      if (rowId === null || !builtOnce) return;
+      latestImg.alt = `last mined row ${rowId}`;
+      latestCaption.textContent = `LAST MINED · ROW ${rowId.toLocaleString()}`;
+      latestImg.removeAttribute("src");
+      const token = ++latestLoadToken;
+      void this.getPointIndex()
+        .then((index) => {
+          if (token !== latestLoadToken || latestRowId !== rowId) return;
+          const url = resolveThumbUrl(index, rowId);
+          if (url) latestImg.src = url;
+        })
+        .catch((error) => console.error("[InventoryPanel] point_index load failed", error));
+    };
+
+    const setLatestRow = (rowId: number): void => {
+      if (latestRowId === rowId) return;
+      latestRowId = rowId;
+      renderLatest();
+    };
+
+    latest.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (latestRowId !== null) openRow(latestRowId);
+    });
 
     const buildCell = (rowId: number, url: string): HTMLElement => {
       const cell = document.createElement("div");
@@ -534,15 +638,7 @@ export class InventoryPanel {
         // toggle are siblings, not ancestor/descendant, so this click wouldn't
         // reach it anyway), matching the same defensiveness the buttons use.
         event.stopPropagation();
-        this.lightbox.open({
-          // The FULL list, not this page — that's the whole point of the
-          // carousel (see `Lightbox`).
-          rowIds: stack.rowIds,
-          index: Math.max(0, stack.rowIds.indexOf(rowId)),
-          resolveUrl: (id) => (this.pointIndex ? resolveThumbUrl(this.pointIndex, id) : null),
-          resolveSubsetName: (id) => (this.pointIndex ? resolveSubsetName(this.pointIndex, id) : null),
-          contextLabel: `chunk ${stack.chunkId} · voxel ${stack.localVoxelId}`,
-        });
+        openRow(rowId);
       });
 
       cell.appendChild(returnBtn);
@@ -594,22 +690,32 @@ export class InventoryPanel {
       this.options.onReturnStack(stack.id);
     });
 
-    summary.addEventListener("click", () => {
-      expanded = !expanded;
+    const setExpanded = (nextExpanded: boolean): void => {
+      if (expanded === nextExpanded && (!nextExpanded || builtOnce)) return;
+      expanded = nextExpanded;
       caret.textContent = expanded ? "▾" : "▸";
       grid.hidden = !expanded;
+      row.setAttribute("aria-expanded", String(expanded));
       if (expanded && !builtOnce) {
         builtOnce = true;
-        grid.append(hint, showMoreBtn, returnAllBtn);
+        grid.append(latest, hint, showMoreBtn, returnAllBtn);
+        renderLatest();
         appendPageSafely();
       }
-    });
+    };
+
+    summary.addEventListener("click", () => setExpanded(!expanded));
 
     const update = (): void => {
       const extracted = stack.rowIds.length;
       countEl.textContent =
         `${extracted.toLocaleString()} / ${stack.totalPoints.toLocaleString()} PTS · ` +
         `${Math.round((extracted / Math.max(1, stack.totalPoints)) * 100)}%`;
+      const newestAvailable = stack.rowIds[stack.rowIds.length - 1] ?? null;
+      if (newestAvailable !== latestRowId) {
+        latestRowId = newestAvailable;
+        renderLatest();
+      }
       if (!builtOnce) return;
       // Drop cells for points that went back into the voxel. Cheap: `cells` is
       // at most a few hundred entries (one page at a time), and the Set is
@@ -626,7 +732,7 @@ export class InventoryPanel {
     };
 
     update();
-    return { el: row, stack, revision: stack.revision, update };
+    return { el: row, stack, revision: stack.revision, update, setExpanded, setLatestRow };
   }
 
   dispose(): void {

@@ -78,13 +78,9 @@ export class Inventory {
     const now = Date.now();
     let stack = this.byId.get(descriptor.id);
     if (stack) {
-      // A plain loop, not `push(...rowIds)`: today `rowIds` is always length 1
-      // (one point per extraction cycle, by explicit design — see
-      // config.ts#extractionBatchSize), so this doesn't bite in practice right
-      // now, but the ONLY caller (MiningController.extract) is the same call
-      // site that used to hand this a batch sized to the voxel — up to ~7,098
-      // ids on BL's densest voxel before that changed. Keeping the safe form
-      // costs nothing and stays correct if batching ever comes back.
+      // A plain loop, not `push(...rowIds)`: Pickaxe currently supplies 100,
+      // and future bulk tools or much denser datasets could make that batch
+      // large enough to exceed an engine's argument-count limit.
       for (const rowId of rowIds) stack.rowIds.push(rowId);
       stack.totalPoints = descriptor.totalPoints;
       stack.lastExtractedAt = now;

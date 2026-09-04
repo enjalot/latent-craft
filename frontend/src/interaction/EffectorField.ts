@@ -3,11 +3,10 @@ import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
 import {
   EFFECTOR_DEFAULT_RADIUS_VOXELS,
-  EFFECTOR_GIZMO_COLOR,
-  EFFECTOR_KEY_STEP_MULTIPLIER,
   EFFECTOR_MAX_RADIUS_CHUNKS,
   EFFECTOR_MIN_RADIUS_VOXELS,
   EFFECTOR_RADIUS_STEP_VOXELS,
+  EFFECTOR_RING_COLOR,
   EFFECTOR_UPDATE_MOVE_EPSILON_VOXEL_FRAC,
 } from "../config.ts";
 
@@ -15,44 +14,101 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function buildGizmo(): THREE.Group {
-  const group = new THREE.Group();
-  group.name = "effector-field-gizmo";
-  // Drawn after the opaque voxels (textured and proxy, renderOrder 0, the
-  // default) and the container cages (renderOrder 1, see VoxelContainers.ts)
-  // — translucent geometry drawn back-to-front only looks right relative to
-  // what's already there.
-  group.renderOrder = 2;
+const RING_SEGMENTS = 64;
+const MAX_INTERVAL_RINGS = 8;
 
-  // Unit sphere, scaled per-frame to `radius` — avoids rebuilding geometry
-  // on every resize.
-  const geometry = new THREE.SphereGeometry(1, 24, 16);
+function appendCircle(
+  positions: number[],
+  radius: number,
+  plane: "xy" | "xz" | "yz",
+): void {
+  for (let segment = 0; segment < RING_SEGMENTS; segment++) {
+    const a0 = (segment / RING_SEGMENTS) * Math.PI * 2;
+    const a1 = ((segment + 1) / RING_SEGMENTS) * Math.PI * 2;
+    const c0 = Math.cos(a0) * radius;
+    const s0 = Math.sin(a0) * radius;
+    const c1 = Math.cos(a1) * radius;
+    const s1 = Math.sin(a1) * radius;
+    if (plane === "xy") positions.push(c0, s0, 0, c1, s1, 0);
+    else if (plane === "xz") positions.push(c0, 0, s0, c1, 0, s1);
+    else positions.push(0, c0, s0, 0, c1, s1);
+  }
+}
 
-  const fillMaterial = new THREE.MeshBasicMaterial({
-    color: EFFECTOR_GIZMO_COLOR,
-    transparent: true,
-    opacity: 0.1,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-  group.add(new THREE.Mesh(geometry, fillMaterial));
-
-  const wireMaterial = new THREE.MeshBasicMaterial({
-    color: EFFECTOR_GIZMO_COLOR,
-    wireframe: true,
-    transparent: true,
-    opacity: 0.55,
-    depthWrite: false,
-  });
-  group.add(new THREE.Mesh(geometry, wireMaterial));
-
-  return group;
+function circlesGeometry(radii: readonly number[]): THREE.BufferGeometry {
+  const positions: number[] = [];
+  for (const radius of radii) {
+    appendCircle(positions, radius, "xy");
+    appendCircle(positions, radius, "xz");
+    appendCircle(positions, radius, "yz");
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  return geometry;
 }
 
 /**
- * Hotbar slot 3 — "Effector Field": a resizable bubble centered on the
- * camera that HIDES (not fades) whatever voxels currently fall inside it, so
- * the player can push into a dense cluster and see what's around them.
+ * Builds a calibrated range grid: three orthogonal circles at the field's
+ * exact boundary plus inner circles at integer voxel distances. Large fields
+ * use an integer stride so the guide never turns into an unreadable moire or
+ * an unbounded amount of line geometry.
+ */
+export function buildEffectorRingGeometries(
+  radiusWorld: number,
+  voxelWorldSize: number,
+): { intervals: THREE.BufferGeometry; boundary: THREE.BufferGeometry } {
+  const radiusVoxels = radiusWorld / voxelWorldSize;
+  const intervalVoxels = Math.max(1, Math.ceil(radiusVoxels / MAX_INTERVAL_RINGS));
+  const intervalRadii: number[] = [];
+  // Leave at least a quarter voxel between the final guide and the boundary;
+  // two nearly coincident rings shimmer without conveying another distance.
+  for (let r = intervalVoxels; r <= radiusVoxels - 0.25; r += intervalVoxels) {
+    intervalRadii.push(r * voxelWorldSize);
+  }
+  return {
+    intervals: circlesGeometry(intervalRadii),
+    boundary: circlesGeometry([radiusWorld]),
+  };
+}
+
+function buildGizmo(radius: number, voxelWorldSize: number): {
+  group: THREE.Group;
+  intervals: THREE.LineSegments;
+  boundary: THREE.LineSegments;
+} {
+  const group = new THREE.Group();
+  group.name = "effector-field-gizmo";
+  const geometries = buildEffectorRingGeometries(radius, voxelWorldSize);
+  const intervalMaterial = new THREE.LineBasicMaterial({
+    color: EFFECTOR_RING_COLOR,
+    transparent: true,
+    opacity: 0.12,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const boundaryMaterial = new THREE.LineBasicMaterial({
+    color: EFFECTOR_RING_COLOR,
+    transparent: true,
+    opacity: 0.3,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const intervals = new THREE.LineSegments(geometries.intervals, intervalMaterial);
+  const boundary = new THREE.LineSegments(geometries.boundary, boundaryMaterial);
+  intervals.name = "effector-distance-rings";
+  boundary.name = "effector-boundary-rings";
+  intervals.frustumCulled = false;
+  boundary.frustumCulled = false;
+  intervals.renderOrder = 3;
+  boundary.renderOrder = 3;
+  group.add(intervals, boundary);
+  return { group, intervals, boundary };
+}
+
+/**
+ * Always-on, resizable bubble centered on the camera that HIDES (not fades)
+ * whatever voxels currently fall inside it, so the player can push into a
+ * dense cluster and see what's around them.
  *
  * This is a deliberately DIFFERENT mechanism from X-Ray/mining's
  * `setOpacityAt` translucency (`voxels/VoxelOpacity.ts`): the goal here is
@@ -72,15 +128,15 @@ function buildGizmo(): THREE.Group {
  * keys); that made it a probe you aimed rather than a bubble you carried,
  * and the two ideas are different enough that the distance control was
  * removed outright instead of defaulting to zero. The only parameter is
- * `radius`: the mouse wheel (or the `-`/`=` keys) grows/shrinks it. All
- * bindings only do anything while this item is actually equipped
- * (`active`).
+ * `radius`: scrolling over the 3D canvas grows/shrinks it. Scoping the wheel
+ * listener to the canvas lets inventory and telemetry panels retain normal
+ * scrolling.
  *
- * Because the camera sits inside the sphere, the gizmo is seen from within:
- * the translucent fill becomes a faint full-view tint and the wireframe a
- * cage of lat/long lines around you, which together read as "the field is
- * on" without hiding anything. The fill is `DoubleSide` for exactly this
- * reason.
+ * The old translucent sphere used arbitrary latitude/longitude subdivisions,
+ * so its lines did not encode useful distance. The replacement is three
+ * orthogonal circles at the exact suppression boundary plus fainter concentric
+ * circles at integer voxel distances. The guide is always geometrically tied
+ * to the same radius used by the suppression test below.
  *
  * Suppression is recomputed from scratch every time it's needed (a
  * throttled per-frame `update()`, plus a forced pass from `onChunkResident`)
@@ -93,8 +149,10 @@ function buildGizmo(): THREE.Group {
 export class EffectorFieldController {
   readonly gizmo: THREE.Group;
 
-  private active = false;
   private radius: number;
+  private readonly intervalRings: THREE.LineSegments;
+  private readonly boundaryRings: THREE.LineSegments;
+  private ringGeometryRadius: number;
 
   private readonly minRadius: number;
   private readonly maxRadius: number;
@@ -117,6 +175,7 @@ export class EffectorFieldController {
     private readonly chunkStore: ChunkStore,
     private readonly manifest: Manifest,
     scene: THREE.Scene,
+    private readonly wheelTarget: HTMLElement,
   ) {
     this.radius = manifest.voxelWorldSize * EFFECTOR_DEFAULT_RADIUS_VOXELS;
     this.minRadius = manifest.voxelWorldSize * EFFECTOR_MIN_RADIUS_VOXELS;
@@ -124,20 +183,26 @@ export class EffectorFieldController {
     this.radiusStep = manifest.voxelWorldSize * EFFECTOR_RADIUS_STEP_VOXELS;
     this.moveEpsilon = manifest.voxelWorldSize * EFFECTOR_UPDATE_MOVE_EPSILON_VOXEL_FRAC;
 
-    this.gizmo = buildGizmo();
-    this.gizmo.visible = false;
+    const gizmo = buildGizmo(this.radius, manifest.voxelWorldSize);
+    this.gizmo = gizmo.group;
+    this.intervalRings = gizmo.intervals;
+    this.boundaryRings = gizmo.boundary;
+    this.ringGeometryRadius = this.radius;
     scene.add(this.gizmo);
 
-    window.addEventListener("wheel", this.handleWheel, { passive: false });
-    window.addEventListener("keydown", this.handleKeydown);
+    wheelTarget.addEventListener("wheel", this.handleWheel, { passive: false });
   }
 
   get isActive(): boolean {
-    return this.active;
+    return true;
   }
 
   get currentRadius(): number {
     return this.radius;
+  }
+
+  get currentRadiusVoxels(): number {
+    return this.radius / this.manifest.voxelWorldSize;
   }
 
   /** Total voxels currently suppressed — for HUD/status display and for
@@ -148,33 +213,9 @@ export class EffectorFieldController {
     return total;
   }
 
-  /** Equips or un-equips the Effector Field. Un-equipping restores
-   * visibility to everything currently suppressed — see `clearSuppression`.
-   * Equipping forces an immediate placement/recompute against `camera` (when
-   * given) rather than waiting for the next `update()` tick, so the field
-   * appears exactly where it should the instant it's equipped. */
-  setActive(active: boolean, camera?: THREE.Camera): void {
-    if (active === this.active) return;
-    this.active = active;
-    this.gizmo.visible = active;
-    if (!active) {
-      this.clearSuppression();
-      return;
-    }
-    // Reset the move-throttle state so the very next recompute is forced
-    // even if the camera happens to be exactly where it was last time this
-    // field was active.
-    this.lastRadius = -1;
-    this.lastCenter.set(Number.NaN, 0, 0);
-    if (camera) this.recomputeFromCamera(camera, true);
-  }
-
-  /** Per-frame hook (main.ts's tick) — cheap early-out while un-equipped;
-   * internally throttled (see `EFFECTOR_UPDATE_MOVE_EPSILON_VOXEL_FRAC`)
-   * while equipped, so it only does real work when the field's computed
-   * center or radius actually changed. */
+  /** Per-frame hook, internally throttled so it only does real work when the
+   * field's computed center or radius actually changed. */
   update(camera: THREE.Camera): void {
-    if (!this.active) return;
     this.recomputeFromCamera(camera, false);
   }
 
@@ -187,7 +228,6 @@ export class EffectorFieldController {
    * recomputing and leave the new chunk's voxels un-suppressed even where
    * they should be — this forces one recompute pass to cover that case. */
   onChunkResident(chunkId: number): void {
-    if (!this.active) return;
     // A chunk that was evicted while suppressed and has now streamed back in
     // has a FRESH mesh with every instance visible, but `suppressed` may still
     // hold the ids this controller hid in the old one (eviction has no hook,
@@ -215,8 +255,17 @@ export class EffectorFieldController {
     this.lastCenter.copy(this.center);
     this.lastRadius = this.radius;
     this.gizmo.position.copy(this.center);
-    this.gizmo.scale.setScalar(this.radius);
+    if (this.ringGeometryRadius !== this.radius) this.rebuildRingGeometry();
     this.recomputeSuppression();
+  }
+
+  private rebuildRingGeometry(): void {
+    const next = buildEffectorRingGeometries(this.radius, this.manifest.voxelWorldSize);
+    this.intervalRings.geometry.dispose();
+    this.boundaryRings.geometry.dispose();
+    this.intervalRings.geometry = next.intervals;
+    this.boundaryRings.geometry = next.boundary;
+    this.ringGeometryRadius = this.radius;
   }
 
   /** Rebuilds the suppression set from scratch against the field's CURRENT
@@ -293,9 +342,7 @@ export class EffectorFieldController {
     }
   }
 
-  /** Un-hides everything currently suppressed and clears the set — called on
-   * un-equip so nothing stays orphaned-invisible after the tool is put
-   * away. */
+  /** Un-hides everything currently suppressed during application teardown. */
   private clearSuppression(): void {
     for (const [chunkId, set] of this.suppressed) {
       const chunk = this.chunkStore.chunk(chunkId);
@@ -311,52 +358,27 @@ export class EffectorFieldController {
   }
 
   private handleWheel = (event: WheelEvent): void => {
-    if (!this.active) return;
+    if (event.deltaY === 0) return;
     event.preventDefault();
-    // Scroll up (negative deltaY) = grow, scroll down = shrink.
-    //
-    // Swapped from "wheel repositions, shift+wheel resizes" per user
-    // feedback: resizing is the control you reach for constantly (the field
-    // needs to match the cluster you're digging into), repositioning is the
-    // one you touch occasionally, so the frictionless gesture belongs to
-    // resize. There is deliberately no shift+wheel branch anymore either —
-    // Shift is now "descend" in `FlightControls`, so a shift+wheel binding
-    // would fire while the player is flying downward.
-    this.adjustRadius(event.deltaY > 0 ? -1 : 1);
-  };
-
-  private handleKeydown = (event: KeyboardEvent): void => {
-    if (!this.active) return;
-    switch (event.code) {
-      case "Equal":
-      case "NumpadAdd":
-        this.adjustRadius(EFFECTOR_KEY_STEP_MULTIPLIER);
-        break;
-      case "Minus":
-      case "NumpadSubtract":
-        this.adjustRadius(-EFFECTOR_KEY_STEP_MULTIPLIER);
-        break;
-      default:
-        break;
-    }
+    // Normalize browser wheel units to CSS-pixel-ish travel. Scroll up
+    // (negative deltaY) grows; scroll down shrinks. Trackpads remain smooth
+    // instead of every tiny event counting as a full mouse-wheel notch.
+    const unitScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? window.innerHeight
+        : 1;
+    this.adjustRadius((-event.deltaY * unitScale) / 100);
   };
 
   dispose(): void {
-    this.active = false;
     this.clearSuppression();
-    window.removeEventListener("wheel", this.handleWheel);
-    window.removeEventListener("keydown", this.handleKeydown);
+    this.wheelTarget.removeEventListener("wheel", this.handleWheel);
     this.gizmo.removeFromParent();
-    const geometries = new Set<THREE.BufferGeometry>();
-    const materials = new Set<THREE.Material>();
-    this.gizmo.traverse((object) => {
-      if (!(object instanceof THREE.Mesh)) return;
-      geometries.add(object.geometry);
-      const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
-      for (const material of objectMaterials) materials.add(material);
-    });
-    for (const geometry of geometries) geometry.dispose();
-    for (const material of materials) material.dispose();
+    this.intervalRings.geometry.dispose();
+    this.boundaryRings.geometry.dispose();
+    (this.intervalRings.material as THREE.Material).dispose();
+    (this.boundaryRings.material as THREE.Material).dispose();
     this.gizmo.clear();
   }
 }

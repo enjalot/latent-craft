@@ -16,8 +16,8 @@
  *    — panel frames, backgrounds, titles, static labels. Purely decorative;
  *    carries no state.
  * 2. SIGNALS (`--hud-signal-*`) — mirrors of the functional colors already
- *    defined in `config.ts` / `main.ts` (hover-highlight teal, flashlight
- *    amber, effector-field violet). These are NOT part of the skin's
+ *    defined in `config.ts` / `main.ts` (hover-highlight teal and flashlight
+ *    amber). These are NOT part of the skin's
  *    palette; they are quoted here so panel chrome can be tuned to stay OUT
  *    of their way. Never repaint a signal to match the chrome — the chrome is
  *    what gets dimmed so a signal reads.
@@ -49,7 +49,6 @@
   /* --- functional signals (mirrored, never overridden) ------------------- */
   --hud-signal-teal: #7fffe0; /* hover wireframe, extraction ring, minimap crosshair */
   --hud-signal-amber: #ffb347; /* minimap flashlight */
-  --hud-signal-violet: #9d7bff; /* effector-field gizmo */
 
   /* --- CRT texture ------------------------------------------------------- */
   --hud-scanline-dark: rgba(0, 0, 0, 0.30);
@@ -259,8 +258,7 @@
   font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  /* Slot width is sized for the longest label on one line ("EFFECTOR FIELD");
-   * a wrap here would make one cell taller than the rest of the rack. */
+  /* Keep labels on one line so both hotbar cells stay the same height. */
   white-space: nowrap;
 }
 

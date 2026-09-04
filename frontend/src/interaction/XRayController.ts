@@ -1,23 +1,33 @@
+import * as THREE from "three";
+import { createRadixSort, type InstancedMesh2 } from "@three.ez/instanced-mesh";
 import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import { combinedVoxelOpacity } from "../voxels/VoxelOpacity.ts";
 
 /**
- * Hotbar Item 1 — "X-Ray": a global, chunk-wide translucency toggle.
- * Equipping it makes every resident voxel render translucent — still fully
- * interactive, since hover/extract raycast against the visibility gate,
+ * Pickaxe glass view: a global, chunk-wide true-transparency toggle.
+ * Equipping the Pickaxe makes every resident voxel render translucent — still
+ * fully interactive, since hover/extract raycast against the visibility gate,
  * never against opacity (Phase 3.5's discovery that
  * `InstancedMesh2.setOpacityAt` is completely independent of
  * `getActiveAndVisibilityAt`, see `MiningController`'s doc comment). This is
  * the "existing per-instance opacity mechanism applied globally" tool, as
- * opposed to Item 2 (`EffectorField.ts`), which suppresses raycasts/renders
- * entirely for a moving volume — the two are deliberately different
- * mechanisms for different jobs. The container cages are the one thing X-Ray
- * removes outright rather than fading: see `VoxelContainers.setXrayActive`.
+ * opposed to the always-on Effector Field, which suppresses raycasts/renders
+ * entirely for a moving volume. Container cages disappear in glass mode so
+ * they do not turn many transparent layers into line noise.
+ *
+ * The former X-Ray kept voxel materials in the opaque render queue with
+ * alpha-to-coverage and depth writes on. That path is ideal for isolated
+ * extraction fades, but aligned cubes choose the same coverage samples: the
+ * front cube writes those samples' depth and the cube immediately behind it
+ * cannot contribute. This mode intentionally pays for real alpha blending:
+ * depth writes off, transparent render queue, and InstancedMesh2's per-frame
+ * back-to-front instance sort. Normal/empty-hand rendering switches straight
+ * back to alpha-to-coverage and does no sorting.
  *
  * Deliberately does NOT own the per-voxel opacity math itself — that lives
  * in `combinedVoxelOpacity()` (`voxels/VoxelOpacity.ts`), shared with
- * `MiningController`, so a voxel that is BOTH partly drained AND under X-Ray
- * always composes to the same value regardless of which controller last wrote
+ * `MiningController`, so a voxel that is BOTH partly drained AND under glass
+ * view always composes to the same value regardless of which controller last wrote
  * it (min of the two candidate opacities, not their product — see that
  * function's doc comment). `extractedFraction` is injected as a callback
  * rather than a direct `MiningController` reference specifically to avoid a
@@ -43,8 +53,8 @@ export class XRayController {
     return this.active;
   }
 
-  /** Equips or un-equips X-Ray. Reapplies (or restores) opacity across
-   * every currently-resident chunk immediately — no per-frame polling
+  /** Equips or un-equips Pickaxe glass view. Reapplies (or restores) opacity
+   * across every currently-resident chunk immediately — no per-frame polling
    * needed, since nothing about this effect depends on the camera. */
   setActive(active: boolean): void {
     if (active === this.active) return;
@@ -57,7 +67,7 @@ export class XRayController {
   /**
    * Called via `ChunkStore`'s `onResidencyChanged` hook (resident === true
    * branch only) whenever a chunk becomes resident, so a freshly (re)loaded
-   * chunk picks up the CURRENT X-Ray state instead of defaulting to opaque
+   * chunk picks up the CURRENT glass state instead of defaulting to opaque
    * while equipped. No-op while inactive: a fresh chunk's default
    * per-instance opacity is already the correct "no X-Ray effect" value (1),
    * and `MiningController.onChunkResident` independently handles reapplying
@@ -72,10 +82,11 @@ export class XRayController {
   private applyChunk(chunkId: number): void {
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk) return;
-    // The container cages vanish under X-Ray ("xray should hide the greeble
-    // completely") — a per-chunk mesh visibility flip, not an opacity, so a
+    this.setGlassRendering(chunk.mesh, this.active);
+    // The container cages vanish under glass view — a per-chunk mesh visibility
+    // flip, not an opacity, so a
     // hidden chunk's worth of cages costs nothing to not draw. Re-applied on
-    // residency like everything else here, so a chunk streamed in while X-Ray
+    // residency like everything else here, so a chunk streamed in while Pickaxe
     // is equipped comes up cageless too.
     chunk.containers.setXrayActive(this.active);
     const occupied = chunk.meta.occupied;
@@ -84,5 +95,26 @@ export class XRayController {
       const fraction = this.extractedFraction(chunkId, localVoxelId);
       chunk.mesh.setOpacityAt(instanceId, combinedVoxelOpacity(fraction, this.active));
     }
+  }
+
+  private setGlassRendering(mesh: InstancedMesh2, active: boolean): void {
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) {
+      const changed =
+        material.transparent !== active ||
+        material.depthWrite === active ||
+        material.alphaToCoverage === active;
+      material.transparent = active;
+      material.depthWrite = !active;
+      material.alphaToCoverage = !active;
+      material.blending = THREE.NormalBlending;
+      if (changed) material.needsUpdate = true;
+    }
+
+    // Sorting is only paid while glass is active. The radix sorter avoids an
+    // O(n log n) comparison sort for dense chunks and keys off material
+    // transparency to choose the required far-to-near order.
+    if (active && !mesh.customSort) mesh.customSort = createRadixSort(mesh);
+    mesh.sortObjects = active;
   }
 }

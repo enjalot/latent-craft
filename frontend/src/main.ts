@@ -5,6 +5,7 @@ import { FlightControls } from "./engine/FlightControls.ts";
 import { VoxelRaycaster, type VoxelHit } from "./engine/Raycast.ts";
 import { createSyntheticVoxelField } from "./voxels/VoxelField.ts";
 import { AtlasCache } from "./voxels/AtlasCache.ts";
+import { MiningPreview } from "./voxels/MiningPreview.ts";
 import { VoxelProxyCloud } from "./voxels/VoxelProxyCloud.ts";
 import { loadManifest, type Manifest } from "./streaming/Manifest.ts";
 import { loadVoxelProxy } from "./streaming/VoxelProxy.ts";
@@ -150,18 +151,15 @@ const datasetPicker = new DatasetPicker(app, datasetKey, DATASETS, useSynthetic)
 const hud = new Hud(app);
 const holdRing = createHoldProgressRing(app);
 
-// Phase 4 hotbar: equip-change fans out to whichever tool controller cares.
-// Both controllers are `null` until `bootstrapStreamedWorld()` finishes (see
-// below), so equipping before the world loads (or under `?synthetic=1`,
-// which never sets either) safely no-ops via optional chaining — nothing
-// special needs to happen at construction time here.
+// Two-slot hotbar. Pickaxe owns both bulk extraction and glass view; the
+// Effector Field is always active and independent of equipment.
 const hotbar = new Hotbar(app, (tool) => {
-  xrayController?.setActive(tool === "xray");
-  effectorField?.setActive(tool === "effector", engine.camera);
+  xrayController?.setActive(tool === "pickaxe");
 });
 
 // Fly-to-inventory tiles (one per extraction cycle) — see ExtractionFlight.ts.
 const extractionFlights = new ExtractionFlights(app);
+const miningPreview = new MiningPreview(engine.scene, engine.renderer);
 
 // scratch objects reused every frame to avoid per-frame allocation
 const hitMatrix = new THREE.Matrix4();
@@ -214,10 +212,14 @@ const pointerController = new PointerController(engine.renderer.domElement, flig
     // drained voxel is pass-through to the cursor (see `raycaster` above), so
     // it can never be the target here.
     holdRing.show();
+    // Starts the one shared row-id→thumbnail table early enough for the
+    // focused high-resolution face to appear during this first mining cycle.
+    void loadPointIndexOnce().catch(() => undefined);
   },
   onHoldCancel: () => {
     holdElapsedSeconds = 0;
     holdRing.hide();
+    miningPreview.hide();
   },
 });
 
@@ -303,7 +305,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
         voxelProxy?.setChunkResident(chunkId, resident);
         // Re-apply whatever this chunk's voxels should look like/be visible
         // as before it was evicted — mined-but-not-restored opacity
-        // (MiningController), the global X-Ray toggle (XRayController), and
+        // (MiningController), Pickaxe's glass toggle (XRayController), and
         // "does the Effector Field currently overlap any of these voxels"
         // (EffectorFieldController) are all independent per-voxel state
         // that can't live on the mesh itself, since a chunk's InstancedMesh2
@@ -330,7 +332,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
     // never sees any of them still null.
     //
     // Ordering note: `MiningController` and `XRayController` each need to
-    // query the OTHER's current state (a mined voxel under X-Ray must
+    // query the OTHER's current state (a mined voxel under glass view must
     // combine both, see `voxels/VoxelOpacity.ts`), which would be a
     // constructor cycle if either held a direct reference to the other.
     // Both instead take a plain callback — `miningController` closes over
@@ -340,11 +342,22 @@ async function bootstrapStreamedWorld(): Promise<void> {
     // `xrayController` is assigned; `xrayController` itself is constructed
     // one line later and can reference the by-then-real `miningController`
     // directly.
-    miningController = new MiningController(chunkStore, () => xrayController?.isActive ?? false);
+    miningController = new MiningController(
+      chunkStore,
+      () => xrayController?.isActive ?? false,
+      () => hotbar.equippedTool === "pickaxe",
+    );
     xrayController = new XRayController(chunkStore, (chunkId, localVoxelId) =>
       miningController?.extractedFraction(chunkId, localVoxelId) ?? 0,
     );
-    effectorField = new EffectorFieldController(chunkStore, manifest, engine.scene);
+    // Respect a keypress made while the world was still loading.
+    xrayController.setActive(hotbar.equippedTool === "pickaxe");
+    effectorField = new EffectorFieldController(
+      chunkStore,
+      manifest,
+      engine.scene,
+      engine.renderer.domElement,
+    );
     // Non-null assertion: `app`'s null-check `throw` above is at module scope,
     // but TS doesn't carry that narrowing into a separate nested function
     // (this one) even though `app` is a never-reassigned `const`.
@@ -372,6 +385,9 @@ async function bootstrapStreamedWorld(): Promise<void> {
     // first thing on screen is the most interesting part of the embedding
     // rather than an arbitrary corner of empty space.
     frameDensestChunk(manifest);
+    // Places the always-on field at the post-frame spawn before the first
+    // chunk residency callback can apply suppression.
+    effectorField.update(engine.camera);
 
     status = undefined;
     chunkStore.updateCamera(engine.camera, true);
@@ -504,7 +520,7 @@ function launchExtractionFlight(cycle: ExtractionCycle, worldPosition: THREE.Vec
     // stacks would otherwise have tiles landing halfway down a scrolling list.
     toX: rect.left + rect.width / 2,
     toY: rect.top + 26,
-    url: pointIndexReady ? resolveThumbUrl(pointIndexReady, cycle.leadRowId) : null,
+    url: pointIndexReady ? resolveThumbUrl(pointIndexReady, cycle.lastRowId) : null,
     count: cycle.rowIds.length,
   });
 }
@@ -540,21 +556,17 @@ function setCursorStyle(value: string): void {
  * skips the DOM write when the text hasn't changed. */
 function computeHotbarStatus(): string {
   const tool = hotbar.equippedTool;
-  if (tool === "xray") {
-    return (
-      `X-Ray equipped — all resident voxels translucent (opacity ${XRAY_OPACITY}) · ` +
-      `hover/extract/return work exactly as normal`
-    );
-  }
-  if (tool === "effector") {
-    if (!effectorField) return "Effector Field equipped — waiting for world to load…";
-    return (
-      `Effector Field — bubble around you, radius ${effectorField.currentRadius.toFixed(2)} · ` +
-      `suppressing ${effectorField.suppressedCount} voxels\n` +
-      `scroll = grow/shrink · - / = = grow/shrink · fly to move it`
-    );
-  }
-  return "";
+  const fieldStatus = effectorField
+    ? `Effector ${effectorField.currentRadiusVoxels.toFixed(2)} vox · ` +
+      `${effectorField.suppressedCount} hidden · scroll over world to resize`
+    : useSynthetic
+      ? ""
+      : "Effector loading…";
+  if (tool !== "pickaxe") return fieldStatus;
+  return (
+    `Pickaxe · up to 100 points/cycle · glass opacity ${XRAY_OPACITY}\n` +
+    fieldStatus
+  );
 }
 
 engine.start((dt) => {
@@ -633,10 +645,8 @@ engine.start((dt) => {
   //
   // Phase 6.5: a hold no longer performs ONE action and end. While the button
   // is down on a voxel that still has points in it, this runs an
-  // `EXTRACTION_CYCLE_MS` timer over and over, pulling exactly one point out
-  // per cycle (`extractionBatchSize` is always 1 — see config.ts for why),
-  // so the voxel drains continuously, one thumbnail at a time, for as long as
-  // you keep holding.
+  // `EXTRACTION_CYCLE_MS` timer over and over. Empty hand pulls one point;
+  // Pickaxe pulls up to 100, for as long as you keep holding.
   //
   // The ring shows the voxel's OVERALL drain — `(extracted + this cycle's
   // partial) / total` — per user feedback ("the spinner while mining should be
@@ -659,6 +669,17 @@ engine.start((dt) => {
       const durationSeconds = EXTRACTION_CYCLE_MS / 1000;
       holdElapsedSeconds += dt;
 
+      // A single non-instanced overlay replaces this block's 32px atlas tile
+      // with the next point's normal thumbnail while mining. It is the same
+      // row order `MiningController.extract` consumes, so it advances after
+      // every batch rather than staying on the voxel representative forever.
+      const nextRowId = miningController?.nextRowId(holdTarget.chunkId, holdTarget.localVoxelId) ?? null;
+      const nextUrl = nextRowId === null || !pointIndexReady
+        ? null
+        : resolveThumbUrl(pointIndexReady, nextRowId);
+      if (nextRowId !== null && nextUrl) miningPreview.show(nextRowId, nextUrl, hitMatrix);
+      else miningPreview.hide();
+
       // Overall fraction incl. the in-progress cycle — see the comment above.
       // An untouched voxel has no extraction record yet, so its total comes
       // straight from the chunk's per-voxel counts.
@@ -666,11 +687,17 @@ engine.start((dt) => {
       const state = miningController?.extractionState(holdTarget.chunkId, holdTarget.localVoxelId);
       const extracted = state?.extracted.size ?? 0;
       const total = state?.total ?? chunkStore?.chunk(holdTarget.chunkId)?.meta.count[holdTarget.localVoxelId] ?? 1;
-      holdRing.setProgress(Math.min(1, (extracted + cycleFraction) / Math.max(1, total)));
+      const pendingBatch = miningController?.batchSizeFor(total, extracted) ?? 1;
+      holdRing.setProgress(
+        Math.min(1, (extracted + pendingBatch * cycleFraction) / Math.max(1, total)),
+      );
 
       if (holdElapsedSeconds >= durationSeconds) {
         const cycle = miningController?.extract(hit) ?? null;
-        if (cycle) launchExtractionFlight(cycle, hitPosition);
+        if (cycle) {
+          inventoryPanel?.focusMined(cycle.stackId, cycle.lastRowId);
+          launchExtractionFlight(cycle, hitPosition);
+        }
         holdElapsedSeconds = 0;
         if (!cycle || cycle.complete) {
           // Stop at the moment the voxel empties (or if extraction couldn't
@@ -681,11 +708,14 @@ engine.start((dt) => {
           // fresh mousedown is required.
           pointerController.consumeHold();
           holdRing.hide();
+          miningPreview.hide();
         } else {
           holdRing.setProgress(cycle.fraction);
         }
       }
     }
+  } else {
+    miningPreview.hide();
   }
 
   // --- cursor position/state feedback -----------------------------------
@@ -802,6 +832,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
       return inventoryPanel?.lightbox ?? null;
     },
     extractionFlights,
+    miningPreview,
     hotbar,
     get currentHit() {
       return currentHit;
@@ -836,6 +867,7 @@ function disposeApp(): void {
   inventoryPanel = null;
   effectorField?.dispose();
   effectorField = null;
+  miningPreview.dispose();
   extractionFlights.clear();
   hotbar.dispose();
   holdRing.dispose();

@@ -2,27 +2,18 @@
  * Minecraft-style equippable hotbar (Phase 4). Bottom-of-screen bar with
  * numbered slots.
  *
- * Slot "1" is the implicit empty hand, rendered explicitly rather than left
- * as "nothing selected" so it reads as a real, always-present choice the
- * same way Minecraft's own hotbar always shows every slot including empty
- * ones. Equipping empty-hand (slot 1) turns off every tool's effect — normal
- * extraction keeps working exactly as before, with no tool effect layered on
- * top. Numbering starts at 1, not 0, per user feedback — it matches the
- * physical key row and Minecraft's own hotbar, where "1" is always the
- * leftmost slot. Only the digit keys change the equipped slot: Escape is
- * deliberately NOT bound here ("escape should not reset to empty hand, just
- * numbers do that") — it belongs to the lightbox and whatever else needs a
- * dismiss key, and an Escape meant for a modal must not also drop the tool.
+ * Slot 1 is the explicit empty hand; slot 2 is the Pickaxe. Empty hand mines
+ * one image per cycle with normal opaque rendering. Pickaxe mines a bulk
+ * batch and enables the glass view. The always-on Effector Field is no longer
+ * equipment and therefore deliberately does not appear here.
  *
  * This file deliberately owns ALL hotbar/tool-status UI on screen — per the
- * task brief, `ui/Hud.ts` (the collapsible stats panel from the prior
- * agent's pass) is off-limits, so anything about equip state or the
- * Effector Field's live radius/distance gets its own status line here
- * instead of being bolted onto that panel.
+ * task brief, `ui/Hud.ts` (the collapsible stats panel) remains independent,
+ * so concise live tool/field state gets its own status line here.
  */
 import { applyHudPanelChrome, HUD_CLASS } from "./hudPanel.ts";
 
-export type ToolId = "xray" | "effector";
+export type ToolId = "pickaxe";
 
 interface HotbarItemDef {
   id: ToolId;
@@ -32,8 +23,7 @@ interface HotbarItemDef {
 }
 
 const ITEMS: HotbarItemDef[] = [
-  { id: "xray", keyLabel: "2", keyCode: "Digit2", label: "X-Ray" },
-  { id: "effector", keyLabel: "3", keyCode: "Digit3", label: "Effector Field" },
+  { id: "pickaxe", keyLabel: "2", keyCode: "Digit2", label: "Pickaxe" },
 ];
 
 /** The empty-hand slot's key — slot 1, the leftmost. */
@@ -48,8 +38,7 @@ const SLOT_BASE_STYLE: Partial<CSSStyleDeclaration> = {
   alignItems: "center",
   justifyContent: "center",
   gap: "3px",
-  // Wide enough for "EFFECTOR FIELD" on one line at the skin's tracking.
-  width: "108px",
+  width: "92px",
   padding: "7px 4px 6px",
   cursor: "pointer",
   userSelect: "none",
@@ -74,9 +63,7 @@ export class Hotbar {
     // Bottom-anchored column, so it grows UPWARD: the rack is the last child
     // and sits at a fixed 16px from the bottom edge whether or not the status
     // strip above it is showing. (The strip used to hang under the rack, and
-    // every time it appeared it shoved the rack up by its own height — "i want
-    // the effector field tooltip to be above the hotbar not below, so it
-    // doesn't move the hotbar.")
+    // every time it appeared it shoved the rack up by its own height.)
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       position: "fixed",
@@ -158,10 +145,8 @@ export class Hotbar {
     this.equip(this.equipped === tool ? null : tool);
   }
 
-  /** Status line above the bar — main.ts's per-frame loop calls this with
-   * live tool state (e.g. Effector Field's current radius) so the player has
-   * some readout without touching `Hud.ts`. Skips the DOM write when
-   * unchanged, same discipline `Hud.ts` uses for its own text. */
+  /** Status line above the bar. Skips the DOM write when unchanged, the same
+   * discipline `Hud.ts` uses for its own text. */
   setStatusLine(text: string): void {
     if (text === this.lastStatusText) return;
     this.lastStatusText = text;

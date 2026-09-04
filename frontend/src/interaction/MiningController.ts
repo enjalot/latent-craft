@@ -45,6 +45,8 @@ export interface ExtractionCycle {
   rowIds: number[];
   /** A representative of this batch, for the flight animation's thumbnail. */
   leadRowId: number;
+  /** The final row pulled by this cycle — the inventory's large latest image. */
+  lastRowId: number;
   extractedCount: number;
   total: number;
   /** `extractedCount / total`, 0..1. */
@@ -92,12 +94,10 @@ export interface ExtractionCycle {
  *
  * - a voxel's state is a FRACTION (0 = untouched … 1 = fully drained), not a
  *   boolean, and its opacity is `lerp(1, EXTRACTION_FLOOR_OPACITY, fraction)`
- *   via the same `combinedVoxelOpacity()` X-Ray composes through;
- * - each cycle pulls exactly ONE point (`config.ts#extractionBatchSize` is
- *   always 1, by deliberate design — "human scale interface to this large
- *   dataset" — not a batch scaled to the voxel's size, which an earlier pass
- *   at this used), so draining a several-thousand-point voxel one hold at a
- *   time genuinely takes a long time. That's intended, not a bug;
+ *   via the same `combinedVoxelOpacity()` Pickaxe glass view composes through;
+ * - empty hand pulls one point per cycle; Pickaxe pulls up to 100. The tool
+ *   state is injected rather than imported from the hotbar, keeping this data
+ *   controller independent of the UI that selects the batch size;
  * - the per-voxel record is a real `VoxelExtraction` (see above) keyed by
  *   `${chunkId}:${localVoxelId}`, re-applied via `onChunkResident` exactly the
  *   way 3.5's boolean set was. A voxel drained 40%, evicted, and re-streamed
@@ -115,8 +115,8 @@ export interface ExtractionCycle {
  *
  * Every `setOpacityAt` write goes through `combinedVoxelOpacity()`
  * (`voxels/VoxelOpacity.ts`) rather than a bare constant, so a voxel drained
- * (or refilled) while the "X-Ray" hotbar item is equipped lands on the correct
- * COMBINED opacity instead of silently ignoring X-Ray's global toggle.
+ * (or refilled) while Pickaxe is equipped lands on the correct COMBINED
+ * opacity instead of silently ignoring glass view's global toggle.
  * `isXrayActive` is injected as a callback (not a direct `XRayController`
  * reference) to avoid a two-way constructor dependency — `XRayController`
  * itself needs `MiningController.extractedFraction` to do the same combination
@@ -137,7 +137,16 @@ export class MiningController {
   constructor(
     private readonly chunkStore: ChunkStore,
     private readonly isXrayActive: () => boolean = () => false,
+    private readonly isPickaxeEquipped: () => boolean = () => false,
   ) {}
+
+  /** Number of points the current tool can take from this voxel in one cycle,
+   * capped to what remains. Shared with the hold gauge so prediction and the
+   * completed extraction cannot drift apart. */
+  batchSizeFor(total: number, extracted = 0): number {
+    const remaining = Math.max(0, total - extracted);
+    return Math.min(remaining, extractionBatchSize(total, this.isPickaxeEquipped()));
+  }
 
   /** 0 (untouched) … 1 (fully drained). The single number every other system
    * — opacity, cage depletion, HUD label — reads. */
@@ -159,6 +168,23 @@ export class MiningController {
    * Exposed for the HUD and the verification harness — treat as read-only. */
   extractionState(chunkId: number, localVoxelId: number): VoxelExtraction | undefined {
     return this.extractionByChunk.get(chunkId)?.get(localVoxelId);
+  }
+
+  /** First row still inside a resident voxel, in pack order. This is the
+   * source of truth for the focused high-resolution face shown during a hold,
+   * so the image advances immediately after every extraction batch. */
+  nextRowId(chunkId: number, localVoxelId: number): number | null {
+    const chunk = this.chunkStore.chunk(chunkId);
+    if (!chunk) return null;
+    const total = chunk.meta.count[localVoxelId] ?? 0;
+    if (total <= 0) return null;
+    const extracted = this.extractionByChunk.get(chunkId)?.get(localVoxelId)?.extracted;
+    const offset = chunk.meta.pointOffset[localVoxelId];
+    for (let i = 0; i < total; i++) {
+      const rowId = chunk.meta.pointIds[offset + i];
+      if (!extracted?.has(rowId)) return rowId;
+    }
+    return null;
   }
 
   /** Every voxel this session has touched and not fully returned. */
@@ -198,7 +224,7 @@ export class MiningController {
     const state = this.stateFor(chunkId, localVoxelId, total);
     if (state.extracted.size >= state.total) return null;
 
-    const batch = extractionBatchSize(state.total);
+    const batch = this.batchSizeFor(state.total, state.extracted.size);
     const offset = chunk.meta.pointOffset[localVoxelId];
     const taken: number[] = [];
     // Scan the voxel's own point list in file order and take the first `batch`
@@ -242,6 +268,7 @@ export class MiningController {
       stackId,
       rowIds: taken,
       leadRowId: taken[0],
+      lastRowId: taken[taken.length - 1],
       extractedCount: state.extracted.size,
       total: state.total,
       fraction: state.extracted.size / state.total,
@@ -279,7 +306,7 @@ export class MiningController {
    * per-voxel record is dropped outright (so eviction/reload doesn't resurrect
    * a drained state) and the opacity/cage go back to normal in one write —
    * NOT to a bare `1`: `applyToResidentVoxel` composes through
-   * `combinedVoxelOpacity`, so if X-Ray is still equipped the refilled voxel
+   * `combinedVoxelOpacity`, so if Pickaxe is still equipped the refilled voxel
    * lands back on `XRAY_OPACITY` rather than snapping opaque.
    *
    * Deliberately NOT a loop over `returnRow`: both the extracted `Set` and the

@@ -1125,34 +1125,26 @@ export const LOOK_DRAG_THRESHOLD_PX = 6;
  * isn't the number though, it's what a completed hold now *does*: 3.5's hold
  * moved a voxel's entire point list into the inventory in one shot and
  * flipped a boolean. A hold now runs this timer repeatedly for as long as the
- * button is down, extracting one point per cycle, so a voxel drains
- * continuously rather than popping.
+ * button is down, extracting one tool-sized batch per cycle, so a voxel
+ * drains continuously rather than popping.
  */
 export const EXTRACTION_CYCLE_MS = 267;
 
 /**
- * How many points one extraction cycle pulls out of a voxel. Always **1**.
- *
- * The first pass at this made the batch scale with a voxel's total point
- * count (up to ~710/cycle for the densest BL voxel), aimed at keeping any
- * voxel's full-drain time roughly constant. Overridden by more specific
- * follow-up feedback: extraction should grab exactly one thumbnail at a
- * time, full stop, even for a voxel with thousands of points — "even for
- * lots and lots its ok as we are creating a human scale interface to this
- * large dataset." A big voxel taking a long time to fully empty one hold at
- * a time is the intended feel, not a problem to engineer around; you're not
- * expected to fully drain the densest voxel in one sitting.
- *
- * Kept as a function (not a bare constant) so call sites don't care that the
- * batch is fixed — and because the "communicates size" property the earlier
- * scaling formula was solving for still holds, just via a different
- * mechanism: each cycle now fades a voxel by `(1 - EXTRACTION_FLOOR_OPACITY)
- * / totalPoints`, which is already imperceptibly small for a huge voxel and
- * clearly visible for a small one — size is still legible from how fast the
- * fade moves, without batching.
+ * How many points one extraction cycle pulls out of a voxel. Empty hand keeps
+ * the deliberately human-scale, one-image-at-a-time interaction; Pickaxe is
+ * the bulk tool and takes up to 100. The return value is capped to the voxel's
+ * total so callers can use it directly for progress prediction on tiny
+ * voxels; `MiningController` independently stops at the number still present.
  */
-export function extractionBatchSize(_totalPoints: number): number {
-  return 1;
+export const EMPTY_HAND_EXTRACTION_BATCH_SIZE = 1;
+export const PICKAXE_EXTRACTION_BATCH_SIZE = 100;
+
+export function extractionBatchSize(totalPoints: number, pickaxeEquipped: boolean): number {
+  const requested = pickaxeEquipped
+    ? PICKAXE_EXTRACTION_BATCH_SIZE
+    : EMPTY_HAND_EXTRACTION_BATCH_SIZE;
+  return Math.min(Math.max(0, Math.floor(totalPoints)), requested);
 }
 
 /**
@@ -1187,7 +1179,7 @@ export function extractionBatchSize(_totalPoints: number): number {
  * The upper bound is not a taste call: it MUST stay meaningfully below
  * `XRAY_OPACITY` (0.40). `combinedVoxelOpacity()` composes the two with
  * `min()`, so a floor at or above 0.40 would render a fully drained voxel
- * IDENTICALLY to an untouched one whenever X-Ray is equipped — silently
+ * IDENTICALLY to an untouched one whenever Pickaxe glass view is active — silently
  * deleting the extraction readout in exactly the mode built for looking inside
  * a cluster. 0.30 keeps a visible gap; 0.38 would technically pass with none.
  */
@@ -1318,53 +1310,39 @@ export const SYNTHETIC_MAX_THUMB_PX = 384;
 // ---------------------------------------------------------------------------
 
 /**
- * Opacity all resident voxels render at while the "X-Ray" hotbar item is
- * equipped (1 = fully opaque, matching a normal untouched voxel). Combined
+ * Opacity all resident voxels render at while Pickaxe glass view is active
+ * (1 = fully opaque, matching a normal untouched voxel). Combined
  * with a voxel's own extraction-derived opacity via `combinedVoxelOpacity()`
  * (`voxels/VoxelOpacity.ts`) using min(), not product — see that function's
  * doc comment for why. Tuned by eye the same way the extraction floor was: high
- * enough that an X-rayed cluster still reads as "made of voxels" rather than
+ * enough that a glass-view cluster still reads as "made of voxels" rather than
  * a formless haze, low enough that whatever is behind the front layer is
  * actually visible through it.
  */
 export const XRAY_OPACITY = 0.4;
 
 /**
- * Effector Field (Item 2) sizing — expressed as multiples of the manifest's
+ * Always-on Effector Field sizing — expressed as multiples of the manifest's
  * own voxel/chunk world sizes (resolved once, at `EffectorFieldController`
  * construction, when the manifest is known) rather than fixed world units,
  * so the field is sized sensibly whether the active dataset is
  * num_voxels=96 or num_voxels=160.
  *
- * Position model: the field is a sphere anchored at `distance` world units
- * directly in front of the camera (`camera.position + forward * distance`),
- * so flying/looking around moves it with you — that's the "movable" part.
- * `distance` alone is what "push it further out / pull it in" adjusts (`[`/`]`
- * keys); `radius` is the separate "grow/shrink the field itself" control
- * (mouse wheel, or `-`/`=` keys) — see `EffectorFieldController`'s doc comment
- * for the exact bindings.
- *
  * The field is CENTERED ON THE CAMERA ("the effector field should be centered
  * on the camera so the field just goes outwards"): it's a bubble around you,
  * not a probe held out in front. There is no standoff/distance control any
- * more — flying moves the bubble, and its only parameter is the radius. That
- * is why the default radius went 3 -> 8 voxels: a 3-voxel bubble around your
- * own head clears almost nothing you can see, whereas at 8 the immediate
- * shell around you opens up as you push into a dense region, which is the
- * "reach through" the tool exists for. Expressed in voxels so it scales with
- * the pack's resolution (a voxel is the natural unit of "one thing in the
- * way"); the max is in chunks for the same reason the streaming rings are.
+ * more — flying moves the bubble, and scrolling over the world changes its
+ * radius. Expressed in voxels so it scales with the pack's resolution (a
+ * voxel is the natural unit of "one thing in the way"); the max is in chunks
+ * for the same reason the streaming rings are.
  */
-export const EFFECTOR_DEFAULT_RADIUS_VOXELS = 8;
+export const EFFECTOR_DEFAULT_RADIUS_VOXELS = 2;
 export const EFFECTOR_MIN_RADIUS_VOXELS = 1;
 export const EFFECTOR_MAX_RADIUS_CHUNKS = 3;
-export const EFFECTOR_RADIUS_STEP_VOXELS = 0.75;
-
-/** A keypress (`-`/`=`) resizes by this many wheel-steps' worth at once — a
- * single wheel "notch" (`deltaY` tick) is a much smaller, higher-frequency
- * input than a discrete key tap, so a keypress needs a bigger per-event step
- * to feel comparably responsive rather than glacial. */
-export const EFFECTOR_KEY_STEP_MULTIPLIER = 4;
+/** Radius change for 100 CSS-pixel-equivalent units of wheel travel. This
+ * keeps mouse-wheel notches deliberate while letting a trackpad resize the
+ * rings smoothly. */
+export const EFFECTOR_RADIUS_STEP_VOXELS = 0.25;
 
 /** How far (world units) the field's computed sphere center has to move
  * before its suppression set is recomputed — mirrors
@@ -1373,11 +1351,9 @@ export const EFFECTOR_KEY_STEP_MULTIPLIER = 4;
  * a voxel instead of a fraction of a chunk, since this test is per-voxel. */
 export const EFFECTOR_UPDATE_MOVE_EPSILON_VOXEL_FRAC = 0.25;
 
-/** Gizmo sphere color — deliberately distinct from the hover-highlight /
- * extraction hold-ring teal (`#7fffe0`) and the minimap flashlight amber, so
- * the field reads as its own thing rather than blending into existing HUD
- * accents. */
-export const EFFECTOR_GIZMO_COLOR = 0x9d7bff;
+/** Muted cyan for the calibrated range rings. Kept below the brighter hover /
+ * extraction teal so the always-on guide remains background information. */
+export const EFFECTOR_RING_COLOR = 0x66d9e8;
 
 // ---------------------------------------------------------------------------
 // 2D minimap (Phase 5)
