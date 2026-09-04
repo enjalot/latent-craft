@@ -124,8 +124,22 @@ export const DATASETS: Record<string, DatasetConfig> = {
     pointsId: "monet-annfaiss",
     minimapPath: "/minimap/monet-annfaiss",
   },
-  // `monet-theirfaiss` gets added the same way once the research project
-  // produces that draw (its rarity computation is still running).
+  // The fourth arm, the research project's own faiss-based rarity draw. Its
+  // packs are built by the same per-arm chain as the other three; until that
+  // chain finishes these entries resolve to 404s, which the loader reports as
+  // a status line rather than a crash.
+  "monet-theirfaiss": {
+    path: "/chunks/monet-theirfaiss",
+    label: "MONET · theirfaiss draw",
+    pointsId: "monet-theirfaiss",
+    minimapPath: "/minimap/monet-theirfaiss",
+  },
+  "monet-theirfaiss-160": {
+    path: "/chunks/monet-theirfaiss-160",
+    label: "MONET · theirfaiss draw · num_voxels=160",
+    pointsId: "monet-theirfaiss",
+    minimapPath: "/minimap/monet-theirfaiss",
+  },
 };
 
 /**
