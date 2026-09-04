@@ -70,6 +70,12 @@ export class Hotbar {
     container: HTMLElement,
     private readonly onChange: (tool: ToolId | null) => void,
   ) {
+    // Bottom-anchored column, so it grows UPWARD: the rack is the last child
+    // and sits at a fixed 16px from the bottom edge whether or not the status
+    // strip above it is showing. (The strip used to hang under the rack, and
+    // every time it appeared it shoved the rack up by its own height — "i want
+    // the effector field tooltip to be above the hotbar not below, so it
+    // doesn't move the hotbar.")
     const root = document.createElement("div");
     Object.assign(root.style, {
       position: "fixed",
@@ -115,14 +121,16 @@ export class Hotbar {
       whiteSpace: "pre",
       display: "none",
     } satisfies Partial<CSSStyleDeclaration>);
-    // Quieter sub-frame + no corner ticks: this strip is a readout hanging off
-    // the rack above it, not a panel in its own right.
+    // Quieter sub-frame + no corner ticks: this strip is a readout floating
+    // over the rack below it, not a panel in its own right.
     applyHudPanelChrome(this.statusEl, { variant: "inset", corners: false });
     this.statusTextEl = document.createElement("div");
     this.statusEl.appendChild(this.statusTextEl);
 
-    root.appendChild(bar);
+    // Strip first, rack last — see the root's comment for why the order is
+    // load-bearing.
     root.appendChild(this.statusEl);
+    root.appendChild(bar);
     container.appendChild(root);
 
     window.addEventListener("keydown", this.handleKeydown);
@@ -149,10 +157,10 @@ export class Hotbar {
     this.equip(this.equipped === tool ? null : tool);
   }
 
-  /** Status line under the bar — main.ts's per-frame loop calls this with
-   * live tool state (e.g. Effector Field's current radius/distance) so the
-   * player has some readout without touching `Hud.ts`. Skips the DOM write
-   * when unchanged, same discipline `Hud.ts` uses for its own text. */
+  /** Status line above the bar — main.ts's per-frame loop calls this with
+   * live tool state (e.g. Effector Field's current radius) so the player has
+   * some readout without touching `Hud.ts`. Skips the DOM write when
+   * unchanged, same discipline `Hud.ts` uses for its own text. */
   setStatusLine(text: string): void {
     if (text === this.lastStatusText) return;
     this.lastStatusText = text;
