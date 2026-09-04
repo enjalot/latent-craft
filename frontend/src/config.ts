@@ -84,6 +84,24 @@ export const DATASETS: Record<string, DatasetConfig> = {
     label: "MONET · annfaiss draw",
     minimapPath: "/minimap/monet-annfaiss",
   },
+  // 160^3 variants of the same three arms ("I want 160 for monet"), built
+  // next to the 96^3 packs the way `bl-160` sits next to `bl`. Same points
+  // table, fit and minimap pack per arm — only the voxel binning differs.
+  "monet-random-160": {
+    path: "/chunks/monet-random-160",
+    label: "MONET · random draw · num_voxels=160",
+    minimapPath: "/minimap/monet-random",
+  },
+  "monet-sscd-160": {
+    path: "/chunks/monet-sscd-160",
+    label: "MONET · sscd draw · num_voxels=160",
+    minimapPath: "/minimap/monet-sscd",
+  },
+  "monet-annfaiss-160": {
+    path: "/chunks/monet-annfaiss-160",
+    label: "MONET · annfaiss draw · num_voxels=160",
+    minimapPath: "/minimap/monet-annfaiss",
+  },
   // `monet-theirfaiss` gets added the same way once the research project
   // produces that draw (its rarity computation is still running).
 };

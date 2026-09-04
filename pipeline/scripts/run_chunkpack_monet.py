@@ -20,7 +20,12 @@ available yet get a blank atlas tile and the build reports the count (`n_blank_t
 rather than failing — but a pack built that way should be rebuilt once the pull
 finishes.
 
-Usage: .venv/bin/python scripts/run_chunkpack_monet.py <arm> [num_voxels]
+Usage: .venv/bin/python scripts/run_chunkpack_monet.py <arm> [num_voxels] [variant_suffix]
+
+variant_suffix names the output dir chunks/monet-<arm><variant_suffix>/ (e.g. "-160"),
+same convention as run_chunkpack_bl.py, so a higher-resolution pack can be built next to
+the default one instead of over it. The points table and UMAP fit are per ARM (resolution
+only changes the binning), so those are always read from the un-suffixed dataset.
 """
 from __future__ import annotations
 
@@ -54,7 +59,9 @@ def main() -> int:
         return 2
     arm = sys.argv[1]
     num_voxels = int(sys.argv[2]) if len(sys.argv) > 2 else 96
+    variant_suffix = sys.argv[3] if len(sys.argv) > 3 else ""
     dataset_id = monet_dataset_id(arm)
+    pack_id = f"{dataset_id}{variant_suffix}"
 
     points_path = points_table_path(dataset_id)
     print(f"loading {points_path} ...", flush=True)
@@ -66,10 +73,10 @@ def main() -> int:
 
     thumb_source = MonetThumbnailSource(points_df)
 
-    out_dir = chunks_dir(dataset_id)
-    print(f"output dir: {out_dir}", flush=True)
+    out_dir = chunks_dir(pack_id)
+    print(f"output dir: {out_dir} (num_voxels={num_voxels})", flush=True)
     result = assign_and_build(
-        dataset_id=dataset_id,
+        dataset_id=pack_id,
         points_df=points_df,
         coords3d=coords3d,
         num_voxels=num_voxels,
