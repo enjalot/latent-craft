@@ -1,5 +1,5 @@
 import type { Inventory, InventoryStack } from "../interaction/Inventory.ts";
-import { resolveThumbUrl, type PointIndex } from "../streaming/PointIndex.ts";
+import { resolveSubsetName, resolveThumbUrl, type PointIndex } from "../streaming/PointIndex.ts";
 import { INVENTORY_THUMBS_PAGE_SIZE } from "../config.ts";
 import { Lightbox } from "./Lightbox.ts";
 import { applyHudPanelChrome, applyHudTitle, HUD_CLASS } from "./hudPanel.ts";
@@ -34,6 +34,9 @@ export interface InventoryPanelOptions {
   /** Fired when the pointer enters/leaves a stack row — drives the 3D + 2D
    * flashlight (see `MinimapBridge.highlightVoxel`). `null` on leave. */
   onHoverStack: (stack: InventoryStack | null) => void;
+  /** Points-table id for the lightbox's original-image lookup
+   * (`DatasetConfig.pointsId`); `null` leaves the lightbox thumbnail-only. */
+  pointsId: string | null;
 }
 
 interface StackRowView {
@@ -99,7 +102,9 @@ export class InventoryPanel {
   private readonly headerCountEl: HTMLElement;
   private readonly listEl: HTMLElement;
   private readonly emptyEl: HTMLElement;
-  private readonly lightbox: Lightbox;
+  /** Public so `main.ts` can hang it off `window.lsv` for the headless
+   * harness (current row, original-load status). */
+  readonly lightbox: Lightbox;
 
   /** Built once per stack id and reused across store updates, so an
    * already-expanded stack's loaded thumbnails and open/closed state survive
@@ -171,7 +176,7 @@ export class InventoryPanel {
     this.root.addEventListener("pointerleave", () => this.setHovered(null));
 
     container.appendChild(this.root);
-    this.lightbox = new Lightbox(container);
+    this.lightbox = new Lightbox(container, { pointsId: options.pointsId });
 
     void this.options
       .getPointIndex()
@@ -475,6 +480,7 @@ export class InventoryPanel {
           rowIds: stack.rowIds,
           index: Math.max(0, stack.rowIds.indexOf(rowId)),
           resolveUrl: (id) => (this.pointIndex ? resolveThumbUrl(this.pointIndex, id) : null),
+          resolveSubsetName: (id) => (this.pointIndex ? resolveSubsetName(this.pointIndex, id) : null),
           contextLabel: `chunk ${stack.chunkId} · voxel ${stack.localVoxelId}`,
         });
       });

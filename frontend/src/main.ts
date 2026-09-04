@@ -40,6 +40,7 @@ import {
   XRAY_OPACITY,
   resolveDatasetBaseUrl,
   resolveMinimapBaseUrl,
+  resolvePointsId,
   resolveThumbsBaseUrl,
 } from "./config.ts";
 
@@ -336,6 +337,10 @@ async function bootstrapStreamedWorld(): Promise<void> {
         if (stack) minimap.highlightVoxel(stack.chunkId, stack.localVoxelId, stack.reprRowId);
         else minimap.clearVoxelHighlight();
       },
+      // The lightbox's `/meta/<points_id>/<row_id>` original-image lookup —
+      // the POINTS TABLE id, shared by every voxel resolution of a dataset
+      // (see `DatasetConfig.pointsId`).
+      pointsId: resolvePointsId(datasetKey),
     });
 
     // Spawn just outside the densest chunk looking straight into it, so the
@@ -773,6 +778,13 @@ Object.assign(window as unknown as Record<string, unknown>, {
     },
     get inventoryPanel() {
       return inventoryPanel;
+    },
+    // The inventory's lightbox: `currentRowId`, `status` (the rendered
+    // status line), `state` (`LightboxOriginalState`), `originalSrc` (the
+    // original on screen, or null) — what the harness reads to prove an
+    // original was swapped in for the right row.
+    get lightbox() {
+      return inventoryPanel?.lightbox ?? null;
     },
     extractionFlights,
     hotbar,
