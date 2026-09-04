@@ -594,11 +594,12 @@ export const VOXEL_PROXY_LIT_BRIGHTNESS = 1.6;
  * `setClearColor(FOG_COLOR)`) on purpose — fog that doesn't match the void
  * reads as a visible grey wall hanging in space at the fade distance instead of
  * as depth, because geometry fades toward one color while the void behind it
- * stays another. The nebula sky (below) is a few luminance points brighter
- * than this in places, so at the very limit of the fog a block becomes a
- * faintly darker silhouette against the glow rather than vanishing outright —
- * that is the far-structure-still-readable behaviour the retune wants, and it
- * is only possible because the sky stays this dark.
+ * stays another. The nebula sky (below) is brighter than this wherever it
+ * has structure (per-direction means of 11-29 /255 against 6 here), so at
+ * the very limit of the fog a block becomes a darker silhouette against the
+ * glow rather than vanishing outright — that is the far-structure-still-
+ * readable behaviour the retune wants, and it is only possible because the
+ * fog colour stays this dark.
  */
 export const FOG_COLOR = 0x05060a;
 
@@ -685,10 +686,20 @@ export const STARFIELD_COLOR = 0xbcd0ff;
 //
 // So: a procedural cubemap (`engine/NebulaSky.ts`), rendered once at startup
 // and set as `scene.background`, in which every cardinal direction has its own
-// hue, a pale band arcs overhead, and a few brighter knots sit at fixed
-// bearings. The starfield draws on top of it unchanged. `?sky=0` falls back to
-// the flat clear color for A/B; `window.lsv.sky.regenerate(seed)` re-rolls the
-// nebulae from the console.
+// hue, each hue's nebula whirls about a fixed centre, a pale band arcs
+// overhead, and four spiral galaxies sit at fixed bearings. The starfield
+// draws on top of it unchanged. `?sky=0` falls back to the flat clear color
+// for A/B; `window.lsv.sky.regenerate(seed)` re-rolls the nebulae from the
+// console (the swirl centres, band and galaxies stay put — they are the
+// landmarks).
+//
+// The first pass at this was too dark to steer by (mean sky luminance 2-23
+// /255 per direction, the nadir 2) and had no swirls — un-warped noise blobs
+// and four out-of-focus discs. This version brings the coloured nebulae up
+// to where a hue is unmistakable at a glance, gives them vortex structure,
+// replaces the discs with spiral galaxies, and splits the brightness into
+// three knobs so the band and galaxies stay accents while the nebulae come
+// up.
 
 /**
  * Nebula hue per cardinal direction, as sRGB hex, in the order
@@ -697,52 +708,175 @@ export const STARFIELD_COLOR = 0xbcd0ff;
  * and each must be nameable —
  *
  *     +X  warm amber          -X  deep blue
- *     +Y  pale (the band)     -Y  dull red, the darkest region
- *     +Z  violet / magenta    -Z  teal / green
+ *     +Y  pale silver-blue    -Y  dull red, the darkest region
+ *     +Z  magenta / violet    -Z  teal / sea-green
  *
- * — with opposites chosen as complements (amber/blue, violet/teal) so turning
- * around is the biggest colour change of all. Between cardinals the shader
- * blends by the squared direction components, so a diagonal is an even mix of
- * its two neighbours and there are no seams. The values are muted on purpose:
- * `SKY_BRIGHTNESS` scales the whole sky and the hues here only set the
- * proportions, but a saturated hue at low brightness still reads as garish
- * where two nebulae overlap.
+ * — with opposites chosen as complements so turning around is the biggest
+ * colour change of all. Measured on the rendered sky (dominant hue of each
+ * axis view = mean of the pixels above luminance 12, in HSL; same setup as
+ * `SKY_NEBULA_BRIGHTNESS`): +X 36° / +Z 307° / -X 224° / -Z 158° around the
+ * horizon, +Y 228° (pale, saturation 0.13) and -Y 355°. Neighbours on the
+ * horizon ring are 66-122° apart; opposites 172° (X), 149° (Z) and 127° (Y).
+ * The rendered hue lands 5-15° off the hex because every view blends its
+ * neighbours in at the frame edges — that pull toward the blue side is why
+ * +Z is set past magenta (`0xdc50c0`) and -Z past teal (`0x34c080`): the
+ * earlier violet/teal pair (`0xa24cd2` / `0x2fb89a`) rendered only 111°
+ * apart. The nadir red is brighter than it used to be (`0x7a2e2e` ->
+ * `0x963848`, hue shifted toward crimson to sit 40° from the amber) because
+ * the nadir's hue IS its brightness floor: the nebula there is mostly the
+ * faint all-over term, and with the darker red the -Y view could not reach
+ * a mean of 10 no matter how that term was set. Between cardinals the shader
+ * blends by the squared direction components, so a diagonal is an even mix
+ * of its two neighbours and there are no seams. The values are muted on
+ * purpose: `SKY_NEBULA_BRIGHTNESS` scales the nebulae and the hues here only
+ * set the proportions, but a saturated hue at low brightness still reads as
+ * garish where two nebulae overlap.
  */
 export const SKY_CARDINAL_COLORS: readonly [number, number, number, number, number, number] = [
-  0xd8903c, 0x3a5cd0, 0xa9bbdc, 0x7a2e2e, 0xa24cd2, 0x2fb89a,
+  0xdc9a38, 0x3a5cd0, 0xa9bbdc, 0x963848, 0xdc50c0, 0x34c080,
 ];
 
 /** The overhead band's own colour — a pale, slightly cool off-white, so it
  * reads as a distant Milky Way rather than as another nebula. */
 export const SKY_BAND_COLOR = 0xc9d3e8;
 
-/** Core colour of the galaxy knots — near-white, warm, so a knot is the one
- * thing in the sky that reads as a light rather than a glow. Each knot is
- * still tinted by the nebula hue of the region it sits in. */
-export const SKY_KNOT_COLOR = 0xfff0dc;
+/** Core colour of the galaxies — near-white, warm, so a galaxy's core is the
+ * one thing in the sky that reads as a light rather than a glow. The disc and
+ * arms are tinted 60/40 by the nebula hue of the region the galaxy sits in
+ * and this, so each galaxy is also the colour of its cardinal. */
+export const SKY_GALAXY_CORE_COLOR = 0xfff0dc;
 
 /**
- * Global sky brightness, a linear-light multiplier on everything the shader
- * draws. The sky is a backdrop and a compass, not a subject: the cubes and the
- * HUD must stay the brightest things on screen. Measured headlessly at 0.075,
- * looking along each axis from the world centre with the world hidden: mean
- * sky luminance 19 / 8 / 23 / 2 / 6 / 12 (/255) for +X / -X / +Y / -Y / +Z /
- * -Z (+Y is the band, -Y the nadir), 99th percentile 40-52, and not a single
- * sky pixel above 90 — against the HUD's dimmest text at 146
- * (`--hud-text-dim`), a fogged cube at 25 units at ~105, and a lit one up
- * close at 150-190. The clear colour it replaces is 6. The first pass at 0.16
- * put the band at a mean of 43 and the knots at 200: a grey smear you looked
- * at instead of a glow you steered by.
+ * Brightness of the three sky layers, each a linear-light multiplier on what
+ * the shader draws for that layer. Three knobs instead of one because the
+ * layers want different exposures: turning a single master up until the
+ * nebulae were legible put the band at a grey smear and the knots at 200/255
+ * (the rejected first pass). The sky is a backdrop and a compass, not a
+ * subject: the cubes and the HUD must stay the brightest things on screen.
+ *
+ * Targets, measured headlessly with the world hidden and the stars on, looking
+ * along each axis from the world centre at 1600x900 (full frame): every
+ * direction's mean luminance in ~14-32 /255 with the nadir the darkest and no
+ * lower than ~10; 99th percentile under ~120 and no sky pixel above 140 — the
+ * HUD's dimmest text is 146 (`--hud-text-dim`) and must stay brighter than
+ * any sky pixel. For reference a fogged cube at 25 units reads ~105 and a lit
+ * one up close 150-190; the clear colour the sky replaces is 6.
+ *
+ * Measured at these values (mean / p99 / max luminance per axis view, stars
+ * off for the max so it is the sky's own):
+ *
+ *     +X 23.5 / 71 / 113     -X 26.7 / 75 / 113     +Y 24.4 / 64 /  80
+ *     -Y 11.0 / 44 /  56     +Z 15.0 / 47 / 111     -Z 29.3 / 71 / 114
+ *
+ * The maxima are the galaxy cores (111-114 looking straight at each one);
+ * `SKY_GALAXY_BRIGHTNESS` is what caps them, and 0.13 puts the cores just
+ * under the fogged-cube level so a galaxy reads as a light without competing
+ * with a block. The stars themselves peak at 145-177 (1-17 pixels per view)
+ * — that is `STARFIELD_OPACITY`, unchanged, and the only thing in the sky
+ * brighter than the HUD text. With the world visible at the spawn pose the
+ * frame reads mean 67, p90 154: the cubes.
+ *
+ * The nebula value was picked by measuring, not by eye: at 0.16 the
+ * horizontal views averaged 16-27 with the magenta side at 16 and the nadir
+ * at 8; 0.2 with the hue and swirl changes above lands every direction in
+ * range. The band at 0.08 puts the +Y view at 24 (its max 80 is the band's
+ * brightest dust-free stretch); at 0.045 the band was there but you had to
+ * look for it, and 0.06 was still under the pale nebula around it.
  */
-export const SKY_BRIGHTNESS = 0.075;
+export const SKY_NEBULA_BRIGHTNESS = 0.2;
+export const SKY_BAND_BRIGHTNESS = 0.08;
+export const SKY_GALAXY_BRIGHTNESS = 0.13;
+
+/** A direction on the sky: azimuth in degrees around +Y measured from +X
+ * toward +Z, elevation in degrees above the horizon. */
+export interface SkyBearing {
+  azimuthDeg: number;
+  elevationDeg: number;
+}
+
+/**
+ * Swirl centres. Before the shader samples any noise it twists the sampling
+ * direction about each of these by `twistRad` at the centre falling to zero
+ * at `radiusDeg` — a twirl that shears the nebula noise into arcs around the
+ * centre — and each centre adds a broad lobe of nebula density, so the
+ * densest part of every cardinal's nebula is also the part that visibly
+ * whirls. One per horizontal cardinal, ~10° off the exact axis so the vortex
+ * reads as an object near where you are looking rather than as a bullseye
+ * you are looking down; none at the zenith (the band owns it — a swirl there
+ * turned the +Y view into a grey whirlpool with the band lost inside it) and
+ * none at the nadir, which stays the darkest region. Twist signs alternate
+ * around the horizon so neighbouring vortices turn opposite ways, and each
+ * has its own radius / twist so the four are different characters: +X a
+ * broad loose swirl, +Z a wide medium one, -X the tightest vortex, -Z in
+ * between. Fixed, not seeded: the seed re-rolls the noise inside them.
+ *
+ * Twist / radius are what make the shear visible: with the smoothstep
+ * falloff the ring-to-ring rotation peaks at ~1.5 * twist / radius (rad per
+ * rad) halfway out, so a feature 5° across at half radius is drawn into an
+ * arc 2-3x its width at these values — enough to read as a vortex, not
+ * enough to close into rings. The first pass used twists of 4.5-5 rad: the
+ * arcs closed into concentric rings and every direction was a bullseye.
+ * Half these twists and the arcs read as ordinary lumpy noise.
+ */
+export const SKY_SWIRLS: readonly (SkyBearing & { radiusDeg: number; twistRad: number })[] = [
+  { azimuthDeg: 10, elevationDeg: 12, radiusDeg: 34, twistRad: 2.2 },
+  { azimuthDeg: 98, elevationDeg: -4, radiusDeg: 36, twistRad: -3.2 },
+  { azimuthDeg: 188, elevationDeg: 14, radiusDeg: 30, twistRad: 2.8 },
+  { azimuthDeg: 276, elevationDeg: -10, radiusDeg: 32, twistRad: -2.4 },
+];
+
+/**
+ * The four spiral galaxies — the landmarks. Each is an inclined disc with
+ * logarithmic spiral arms at a fixed bearing, tinted by the cardinal hue it
+ * sits in, so each is nameable by colour and shape:
+ *
+ *     the amber one    +X side, above the horizon, a broad two-armed spiral
+ *     the magenta one  +Z side, below the horizon, tighter, three arms
+ *     the blue one     -X side, high, nearly face-on
+ *     the teal one     -Z side, low, almost edge-on with a dust lane
+ *
+ * Bearings are 30-35° off the horizontal axes in azimuth and 14-28° above or
+ * below the horizon, so that looking exactly along +X / +Z / -X / -Z puts one
+ * galaxy in the frame (the 70° x 102° view at 16:9 reaches ±35° vertically
+ * and ±51° horizontally) without it sitting on the crosshair; the zenith
+ * view has the band and the nadir has nothing, on purpose. Each also sits
+ * clear of its cardinal's swirl centre (the blue one was moved 4° up and out
+ * when the -X vortex swallowed it), and the shader clears the nebula in a
+ * ~20° pocket around each so the galaxy is seen against dark sky rather than
+ * dissolving into the glow. Not seeded.
+ *
+ * `scaleDeg` is the disc's exponential scale length in degrees of sky. The
+ * part bright enough to read runs to ~2 scale lengths, so these are 16-20°
+ * across — 250-300 px at 1600 px wide, big enough that the arms read as
+ * arms (the first pass used 2.1-2.6°: 50 px smudges with a bright dot in
+ * them). `axisRatio` is the apparent minor/major axis (1 face-on, 0.25
+ * nearly edge-on), `rollDeg` the position angle of the major axis, `arms`
+ * the arm count and `winding` the log-spiral pitch (arms turn `winding /
+ * arms` radians per e-fold of radius; the sign is the spin direction).
+ */
+export const SKY_GALAXIES: readonly (SkyBearing & {
+  scaleDeg: number;
+  axisRatio: number;
+  rollDeg: number;
+  arms: number;
+  winding: number;
+})[] = [
+  { azimuthDeg: 32, elevationDeg: 18, scaleDeg: 5.0, axisRatio: 0.62, rollDeg: 25, arms: 2, winding: 3.4 },
+  { azimuthDeg: 120, elevationDeg: -14, scaleDeg: 4.0, axisRatio: 0.48, rollDeg: -40, arms: 3, winding: -4.2 },
+  { azimuthDeg: 214, elevationDeg: 28, scaleDeg: 4.6, axisRatio: 0.82, rollDeg: 60, arms: 2, winding: 3.0 },
+  { azimuthDeg: 302, elevationDeg: -26, scaleDeg: 4.6, axisRatio: 0.3, rollDeg: 15, arms: 2, winding: -3.6 },
+];
 
 /**
  * Cubemap face size in pixels. 512 per 90° face is ~5.7 texels per degree;
  * a 1600 px-wide 70° view magnifies that ~4x, which is invisible on fBm this
- * soft — the finest octave the shader evaluates is ~1.3 cycles per degree,
- * still 4+ texels per cycle — and there are no hard edges anywhere in the sky
- * to reveal it. 1024 would cost 4x the VRAM (24 MiB vs 6 MiB for six RGBA8
- * faces) for a texture that is only ever looked up.
+ * soft — the finest nebula octave the shader evaluates is ~1.5 cycles per
+ * degree, still 4 texels per cycle — and there are no hard edges anywhere in
+ * the sky to reveal it. The galaxies' arm clumping runs finer (~2 cycles per
+ * degree, ~3 texels), which is why the arms look soft rather than crisp; a
+ * galaxy core is a Gaussian ~1° across, 6 texels, and stays round. 1024 would
+ * cost 4x the VRAM (24 MiB vs 6 MiB for six RGBA8 faces) for a texture that
+ * is only ever looked up.
  */
 export const SKY_FACE_PX = 512;
 
