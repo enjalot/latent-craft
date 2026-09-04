@@ -2,12 +2,14 @@
  * Minecraft-style equippable hotbar (Phase 4). Bottom-of-screen bar with
  * numbered slots.
  *
- * Slot "0" is the implicit empty hand, rendered explicitly rather than left
+ * Slot "1" is the implicit empty hand, rendered explicitly rather than left
  * as "nothing selected" so it reads as a real, always-present choice the
  * same way Minecraft's own hotbar always shows every slot including empty
- * ones. Equipping empty-hand (slot 0, or Escape) turns off every tool's
+ * ones. Equipping empty-hand (slot 1, or Escape) turns off every tool's
  * effect — normal Phase 3.5 mining/restoring keeps working exactly as
- * before, with no tool effect layered on top.
+ * before, with no tool effect layered on top. Numbering starts at 1, not 0,
+ * per user feedback — it matches the physical key row and Minecraft's own
+ * hotbar, where "1" is always the leftmost slot.
  *
  * This file deliberately owns ALL hotbar/tool-status UI on screen — per the
  * task brief, `ui/Hud.ts` (the collapsible stats panel from the prior
@@ -27,9 +29,13 @@ interface HotbarItemDef {
 }
 
 const ITEMS: HotbarItemDef[] = [
-  { id: "xray", keyLabel: "1", keyCode: "Digit1", label: "X-Ray" },
-  { id: "effector", keyLabel: "2", keyCode: "Digit2", label: "Effector Field" },
+  { id: "xray", keyLabel: "2", keyCode: "Digit2", label: "X-Ray" },
+  { id: "effector", keyLabel: "3", keyCode: "Digit3", label: "Effector Field" },
 ];
+
+/** The empty-hand slot's key — slot 1, the leftmost. */
+const HAND_KEY_LABEL = "1";
+const HAND_KEY_CODE = "Digit1";
 
 /** Layout only — the frame/ground/equipped-state colors all live in
  * `theme.css` behind `.hud-slot` (see `renderActiveState`). */
@@ -87,7 +93,7 @@ export class Hotbar {
     // it), which is how a cockpit weapon/system selector reads.
     applyHudPanelChrome(bar);
 
-    const handSlot = this.buildSlot("0", "Empty Hand", () => this.equip(null));
+    const handSlot = this.buildSlot(HAND_KEY_LABEL, "Empty Hand", () => this.equip(null));
     this.slotEls.set("hand", handSlot);
     bar.appendChild(handSlot);
 
@@ -135,7 +141,7 @@ export class Hotbar {
 
   /** Clicking (or pressing the key for) an already-equipped tool slot
    * un-equips it back to empty hand — standard toggle-button feel, and the
-   * only way to get back to empty-hand besides slot 0 / Escape. */
+   * only way to get back to empty-hand besides slot 1 / Escape. */
   private toggleEquip(tool: ToolId): void {
     this.equip(this.equipped === tool ? null : tool);
   }
@@ -188,7 +194,7 @@ export class Hotbar {
   }
 
   private handleKeydown = (event: KeyboardEvent): void => {
-    if (event.code === "Escape" || event.code === "Digit0") {
+    if (event.code === "Escape" || event.code === HAND_KEY_CODE) {
       this.equip(null);
       return;
     }

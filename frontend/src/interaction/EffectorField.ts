@@ -2,14 +2,10 @@ import * as THREE from "three";
 import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
 import {
-  EFFECTOR_DEFAULT_DISTANCE_VOXELS,
   EFFECTOR_DEFAULT_RADIUS_VOXELS,
-  EFFECTOR_DISTANCE_STEP_VOXELS,
   EFFECTOR_GIZMO_COLOR,
   EFFECTOR_KEY_STEP_MULTIPLIER,
-  EFFECTOR_MAX_DISTANCE_CHUNKS,
   EFFECTOR_MAX_RADIUS_CHUNKS,
-  EFFECTOR_MIN_DISTANCE_VOXELS,
   EFFECTOR_MIN_RADIUS_VOXELS,
   EFFECTOR_RADIUS_STEP_VOXELS,
   EFFECTOR_UPDATE_MOVE_EPSILON_VOXEL_FRAC,
@@ -53,9 +49,9 @@ function buildGizmo(): THREE.Group {
 }
 
 /**
- * Hotbar Item 2 — "Effector Field": a movable/resizable sphere that HIDES
- * (not fades) whatever voxels currently fall inside it, so the player can
- * reach through a dense cluster to whatever is behind it.
+ * Hotbar slot 3 — "Effector Field": a resizable bubble centered on the
+ * camera that HIDES (not fades) whatever voxels currently fall inside it, so
+ * the player can push into a dense cluster and see what's around them.
  *
  * This is a deliberately DIFFERENT mechanism from X-Ray/mining's
  * `setOpacityAt` translucency (`voxels/VoxelOpacity.ts`): the goal here is
@@ -67,21 +63,23 @@ function buildGizmo(): THREE.Group {
  * "reach through" needs. Un-hiding (`setVisibilityAt(id, true)`) restores
  * both at once, for any voxel that leaves the volume.
  *
- * Position control: the field is anchored at `distance` world units
- * directly in front of the camera (`camera.position + forward * distance`),
- * so flying/looking around moves the field with you — that's the "movable"
- * half of the ask. `distance` itself is a separate, explicit control: the
- * `[`/`]` keys push it closer/farther along the view axis. Size is a
- * SEPARATE control again — the mouse wheel (or the `-`/`=` keys)
- * grows/shrinks `radius` — so resizing can never be confused with
- * repositioning under the same input. All bindings only do anything while
- * this item is actually equipped (`active`).
+ * Position: the field is CENTERED ON THE CAMERA — its center IS
+ * `camera.position`, so flying is how you move it, and there is no separate
+ * standoff/distance control ("the effector field should be centered on the
+ * camera so the field just goes outwards"). An earlier version held the
+ * sphere out in front of the camera at an adjustable distance (`[`/`]`
+ * keys); that made it a probe you aimed rather than a bubble you carried,
+ * and the two ideas are different enough that the distance control was
+ * removed outright instead of defaulting to zero. The only parameter is
+ * `radius`: the mouse wheel (or the `-`/`=` keys) grows/shrinks it. All
+ * bindings only do anything while this item is actually equipped
+ * (`active`).
  *
- * The wheel used to drive distance and shift+wheel drive radius; that pair
- * was swapped per user feedback (see `handleWheel`), and the default radius
- * and standoff were both reduced (see `config.ts`) so the field starts
- * small and close enough to be obviously useful before the player has
- * learned any of these keys.
+ * Because the camera sits inside the sphere, the gizmo is seen from within:
+ * the translucent fill becomes a faint full-view tint and the wireframe a
+ * cage of lat/long lines around you, which together read as "the field is
+ * on" without hiding anything. The fill is `DoubleSide` for exactly this
+ * reason.
  *
  * Suppression is recomputed from scratch every time it's needed (a
  * throttled per-frame `update()`, plus a forced pass from `onChunkResident`)
@@ -95,21 +93,16 @@ export class EffectorFieldController {
   readonly gizmo: THREE.Group;
 
   private active = false;
-  private distance: number;
   private radius: number;
 
   private readonly minRadius: number;
   private readonly maxRadius: number;
   private readonly radiusStep: number;
-  private readonly minDistance: number;
-  private readonly maxDistance: number;
-  private readonly distanceStep: number;
   private readonly moveEpsilon: number;
 
   private readonly center = new THREE.Vector3();
   private readonly lastCenter = new THREE.Vector3(Number.NaN, 0, 0);
   private lastRadius = -1;
-  private readonly forwardScratch = new THREE.Vector3();
   private readonly voxelScratch = new THREE.Vector3();
   private readonly chunkCenterScratch = new THREE.Vector3();
 
@@ -125,13 +118,9 @@ export class EffectorFieldController {
     scene: THREE.Scene,
   ) {
     this.radius = manifest.voxelWorldSize * EFFECTOR_DEFAULT_RADIUS_VOXELS;
-    this.distance = manifest.voxelWorldSize * EFFECTOR_DEFAULT_DISTANCE_VOXELS;
     this.minRadius = manifest.voxelWorldSize * EFFECTOR_MIN_RADIUS_VOXELS;
     this.maxRadius = manifest.chunkWorldSize * EFFECTOR_MAX_RADIUS_CHUNKS;
     this.radiusStep = manifest.voxelWorldSize * EFFECTOR_RADIUS_STEP_VOXELS;
-    this.minDistance = manifest.voxelWorldSize * EFFECTOR_MIN_DISTANCE_VOXELS;
-    this.maxDistance = manifest.chunkWorldSize * EFFECTOR_MAX_DISTANCE_CHUNKS;
-    this.distanceStep = manifest.voxelWorldSize * EFFECTOR_DISTANCE_STEP_VOXELS;
     this.moveEpsilon = manifest.voxelWorldSize * EFFECTOR_UPDATE_MOVE_EPSILON_VOXEL_FRAC;
 
     this.gizmo = buildGizmo();
@@ -148,10 +137,6 @@ export class EffectorFieldController {
 
   get currentRadius(): number {
     return this.radius;
-  }
-
-  get currentDistance(): number {
-    return this.distance;
   }
 
   /** Total voxels currently suppressed — for HUD/status display and for
@@ -209,13 +194,10 @@ export class EffectorFieldController {
     this.radius = clamp(this.radius + deltaSteps * this.radiusStep, this.minRadius, this.maxRadius);
   }
 
-  adjustDistance(deltaSteps: number): void {
-    this.distance = clamp(this.distance + deltaSteps * this.distanceStep, this.minDistance, this.maxDistance);
-  }
-
   private recomputeFromCamera(camera: THREE.Camera, force: boolean): void {
-    this.forwardScratch.set(0, 0, -1).applyQuaternion(camera.quaternion);
-    this.center.copy(camera.position).addScaledVector(this.forwardScratch, this.distance);
+    // Centered on the camera — see the class doc comment. Looking around
+    // therefore never moves the field; only flying does.
+    this.center.copy(camera.position);
 
     const moved = this.lastCenter.distanceToSquared(this.center) > this.moveEpsilon * this.moveEpsilon;
     const resized = this.radius !== this.lastRadius;
@@ -339,12 +321,6 @@ export class EffectorFieldController {
   private handleKeydown = (event: KeyboardEvent): void => {
     if (!this.active) return;
     switch (event.code) {
-      case "BracketRight":
-        this.adjustDistance(EFFECTOR_KEY_STEP_MULTIPLIER);
-        break;
-      case "BracketLeft":
-        this.adjustDistance(-EFFECTOR_KEY_STEP_MULTIPLIER);
-        break;
       case "Equal":
       case "NumpadAdd":
         this.adjustRadius(EFFECTOR_KEY_STEP_MULTIPLIER);

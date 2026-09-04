@@ -88,8 +88,20 @@ export const DATASETS: Record<string, DatasetConfig> = {
   // produces that draw (its rarity computation is still running).
 };
 
-/** Which entry of `DATASETS` to load when no `?dataset=` param is given. */
-export const DEFAULT_DATASET = "bl";
+/**
+ * Which entry of `DATASETS` to load when no `?dataset=` param is given.
+ *
+ * `bl` (96^3 grid, 5,880 occupied voxels) -> `bl-160` (160^3, 14,688), after
+ * a misread: "smaller blocks" meant HIGHER RESOLUTION — more, finer voxels
+ * so the map resolves more structure — not the same voxels drawn smaller
+ * (which is what the earlier `VOXEL_FILL` cut did, now reverted; see its doc
+ * comment). Resolution is a pipeline-side knob (`num_voxels` in
+ * `run_chunkpack_bl.py`), so the frontend just points at the finer pack.
+ * Going finer still (256+) needs per-chunk compact atlases first — at 16^3
+ * voxels/chunk every chunk carries a full 2048^2 atlas even when it holds a
+ * handful of voxels, so VRAM scales with chunk count, not point count.
+ */
+export const DEFAULT_DATASET = "bl-160";
 
 /**
  * Explicit override for the chunk server origin; `null` (the default) means
@@ -137,26 +149,17 @@ export const WORLD_SCALE = 50;
  * Fraction of a voxel cell the rendered cube fills — i.e. cube edge =
  * `manifest.voxelWorldSize * VOXEL_FILL`.
  *
- * 0.92 (Phases 1-6) -> 0.32, i.e. a third of the old edge length and ~4% of the
- * old cube volume. At 0.92 neighbouring cubes very nearly touched, so any
- * occupied region rendered as a solid fused wall of thumbnails whose structure
- * was only readable at its silhouette. At 0.32 a cube occupies about a third of
- * its cell along each axis, so a cluster reads as thousands of discrete
- * floating blocks with real void between them and you can see *through* it into
- * the shape of the embedding behind — which is the whole point of a 3D map.
- *
- * Swept against real screenshots from two fixed vantages (a whole-map wide shot
- * and a browsing-distance shot inside the densest region), not picked in
- * isolation:
- *
- *   0.22 — too far. From the wide vantage the data degrades into faint dust and
- *          the always-resident proxy cubes visually outweigh it.
- *   0.32 — chosen. Discrete at every distance, cluster shape still legible from
- *          across the map, thumbnails plainly readable up close.
- *   0.42 — the dense core starts fusing back into a solid mass from the wide
- *          vantage, i.e. the old problem returning.
+ * History: 0.92 (Phases 1-6) -> 0.32 (Phase 6.6) -> 0.80. The 0.32 cut was a
+ * misread of "smaller blocks": that ask was for higher RESOLUTION (a finer
+ * voxel grid, see `DEFAULT_DATASET`), not for the same grid drawn as specks.
+ * With the finer `bl-160` pack the cells themselves are 1.67x smaller, so the
+ * fill goes back up to read as solid blocks again — discrete (0.8 leaves a
+ * clear 20%-of-cell gap between neighbours, so dense regions still show their
+ * internal structure rather than fusing into one wall the way 0.92 did) but
+ * substantial, not dust. The Phase 6.6 sweep numbers (0.22/0.32/0.42) were
+ * taken against the 96^3 pack and don't transfer to this one.
  */
-export const VOXEL_FILL = 0.32;
+export const VOXEL_FILL = 0.8;
 
 /** Half-texel inset applied inside each atlas tile (in tile-local UV) to keep
  * bilinear filtering from bleeding in the neighbouring tile's edge texels. */
@@ -597,13 +600,16 @@ export const LOOK_DRAG_THRESHOLD_PX = 6;
  * under the cursor.
  *
  * 533 = Phase 3.5's `MINE_HOLD_DURATION_MS` (1600) / 3, the reduction the
- * user asked for directly. The important change isn't the number though, it's
- * what a completed hold now *does*: 3.5's hold moved a voxel's entire point
- * list into the inventory in one shot and flipped a boolean. A hold now runs
- * this timer repeatedly for as long as the button is down, extracting one
- * batch per cycle, so a voxel drains continuously rather than popping.
+ * user asked for directly; then halved again to 267 ("we can make the mining
+ * for a single image 2x as fast") once the hold ring switched to showing the
+ * voxel's overall drain rather than per-cycle fill. The important change
+ * isn't the number though, it's what a completed hold now *does*: 3.5's hold
+ * moved a voxel's entire point list into the inventory in one shot and
+ * flipped a boolean. A hold now runs this timer repeatedly for as long as the
+ * button is down, extracting one point per cycle, so a voxel drains
+ * continuously rather than popping.
  */
-export const EXTRACTION_CYCLE_MS = 533;
+export const EXTRACTION_CYCLE_MS = 267;
 
 /**
  * How many points one extraction cycle pulls out of a voxel. Always **1**.
@@ -736,29 +742,26 @@ export const XRAY_OPACITY = 0.4;
  * (mouse wheel, or `-`/`=` keys) — see `EffectorFieldController`'s doc comment
  * for the exact bindings.
  *
- * Defaults tuned down per user feedback ("too big and too far away to be
- * immediately useful"): radius 5 -> 3 voxels and standoff 1.2 chunks (≈19
- * voxels) -> 8 voxels. At the default camera FOV that puts a sphere spanning
- * roughly half the viewport height right in front of you the moment the item
- * is equipped, so the tool is obviously doing something without the player
- * having to already know the resize/move keys. The standoff is now expressed
- * in VOXELS rather than chunks because at this size a chunk (16 voxels) is far
- * too coarse a unit to express "just in front of your face" in.
+ * The field is CENTERED ON THE CAMERA ("the effector field should be centered
+ * on the camera so the field just goes outwards"): it's a bubble around you,
+ * not a probe held out in front. There is no standoff/distance control any
+ * more — flying moves the bubble, and its only parameter is the radius. That
+ * is why the default radius went 3 -> 8 voxels: a 3-voxel bubble around your
+ * own head clears almost nothing you can see, whereas at 8 the immediate
+ * shell around you opens up as you push into a dense region, which is the
+ * "reach through" the tool exists for. Expressed in voxels so it scales with
+ * the pack's resolution (a voxel is the natural unit of "one thing in the
+ * way"); the max is in chunks for the same reason the streaming rings are.
  */
-export const EFFECTOR_DEFAULT_RADIUS_VOXELS = 3;
+export const EFFECTOR_DEFAULT_RADIUS_VOXELS = 8;
 export const EFFECTOR_MIN_RADIUS_VOXELS = 1;
 export const EFFECTOR_MAX_RADIUS_CHUNKS = 3;
 export const EFFECTOR_RADIUS_STEP_VOXELS = 0.75;
 
-export const EFFECTOR_DEFAULT_DISTANCE_VOXELS = 8;
-export const EFFECTOR_MIN_DISTANCE_VOXELS = 2;
-export const EFFECTOR_MAX_DISTANCE_CHUNKS = 8;
-export const EFFECTOR_DISTANCE_STEP_VOXELS = 2;
-
-/** A keypress ([`/`]`/`-`/`=`) moves/resizes by this many wheel-steps' worth
- * at once — a single wheel "notch" (`deltaY` tick) is a much smaller,
- * higher-frequency input than a discrete key tap, so a keypress needs a
- * bigger per-event step to feel comparably responsive rather than glacial. */
+/** A keypress (`-`/`=`) resizes by this many wheel-steps' worth at once — a
+ * single wheel "notch" (`deltaY` tick) is a much smaller, higher-frequency
+ * input than a discrete key tap, so a keypress needs a bigger per-event step
+ * to feel comparably responsive rather than glacial. */
 export const EFFECTOR_KEY_STEP_MULTIPLIER = 4;
 
 /** How far (world units) the field's computed sphere center has to move

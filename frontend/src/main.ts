@@ -451,9 +451,9 @@ function computeHotbarStatus(): string {
   if (tool === "effector") {
     if (!effectorField) return "Effector Field equipped — waiting for world to load…";
     return (
-      `Effector Field — radius ${effectorField.currentRadius.toFixed(2)} · ` +
-      `distance ${effectorField.currentDistance.toFixed(2)} · suppressing ${effectorField.suppressedCount} voxels\n` +
-      `scroll = resize · - / = = resize · [ / ] = move closer/farther`
+      `Effector Field — bubble around you, radius ${effectorField.currentRadius.toFixed(2)} · ` +
+      `suppressing ${effectorField.suppressedCount} voxels\n` +
+      `scroll = grow/shrink · - / = = grow/shrink · fly to move it`
     );
   }
   return "";
@@ -531,15 +531,14 @@ engine.start((dt) => {
   // so the voxel drains continuously, one thumbnail at a time, for as long as
   // you keep holding.
   //
-  // The ring shows THIS CYCLE's own fill-and-pop progress (resets every
-  // ~533ms), not the voxel's overall drain fraction. It used to show overall
-  // fraction back when batch size scaled with voxel size, which made the
-  // ring advance at a size-independent visual rate — but with a fixed
-  // one-point batch, overall fraction would be imperceptible for a
-  // many-thousand-point voxel (1/7,098 of a ring per hold-cycle reads as a
-  // ring that never moves). The voxel's own fade is what communicates
-  // overall "how much is left" now; the ring's job is just per-pulse
-  // tactile feedback, same in every voxel regardless of size.
+  // The ring shows the voxel's OVERALL drain — `(extracted + this cycle's
+  // partial) / total` — per user feedback ("the spinner while mining should be
+  // relative to the total count, not a spinner for each mining"). For a
+  // 1-point voxel that's identical to a per-cycle fill; for a many-thousand-
+  // point voxel it advances slowly and honestly, which is the point: the ring
+  // is a gauge of how much of THIS block is left, and the block's own fade
+  // agrees with it. Restore (put-it-all-back) is a single hold, so it keeps
+  // showing its own timer fill.
   const holdTarget = pointerController.holdTarget;
   if (holdTarget) {
     const stillHovering =
@@ -555,10 +554,17 @@ engine.start((dt) => {
       holdElapsedSeconds += dt;
 
       const cycleFraction = Math.min(1, holdElapsedSeconds / durationSeconds);
-      // Restoring and extracting both just show the current cycle's own
-      // fill — see the comment above on why this no longer tracks the
-      // voxel's overall fraction for extraction.
-      holdRing.setProgress(cycleFraction);
+      if (restoring) {
+        holdRing.setProgress(cycleFraction);
+      } else {
+        // Overall fraction incl. the in-progress cycle — see the comment
+        // above. An untouched voxel has no extraction record yet, so its
+        // total comes straight from the chunk's per-voxel counts.
+        const state = miningController?.extractionState(holdTarget.chunkId, holdTarget.localVoxelId);
+        const extracted = state?.extracted.size ?? 0;
+        const total = state?.total ?? chunkStore?.chunk(holdTarget.chunkId)?.meta.count[holdTarget.localVoxelId] ?? 1;
+        holdRing.setProgress(Math.min(1, (extracted + cycleFraction) / Math.max(1, total)));
+      }
 
       if (holdElapsedSeconds >= durationSeconds) {
         if (restoring) {
