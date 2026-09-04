@@ -714,9 +714,9 @@ export const STARFIELD_COLOR = 0xbcd0ff;
  * — with opposites chosen as complements so turning around is the biggest
  * colour change of all. Measured on the rendered sky (dominant hue of each
  * axis view = mean of the pixels above luminance 12, in HSL; same setup as
- * `SKY_NEBULA_BRIGHTNESS`): +X 36° / +Z 307° / -X 224° / -Z 158° around the
- * horizon, +Y 228° (pale, saturation 0.13) and -Y 355°. Neighbours on the
- * horizon ring are 66-122° apart; opposites 172° (X), 149° (Z) and 127° (Y).
+ * `SKY_NEBULA_BRIGHTNESS`): +X 35° / +Z 306° / -X 225° / -Z 158° around the
+ * horizon, +Y 227° (pale, saturation 0.14) and -Y 355°. Neighbours on the
+ * horizon ring are 67-122° apart; opposites 170° (X), 148° (Z) and 128° (Y).
  * The rendered hue lands 5-15° off the hex because every view blends its
  * neighbours in at the frame edges — that pull toward the blue side is why
  * +Z is set past magenta (`0xdc50c0`) and -Z past teal (`0x34c080`): the
@@ -742,8 +742,10 @@ export const SKY_BAND_COLOR = 0xc9d3e8;
 
 /** Core colour of the galaxies — near-white, warm, so a galaxy's core is the
  * one thing in the sky that reads as a light rather than a glow. The disc and
- * arms are tinted 60/40 by the nebula hue of the region the galaxy sits in
- * and this, so each galaxy is also the colour of its cardinal. */
+ * arms are tinted 70/30 by the nebula hue of the region the galaxy sits in
+ * and this, so each galaxy is also the colour of its cardinal (at 60/40 all
+ * four read grey-white; the mix is what keeps the arms bright enough — the
+ * cardinal hues are muted, this is not). */
 export const SKY_GALAXY_CORE_COLOR = 0xfff0dc;
 
 /**
@@ -765,15 +767,16 @@ export const SKY_GALAXY_CORE_COLOR = 0xfff0dc;
  * Measured at these values (mean / p99 / max luminance per axis view, stars
  * off for the max so it is the sky's own):
  *
- *     +X 23.5 / 71 / 113     -X 26.7 / 75 / 113     +Y 24.4 / 64 /  80
- *     -Y 11.0 / 44 /  56     +Z 15.0 / 47 / 111     -Z 29.3 / 71 / 114
+ *     +X 22.8 / 69 / 112     -X 25.5 / 69 / 114     +Y 24.4 / 65 /  80
+ *     -Y 11.0 / 45 /  56     +Z 14.0 / 46 / 109     -Z 28.2 / 67 / 112
  *
- * The maxima are the galaxy cores (111-114 looking straight at each one);
+ * The maxima are the galaxy cores (109-114 looking straight at each one);
  * `SKY_GALAXY_BRIGHTNESS` is what caps them, and 0.13 puts the cores just
  * under the fogged-cube level so a galaxy reads as a light without competing
- * with a block. The stars themselves peak at 145-177 (1-17 pixels per view)
- * — that is `STARFIELD_OPACITY`, unchanged, and the only thing in the sky
- * brighter than the HUD text. With the world visible at the spawn pose the
+ * with a block. The stars themselves peak at 141-215 (1-16 pixels per view;
+ * the 215 is one star sitting on the blue galaxy's core — the starfield is
+ * additive) — that is `STARFIELD_OPACITY`, unchanged, and the only thing in
+ * the sky brighter than the HUD text. With the world visible at the spawn pose the
  * frame reads mean 67, p90 154: the cubes.
  *
  * The nebula value was picked by measuring, not by eye: at 0.16 the
@@ -832,25 +835,30 @@ export const SKY_SWIRLS: readonly (SkyBearing & { radiusDeg: number; twistRad: n
  *
  *     the amber one    +X side, above the horizon, a broad two-armed spiral
  *     the magenta one  +Z side, below the horizon, tighter, three arms
- *     the blue one     -X side, high, nearly face-on
+ *     the blue one     -X side, high, moderately inclined, two open arms
  *     the teal one     -Z side, low, almost edge-on with a dust lane
  *
- * Bearings are 30-35° off the horizontal axes in azimuth and 14-28° above or
+ * Bearings are 30-38° off the horizontal axes in azimuth and 14-20° above or
  * below the horizon, so that looking exactly along +X / +Z / -X / -Z puts one
- * galaxy in the frame (the 70° x 102° view at 16:9 reaches ±35° vertically
- * and ±51° horizontally) without it sitting on the crosshair; the zenith
- * view has the band and the nadir has nothing, on purpose. Each also sits
- * clear of its cardinal's swirl centre (the blue one was moved 4° up and out
- * when the -X vortex swallowed it), and the shader clears the nebula in a
- * ~20° pocket around each so the galaxy is seen against dark sky rather than
- * dissolving into the glow. Not seeded.
+ * galaxy WHOLE in the frame (the 70° x 102° view at 16:9 reaches ±35°
+ * vertically and ±51° horizontally; a galaxy at 20° elevation and 38° off
+ * axis projects to ~0.66 of the half-height, leaving room for its ~9° bright
+ * radius — at 28° it projected to 0.92 and was cut by the top edge) without
+ * it sitting on the crosshair; the zenith view has the band and the nadir has
+ * nothing, on purpose. Each also sits ~30° from its cardinal's swirl centre,
+ * where the vortex's lobe has faded (the blue one was swallowed at ~24°), and
+ * the shader clears the nebula in a ~20° pocket around each so the galaxy is
+ * seen against dark sky rather than dissolving into the glow. Not seeded.
  *
  * `scaleDeg` is the disc's exponential scale length in degrees of sky. The
  * part bright enough to read runs to ~2 scale lengths, so these are 16-20°
  * across — 250-300 px at 1600 px wide, big enough that the arms read as
  * arms (the first pass used 2.1-2.6°: 50 px smudges with a bright dot in
- * them). `axisRatio` is the apparent minor/major axis (1 face-on, 0.25
- * nearly edge-on), `rollDeg` the position angle of the major axis, `arms`
+ * them); the outer haze is windowed to nothing by 6 scale lengths (the
+ * shader's `GALAXY_EDGE_R`), which is the disc's edge. `axisRatio` is the
+ * apparent minor/major axis (1 face-on, 0.25 nearly edge-on; the blue one
+ * was 0.82 and read as a round fuzzy blob — a spiral needs some tilt to be
+ * seen as a disc), `rollDeg` the position angle of the major axis, `arms`
  * the arm count and `winding` the log-spiral pitch (arms turn `winding /
  * arms` radians per e-fold of radius; the sign is the spin direction).
  */
@@ -863,8 +871,8 @@ export const SKY_GALAXIES: readonly (SkyBearing & {
 })[] = [
   { azimuthDeg: 32, elevationDeg: 18, scaleDeg: 5.0, axisRatio: 0.62, rollDeg: 25, arms: 2, winding: 3.4 },
   { azimuthDeg: 120, elevationDeg: -14, scaleDeg: 4.0, axisRatio: 0.48, rollDeg: -40, arms: 3, winding: -4.2 },
-  { azimuthDeg: 214, elevationDeg: 28, scaleDeg: 4.6, axisRatio: 0.82, rollDeg: 60, arms: 2, winding: 3.0 },
-  { azimuthDeg: 302, elevationDeg: -26, scaleDeg: 4.6, axisRatio: 0.3, rollDeg: 15, arms: 2, winding: -3.6 },
+  { azimuthDeg: 218, elevationDeg: 20, scaleDeg: 4.6, axisRatio: 0.7, rollDeg: 60, arms: 2, winding: 3.0 },
+  { azimuthDeg: 306, elevationDeg: -19, scaleDeg: 4.6, axisRatio: 0.3, rollDeg: 15, arms: 2, winding: -3.6 },
 ];
 
 /**

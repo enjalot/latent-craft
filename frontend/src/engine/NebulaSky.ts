@@ -80,9 +80,12 @@ void main() {
  *    noise so they clump and break; `cos(phase)` raised to a power narrows them;
  *    they are faded out inside the bulge and with radius; a compact core sits
  *    at the centre and a dust lane runs along the major axis of the more
- *    inclined ones. Tinted by the local cardinal hue with a near-white core.
- *    Fixed bearings, deterministic by `SKY_SEED` — a landmark you steer by has
- *    to stay put across seeds.
+ *    inclined ones. The disc has an edge — an elliptical window takes the
+ *    haze to exactly zero by six scale lengths, and the noise is skipped
+ *    beyond that — because the arm profile alone decays too slowly to be cut
+ *    off anywhere without drawing a circle. Tinted by the local cardinal hue
+ *    with a near-white core. Fixed bearings, deterministic by `SKY_SEED` — a
+ *    landmark you steer by has to stay put across seeds.
  *
  * The three layers have independent brightness uniforms (`SKY_NEBULA_
  * BRIGHTNESS`, `SKY_BAND_BRIGHTNESS`, `SKY_GALAXY_BRIGHTNESS`) because they
@@ -195,15 +198,25 @@ vec3 rotateAbout( vec3 v, vec3 k, float a ) {
 	return v * c + cross( k, v ) * s + k * dot( k, v ) * ( 1.0 - c );
 }
 
+// The disc's edge, in scale lengths: the arm haze is windowed to zero here
+// (the 'edge' term in galaxy()), and galaxy()'s early-out is derived from it.
+#define GALAXY_EDGE_R 6.0
+
 // One spiral galaxy. Returns the disc + arm intensity (0..~1.5) and writes
 // the compact core separately so it can take its own colour.
 float galaxy( vec3 d, vec3 g, vec3 u, vec3 v, vec4 prm, vec3 seed, out float core ) {
 	core = 0.0;
 	float along = dot( d, g );
-	// Beyond ~6 scale lengths everything below is < 1e-2; skip the noise.
-	if ( along < 0.85 ) return 0.0;
-	vec3 off = d - g * along;
 	float scale = prm.x;
+	// Skip the noise where the window below is already zero. The tangent
+	// offset has length sin(angle) and r >= sin(angle) / scale (the minor
+	// axis only stretches r), so r >= GALAXY_EDGE_R everywhere past
+	// asin(GALAXY_EDGE_R * scale) — 32° for a 5° scale length. Any cutoff
+	// closer in than the window's own zero draws a circle: the arm profile
+	// exp(-0.55 r) alone is still ~0.05 at r = 6 and ~0.004 at r = 10.
+	float sinEdge = GALAXY_EDGE_R * scale;
+	if ( along < sqrt( max( 0.0, 1.0 - sinEdge * sinEdge ) ) ) return 0.0;
+	vec3 off = d - g * along;
 	float x = dot( off, u ) / scale;
 	float yMinor = dot( off, v ) / scale;
 	float y = yMinor / prm.y;
@@ -220,7 +233,12 @@ float galaxy( vec3 d, vec3 g, vec3 u, vec3 v, vec4 prm, vec3 seed, out float cor
 	// Dust lane along the major axis, stronger the more edge-on the disc.
 	float edgeOn = 1.0 - prm.y;
 	float lane = 1.0 - 0.75 * edgeOn * exp( - yMinor * yMinor * 40.0 ) * smoothstep( 0.35, 1.2, r );
-	return ( 0.2 * disc + 0.5 * bulge + 1.4 * armProfile * arm * clump ) * lane;
+	// The disc has an edge: an elliptical window in the same (x, y) the arms
+	// live in, so the outer haze fades to exactly zero between 3.5 and 6
+	// scale lengths (the bright part ends at ~2) instead of trailing off
+	// exponentially until an arbitrary cutoff truncates it.
+	float edge = 1.0 - smoothstep( 3.5, GALAXY_EDGE_R, r );
+	return ( 0.2 * disc + 0.5 * bulge + 1.4 * armProfile * arm * clump ) * lane * edge;
 }
 
 // How much nebula survives around the galaxies: a dark pocket ~12° across
@@ -289,7 +307,7 @@ void main() {
 		glow += galaxy( d, uGalaxyDir[ i ], uGalaxyU[ i ], uGalaxyV[ i ], uGalaxyParam[ i ], seed + float( i ), core );
 		cores += core;
 	}
-	col += ( mix( hue, uGalaxyCoreColor, 0.4 ) * glow + uGalaxyCoreColor * cores ) * uGalaxyBrightness;
+	col += ( mix( hue, uGalaxyCoreColor, 0.3 ) * glow + uGalaxyCoreColor * cores ) * uGalaxyBrightness;
 
 	gl_FragColor = vec4( col, 1.0 );
 }
