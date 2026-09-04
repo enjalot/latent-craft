@@ -219,6 +219,20 @@ export const VOXEL_UNDERLIGHT = 0.34;
  */
 export const VOXEL_COVERAGE_DITHER = 0.25;
 
+// ---------------------------------------------------------------------------
+// Light rig
+// ---------------------------------------------------------------------------
+//
+// Three lights: a cool hemisphere fill, one warm directional "sun", and (Phase
+// 7) a warm headlamp riding with the camera. The first two are distance-
+// independent and give the cubes their form; the headlamp is the only light
+// whose contribution depends on how far away a cube is, which — together with
+// the fog — is what makes distance readable ("add fog and lighting to make
+// distance easier to judge like in a videogame"). The three are tuned as a
+// set: the fill + sun are set BELOW full brightness so the headlamp has
+// headroom to add to, and the headlamp's intensity is what brings a cube at
+// browsing distance back up to the brightness it had before.
+
 /**
  * Direction the scene's one directional "sun" shines FROM (un-normalized;
  * `main.ts` sets the light's position to it, `voxels/VoxelContainers.ts`
@@ -228,6 +242,77 @@ export const VOXEL_COVERAGE_DITHER = 0.25;
  * in two scenes.
  */
 export const SUN_DIRECTION: readonly [number, number, number] = [1, 1.4, 0.8];
+
+/**
+ * Sun and hemisphere fill. Colors: a warm sun over a cool sky fill is the
+ * default outdoor rig, and the hemisphere's ground color is near-black because
+ * there is no ground to bounce off (the voxel material fills its own
+ * undersides in, see `VOXEL_UNDERLIGHT`). Dimmer than the Phase 1 synthetic
+ * field on purpose — most BL book illustrations are dark ink on near-white
+ * paper, and Phase 1's intensities blew the paper out to flat white.
+ *
+ * Intensities 1.35 / 1.55 -> 1.0 / 1.2 with the headlamp: measured on a real
+ * voxel's camera-facing face (`gl.readPixels`, fog off), the old rig lit it to
+ * luminance 151/255 regardless of distance. This rig alone lights the same
+ * face to 141-145 (everything is ~7% darker at every distance — less than the
+ * intensity cut suggests because `VOXEL_UNDERLIGHT` is independent of the
+ * lights), and the headlamp then adds back +45 at 1 unit, +25 at 3 and nothing
+ * beyond 25 — so the near field ends up brighter than before, the far field a
+ * little darker, and the difference between the two is the cue. Going lower
+ * than this made the mid-field (10-25 units, where the headlamp has already
+ * fallen off and the fog has barely started) read as murky rather than
+ * distant.
+ */
+export const HEMISPHERE_SKY_COLOR = 0xbcd0ff;
+export const HEMISPHERE_GROUND_COLOR = 0x14141f;
+export const HEMISPHERE_INTENSITY = 1.0;
+export const SUN_COLOR = 0xfff2e0;
+export const SUN_INTENSITY = 1.2;
+
+/**
+ * Headlamp: a `THREE.PointLight` that follows the camera (`Engine` re-places
+ * it every frame, just before the render). Physically-based falloff — `decay`
+ * 2 is inverse-square, three's default and the only value under which
+ * `intensity` means candela — so near cubes are brighter than far ones by the
+ * same law a real lamp obeys. Warm-white, a touch warmer than the sun: things
+ * close to you get warm, things far away stay in the cool fill, which is the
+ * warm-near / cool-far half of atmospheric perspective and stacks with the fog.
+ *
+ * `HEADLAMP_BACKSET` is the important one. A lamp exactly AT the eye is
+ * inverse-square from zero, so a block you have flown right up to (0.3 units,
+ * a normal mining distance) is 100x brighter than one at 3 units, and anything
+ * strong enough to read at 10 units whites out everything you are about to
+ * touch. Carrying the lamp `BACKSET` units BEHIND the camera makes the falloff
+ * seen from the eye `1 / (d + BACKSET)^2` — the standard "light radius"
+ * softening of a punctual light, done with a real light instead of a custom
+ * shader — which caps the peak (at d = 0 the lamp is still BACKSET away) and
+ * stretches the gradient over 0-15 units instead of 0-2. The only geometric
+ * consequence is that a lamp behind you lights what faces you a little more
+ * evenly than one at your eye, which is what a headlamp should do anyway.
+ *
+ * `HEADLAMP_RANGE` is how far in front of the camera the light reaches (the
+ * light's cutoff `distance` is `RANGE + BACKSET`, measured from the lamp).
+ * Half a `WORLD_SCALE` = 25 units = 2.5 chunk edges on bl-160 — about the
+ * textured-chunk ring the LOD work after this shrinks to, so the lamp runs out
+ * where the textures do. Three's cutoff window `(1 - (r/cutoff)^4)^2` fades it
+ * out over the last third rather than clipping.
+ *
+ * Intensity: with the rig above, measured on the same voxel face, lamp on vs
+ * lamp off (luminance /255, fog off): 1 unit 190 vs 145, 3 units 166 vs 141,
+ * 5 units 157 vs 141, 8 units 153 vs 143, 12 units 150 vs 145, 20 units 150
+ * vs 149, 30 units identical. With the fog as shipped on top, the same face
+ * reads 188 / 160 / 147 / 137 / 128 / 115 / 104 at 1 / 3 / 5 / 8 / 12 / 20 /
+ * 30 units: a cube at 5 units is ~40 brighter than one at 25, the gradient is
+ * continuous from 0 to ~15 units, and with the camera 0.4-1 units from a
+ * paper-white face the brightest pixels top out at 224-229 with none clipped
+ * — bright, not white. 36 (the first value tried) gave +29 / +16 / +10 at
+ * 1 / 3 / 5 with the lamp 5 back, which was a gradient you had to look for.
+ */
+export const HEADLAMP_COLOR = 0xffe9cc;
+export const HEADLAMP_INTENSITY = 70;
+export const HEADLAMP_DECAY = 2;
+export const HEADLAMP_BACKSET = 6;
+export const HEADLAMP_RANGE = WORLD_SCALE * 0.5;
 
 // ---------------------------------------------------------------------------
 // Voxel containers (Phase 6.8)
@@ -415,19 +500,22 @@ export const PROXY_MAX_FILL = 0.94;
 export const PROXY_DENSITY_LOG2_MAX = 18;
 
 // ---------------------------------------------------------------------------
-// Environment — depth cues (Phase 6.6)
+// Environment — depth cues (Phase 6.6, retuned Phase 7)
 // ---------------------------------------------------------------------------
 //
 // Direct feedback: judging distance in an otherwise-black void is hard, and the
 // reference is space-flight games (Descent; more recently Elite Dangerous / No
-// Man's Sky). Both knobs below are the two cheapest, most standard cues from
-// that genre — atmospheric attenuation with distance, and a fixed backdrop to
-// move against. Both are deliberately near the threshold of noticing: the ask
-// was explicitly "some fog (but keep it subtle)".
+// Man's Sky). The knobs below are the standard cues from that genre —
+// atmospheric attenuation with distance, a fixed backdrop to move against, and
+// (Phase 7) a backdrop with enough structure to steer by. Phase 6.6 tuned the
+// fog "subtle" on request and it ended up imperceptible in practice ("I thought
+// we were going to add fog and lighting to make distance easier to judge like
+// in a videogame"); Phase 7 retunes it to actually do the job, alongside the
+// headlamp in the light rig above.
 
 /**
  * Fog color. Identical to the renderer's clear color (`Engine`'s
- * `setClearColor(0x05060a)`) on purpose — fog that doesn't match the background
+ * `setClearColor(FOG_COLOR)`) on purpose — fog that doesn't match the void
  * reads as a visible grey wall hanging in space at the fade distance instead of
  * as depth, because geometry fades toward one color while the void behind it
  * stays another.
@@ -435,38 +523,41 @@ export const PROXY_DENSITY_LOG2_MAX = 18;
 export const FOG_COLOR = 0x05060a;
 
 /**
- * `THREE.FogExp2` density. Exponential-squared rather than linear `THREE.Fog`:
- * linear fog has a hard near plane where the effect switches on, which is
- * exactly the "visible wall" artifact subtlety rules out, whereas exp2 starts
- * attenuating immediately and ramps smoothly — the haze look this wants.
+ * Fog density, in 1/world-units. The curve is Beer-Lambert, `T = exp(-d *
+ * density)` (transmittance; attenuation is `1 - T`) — see `engine/Fog.ts`
+ * for how that replaces three's exp2 evaluation while keeping `THREE.FogExp2`
+ * as the scene object.
+ *
+ * Why not three's built-in exp2 (`exp(-(d * density)^2)`), which Phase 6.6
+ * used: its shape can't meet the brief. The targets are ~50% attenuation at
+ * 40-50 units (the textured ring the LOD pass shrinks to), clearly dim by 100,
+ * and the far structure of the map still faintly there at 150-200 (the map is
+ * 100 units per axis, 173 on the diagonal). An exp2 that is 50% at 48 units
+ * is 98% at 100 and 99.99% at 175 — the far half of the map is simply gone —
+ * and one that leaves 8% at 175 is only 25% at 48. Exp2's tail is quadratic;
+ * the brief needs a long one. Plain exponential is also what a uniform medium
+ * actually does, so nothing about the look is invented.
  *
  * Expressed as a fraction of `WORLD_SCALE` so it re-derives itself if the world
- * is ever rescaled again (fog density is 1/length, so it must scale inversely
- * with the world; a hardcoded value tuned at one WORLD_SCALE is silently wrong
- * at another). The attenuation `f = 1 - exp(-(d * density)^2)` at
- * 0.36/WORLD_SCALE = 0.0072 works out to:
+ * is ever rescaled (density is 1/length, so it must scale inversely with the
+ * world). Attenuation `1 - exp(-d * density)` at 0.72/WORLD_SCALE = 0.0144:
  *
- *     d =  10 (arm's length)          -> 0.5% dimmed
- *     d =  25 (a quarter world axis)  -> 3.2%
- *     d =  50 (a world half-extent)   -> 12%
- *     d = 100 (a full world axis)     -> 40%
- *     d = 133 (the R2 residency edge) -> 60%
- *     d = 173 (the world diagonal)    -> 79%
+ *     d =  10 (arm's length)          -> 13% dimmed
+ *     d =  25 (a quarter world axis)  -> 30%
+ *     d =  50 (a world half-extent)   -> 51%
+ *     d = 100 (a full world axis)     -> 76%
+ *     d = 133 (the R2 residency edge) -> 85%
+ *     d = 175 (the world diagonal)    -> 92%
  *
- * So the voxel you're about to mine is untouched, a cluster on the far side of
- * the map is plainly hazier than the one in front of you, and the edge of the
- * streamed world sits back in the mist — with nothing actually vanishing at any
- * distance you'd navigate at.
- *
- * Picked by measurement plus a density sweep from a fixed pose, not by eye:
- * `gl.readPixels` on ~100 real voxel-face pixels (bucketed by their raycast
- * distance) tracks the analytic curve above to within ~2 points, and comparing
- * renders at 0.005 / 0.0072 / 0.010 showed 0.005 to be imperceptible at
- * browsing distances (6% at 50 units) while 0.010 starts flattening the far
- * field into grey. 0.0072 is the value where near-vs-far ordering is legible in
- * a single frame and the effect still reads as air rather than as a filter.
+ * So the block you are mining is essentially untouched, the far side of a
+ * cluster is visibly behind its near side, a cluster a world axis away is a
+ * dim shape, and the corner of the map is still there — a ghost, but there.
+ * Verified headlessly with `gl.readPixels` on a real voxel with the fog toggled
+ * (coverage-weighted transmittance, fog on / fog off): measured 0.87 / 0.70 /
+ * 0.49 / 0.24 / 0.08 at 10 / 25 / 50 / 100 / 175 against the analytic 0.866 /
+ * 0.698 / 0.487 / 0.237 / 0.080.
  */
-export const FOG_DENSITY = 0.36 / WORLD_SCALE;
+export const FOG_DENSITY = 0.72 / WORLD_SCALE;
 
 /**
  * Radius of the starfield shell, in `WORLD_SCALE`s. 12 puts it at 600 units —

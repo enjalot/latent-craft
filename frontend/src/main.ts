@@ -25,8 +25,13 @@ import {
   DATASETS,
   DEFAULT_DATASET,
   EXTRACTION_CYCLE_MS,
+  HEMISPHERE_GROUND_COLOR,
+  HEMISPHERE_INTENSITY,
+  HEMISPHERE_SKY_COLOR,
   RESTORE_HOLD_DURATION_MS,
+  SUN_COLOR,
   SUN_DIRECTION,
+  SUN_INTENSITY,
   WORLD_HALF_EXTENT,
   WORLD_SCALE,
   XRAY_OPACITY,
@@ -46,17 +51,19 @@ const useSynthetic = params.get("synthetic") === "1";
 /** `?dataset=bl-160` switches chunk-packs; the registry lives in config.ts. */
 const datasetKey = params.get("dataset") ?? DEFAULT_DATASET;
 
-const engine = new Engine(app);
+// `?headlamp=0`: A/B switch — the distance-independent rig alone, without the
+// camera-carried lamp.
+const engine = new Engine(app, { headlamp: params.get("headlamp") !== "0" });
 
-// Lighting: MeshStandardMaterial needs something to shade against. A cool
-// hemisphere fill + one directional "sun" gives the cubes enough form to
-// read as blocks rather than flat color swatches. Dimmer than the Phase 1
-// synthetic field on purpose — most BL book illustrations are dark ink on
-// near-white paper, so Phase 1's intensities blew the paper out to flat
-// white and destroyed the very detail the atlas is there to show.
-const hemiLight = new THREE.HemisphereLight(0xbcd0ff, 0x14141f, 1.35);
+// The distance-independent half of the light rig — see "Light rig" in
+// config.ts for the whole set and why these two sit below full brightness.
+// MeshStandardMaterial needs something to shade against: a cool hemisphere
+// fill + one directional "sun" gives the cubes enough form to read as blocks
+// rather than flat colour swatches. The headlamp (the distance-DEPENDENT half)
+// is Engine's, since it has to follow the camera every frame.
+const hemiLight = new THREE.HemisphereLight(HEMISPHERE_SKY_COLOR, HEMISPHERE_GROUND_COLOR, HEMISPHERE_INTENSITY);
 engine.scene.add(hemiLight);
-const sunLight = new THREE.DirectionalLight(0xfff2e0, 1.55);
+const sunLight = new THREE.DirectionalLight(SUN_COLOR, SUN_INTENSITY);
 sunLight.position.set(...SUN_DIRECTION);
 engine.scene.add(sunLight);
 
@@ -687,6 +694,8 @@ function containerStats(): { chunks: number; instances: number; visible: number;
 Object.assign(window as unknown as Record<string, unknown>, {
   lsv: {
     engine,
+    // The distance-independent light rig (the headlamp is `engine.headlamp`).
+    lights: { hemi: hemiLight, sun: sunLight },
     containerStats,
     get manifest() {
       return manifest;

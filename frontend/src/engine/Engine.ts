@@ -4,14 +4,25 @@ import {
   CAMERA_FOV_DEG,
   CAMERA_NEAR,
   FOG_COLOR,
-  FOG_DENSITY,
+  HEADLAMP_BACKSET,
+  HEADLAMP_COLOR,
+  HEADLAMP_DECAY,
+  HEADLAMP_INTENSITY,
+  HEADLAMP_RANGE,
   TELEPORT_MAX_MS,
   TELEPORT_MIN_MS,
   TELEPORT_MS_PER_WORLD_UNIT,
 } from "../config.ts";
+import { createSceneFog } from "./Fog.ts";
 import { Starfield } from "./Starfield.ts";
 
 export type TickCallback = (deltaSeconds: number, elapsedSeconds: number) => void;
+
+export interface EngineOptions {
+  /** Carry the headlamp with the camera (default true); false leaves only the
+   * distance-independent fill + sun — the `?headlamp=0` A/B switch. */
+  headlamp?: boolean;
+}
 
 export interface TeleportOptions {
   /** Point to face on arrival. Yaw/pitch sweep toward it during the flight
@@ -122,6 +133,11 @@ export class Engine {
    * the scene's environment — the same category as the clear color and the fog
    * — not part of any dataset's content. */
   readonly starfield: Starfield;
+  /** The camera-carried point light (see `HEADLAMP_*` in config.ts), or null
+   * under `?headlamp=0`. Owned here because following the camera has to happen
+   * after the tick callback has moved it and before the render — i.e. inside
+   * `loop`, which nothing outside Engine can get between. */
+  readonly headlamp: THREE.PointLight | null;
 
   private container: HTMLElement;
   private onUpdate: TickCallback | null = null;
@@ -137,14 +153,15 @@ export class Engine {
   private flightAngularRate = 0;
   private readonly stepFromPosition = new THREE.Vector3();
   private readonly flightEuler = new THREE.Euler(0, 0, 0, "YXZ");
+  private readonly headlampBackward = new THREE.Vector3();
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, options: EngineOptions = {}) {
     this.container = container;
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setClearColor(0x05060a, 1);
+    this.renderer.setClearColor(FOG_COLOR, 1);
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
@@ -157,8 +174,9 @@ export class Engine {
     // exists means nothing has to depend on three noticing a later change (or
     // on someone remembering a `needsUpdate` on every chunk material as it
     // streams in), and no frame can render fogged proxy cubes against unfogged
-    // voxels.
-    this.scene.fog = new THREE.FogExp2(FOG_COLOR, FOG_DENSITY);
+    // voxels. `createSceneFog` also swaps in the fog curve (see `Fog.ts`),
+    // which has to precede the first compile for the same reason.
+    this.scene.fog = createSceneFog();
     this.starfield = new Starfield();
     this.scene.add(this.starfield.points);
 
@@ -168,6 +186,24 @@ export class Engine {
       CAMERA_NEAR,
       CAMERA_FAR,
     );
+
+    // The headlamp is a plain scene child re-placed every frame (`loop`)
+    // rather than a child of the camera: the camera is not in the scene graph,
+    // and three only collects lights it finds by traversing the scene. Present
+    // from the start so every material compiles with its one point light once,
+    // instead of recompiling the moment it appears.
+    if (options.headlamp === false) {
+      this.headlamp = null;
+    } else {
+      this.headlamp = new THREE.PointLight(
+        HEADLAMP_COLOR,
+        HEADLAMP_INTENSITY,
+        HEADLAMP_RANGE + HEADLAMP_BACKSET,
+        HEADLAMP_DECAY,
+      );
+      this.headlamp.name = "headlamp";
+      this.scene.add(this.headlamp);
+    }
 
     // THREE.Timer supersedes the deprecated THREE.Clock; it also uses the
     // Page Visibility API (via connect()) to avoid a huge dt spike the
@@ -344,11 +380,26 @@ export class Engine {
     // HUD readout — sees the pose the frame will actually be rendered from.
     this.stepTeleport(dt);
     this.onUpdate?.(dt, elapsed);
+    this.followCamera();
     this.renderer.render(this.scene, this.camera);
   };
 
+  /**
+   * Parks the headlamp `HEADLAMP_BACKSET` units behind the camera, along its
+   * own backward axis, for the pose this frame renders from. Runs after
+   * `onUpdate` (flight input has been applied) and after `stepTeleport`, so it
+   * never trails the camera by a frame; the renderer's own
+   * `scene.updateMatrixWorld()` then picks the new position up.
+   */
+  private followCamera(): void {
+    if (!this.headlamp) return;
+    this.headlampBackward.set(0, 0, 1).applyQuaternion(this.camera.quaternion);
+    this.headlamp.position.copy(this.camera.position).addScaledVector(this.headlampBackward, HEADLAMP_BACKSET);
+  }
+
   dispose(): void {
     this.stop();
+    this.headlamp?.removeFromParent();
     this.starfield.dispose();
     this.timer.dispose();
     window.removeEventListener("resize", this.handleResize);
