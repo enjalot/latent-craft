@@ -1,5 +1,5 @@
 """Orchestrates a full chunk-pack build: frame -> assign -> per-chunk atlas+meta ->
-whole-dataset point_index/row_to_voxel/proxy -> manifest.json.
+whole-dataset point_index/row_to_voxel/proxy/voxel_proxy -> manifest.json.
 
 One memmap-safe sorted-boundary pass for the point_ids storage order (np.lexsort +
 np.diff/np.flatnonzero over sorted keys), mirroring map_pack.py's own idiom rather
@@ -9,6 +9,7 @@ groupby (see assign.select_representatives) — fine at that scale.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,7 @@ from . import metablob
 from . import pointindex as pointindex_mod
 from . import proxy as proxy_mod
 from . import row_to_voxel as row_to_voxel_mod
+from . import voxel_proxy as voxel_proxy_mod
 
 
 def assign_and_build(
@@ -96,6 +98,7 @@ def assign_and_build(
     proxy_colors: list[np.ndarray] = []
     proxy_n_points: list[int] = []
     proxy_n_occ: list[int] = []
+    voxel_proxy_runs: list[np.ndarray] = []
 
     n_chunks_total = len(chunk_ids_present)
     for ci, chunk_id in enumerate(chunk_ids_present.tolist()):
@@ -133,6 +136,7 @@ def assign_and_build(
             voxel_records[lid]["color_rgb"] = atlas_mod.mean_tile_color(
                 atlas_img, lid, tile_px, tiles_per_side
             )
+        voxel_proxy_runs.append(voxel_proxy_mod.records_for_chunk(int(chunk_id), voxel_records))
 
         chunk_dir = out_dir / "c" / f"{chunk_id:06d}"
         chunk_dir.mkdir(parents=True, exist_ok=True)
@@ -215,6 +219,12 @@ def assign_and_build(
     row_to_voxel_path = out_dir / "row_to_voxel.bin"
     row_to_voxel_mod.build_row_to_voxel(n, assign, row_to_voxel_path)
 
+    voxel_proxy_path = out_dir / "voxel_proxy.bin"
+    voxel_proxy_mod.write_voxel_proxy(
+        voxel_proxy_path, num_voxels, voxels_per_chunk,
+        voxel_proxy_mod.build_voxel_proxy_records(voxel_proxy_runs),
+    )
+
     world = {
         "num_voxels": num_voxels,
         "voxels_per_chunk": voxels_per_chunk,
@@ -229,7 +239,7 @@ def assign_and_build(
 
     manifest_path = manifest_mod.write_manifest(
         out_dir, dataset_id, world, atlas_cfg, point_source, subsets, thumb_url_template,
-        proxy_path, point_index_path, row_to_voxel_path, chunk_entries,
+        proxy_path, point_index_path, row_to_voxel_path, voxel_proxy_path, chunk_entries,
     )
 
     try:
@@ -245,6 +255,37 @@ def assign_and_build(
         "n_points": n,
         "n_blank_tiles": n_blank_tiles,
     }
+
+
+def derive_voxel_proxy(pack_dir: Path) -> dict:
+    """Write voxel_proxy.bin for a pack built before the file existed, from the
+    pack's own per-chunk meta.bin files, and register it in manifest.json (the only
+    key that changes). Byte-identical to what assign_and_build would have written —
+    both paths go through voxel_proxy.records_for_chunk — and idempotent: re-running
+    rewrites the same bytes and the same entry. The .bin lands via temp file + rename
+    for the same reason manifest.dump_manifest does: the pack is being served.
+    Callers pair it with validate_chunks."""
+    manifest = json.loads((pack_dir / "manifest.json").read_text())
+    world = manifest["world"]
+
+    runs: list[np.ndarray] = []
+    for chunk in manifest["chunks"]:
+        meta = metablob.read_chunk_meta(pack_dir / chunk["meta_path"])
+        if meta.chunk_id != chunk["chunk_id"]:
+            raise ValueError(
+                f"{chunk['meta_path']}: header chunk_id {meta.chunk_id} != manifest {chunk['chunk_id']}"
+            )
+        runs.append(voxel_proxy_mod.records_for_chunk(meta.chunk_id, meta.voxel_records))
+    records = voxel_proxy_mod.build_voxel_proxy_records(runs)
+
+    voxel_proxy_path = pack_dir / "voxel_proxy.bin"
+    tmp_path = pack_dir / "voxel_proxy.bin.tmp"
+    voxel_proxy_mod.write_voxel_proxy(tmp_path, world["num_voxels"], world["voxels_per_chunk"], records)
+    tmp_path.replace(voxel_proxy_path)
+
+    entry = manifest_mod.voxel_proxy_entry(voxel_proxy_path, pack_dir)
+    manifest_path = manifest_mod.dump_manifest(pack_dir, manifest_mod.with_voxel_proxy(manifest, entry))
+    return {"manifest_path": manifest_path, "n_voxels": entry["n_voxels"], "bytes": entry["bytes"]}
 
 
 def validate_chunks(out_dir: Path) -> dict:
