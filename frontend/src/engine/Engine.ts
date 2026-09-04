@@ -14,11 +14,15 @@ import {
   TELEPORT_MS_PER_WORLD_UNIT,
 } from "../config.ts";
 import { createSceneFog } from "./Fog.ts";
+import { NebulaSky } from "./NebulaSky.ts";
 import { Starfield } from "./Starfield.ts";
 
 export type TickCallback = (deltaSeconds: number, elapsedSeconds: number) => void;
 
 export interface EngineOptions {
+  /** Draw the procedural nebula cubemap as the background (default true);
+   * false keeps the flat clear colour — the `?sky=0` A/B switch. */
+  sky?: boolean;
   /** Carry the headlamp with the camera (default true); false leaves only the
    * distance-independent fill + sun — the `?headlamp=0` A/B switch. */
   headlamp?: boolean;
@@ -133,6 +137,9 @@ export class Engine {
    * the scene's environment — the same category as the clear color and the fog
    * — not part of any dataset's content. */
   readonly starfield: Starfield;
+  /** The nebula cubemap behind the stars (see `NebulaSky.ts`), or null under
+   * `?sky=0`. Same ownership argument as the starfield. */
+  readonly sky: NebulaSky | null;
   /** The camera-carried point light (see `HEADLAMP_*` in config.ts), or null
    * under `?headlamp=0`. Owned here because following the camera has to happen
    * after the tick callback has moved it and before the render — i.e. inside
@@ -177,6 +184,11 @@ export class Engine {
     // voxels. `createSceneFog` also swaps in the fog curve (see `Fog.ts`),
     // which has to precede the first compile for the same reason.
     this.scene.fog = createSceneFog();
+    // The sky renders its cubemap right here, before the starfield or anything
+    // else exists — it is the first thing the renderer ever draws, into an
+    // offscreen target, so the main scene never sees a frame without it.
+    this.sky = options.sky === false ? null : new NebulaSky(this.renderer);
+    if (this.sky) this.scene.background = this.sky.texture;
     this.starfield = new Starfield();
     this.scene.add(this.starfield.points);
 
@@ -399,6 +411,7 @@ export class Engine {
 
   dispose(): void {
     this.stop();
+    this.sky?.dispose();
     this.headlamp?.removeFromParent();
     this.starfield.dispose();
     this.timer.dispose();

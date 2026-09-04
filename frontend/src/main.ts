@@ -51,9 +51,13 @@ const useSynthetic = params.get("synthetic") === "1";
 /** `?dataset=bl-160` switches chunk-packs; the registry lives in config.ts. */
 const datasetKey = params.get("dataset") ?? DEFAULT_DATASET;
 
-// `?headlamp=0`: A/B switch — the distance-independent rig alone, without the
-// camera-carried lamp.
-const engine = new Engine(app, { headlamp: params.get("headlamp") !== "0" });
+// `?sky=0` / `?headlamp=0`: A/B switches for the two Phase 7 environment
+// additions — the flat clear colour instead of the nebula cubemap, and the
+// distance-independent rig alone without the camera-carried lamp.
+const engine = new Engine(app, {
+  sky: params.get("sky") !== "0",
+  headlamp: params.get("headlamp") !== "0",
+});
 
 // The distance-independent half of the light rig — see "Light rig" in
 // config.ts for the whole set and why these two sit below full brightness.
@@ -694,7 +698,10 @@ function containerStats(): { chunks: number; instances: number; visible: number;
 Object.assign(window as unknown as Record<string, unknown>, {
   lsv: {
     engine,
-    // The distance-independent light rig (the headlamp is `engine.headlamp`).
+    // Environment handles: `sky.regenerate(seed)` re-rolls the nebulae,
+    // `sky.material.uniforms` / `sky.target` are there for tuning; `lights`
+    // is the distance-independent rig (the headlamp is `engine.headlamp`).
+    sky: engine.sky,
     lights: { hemi: hemiLight, sun: sunLight },
     containerStats,
     get manifest() {

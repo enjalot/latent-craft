@@ -518,7 +518,11 @@ export const PROXY_DENSITY_LOG2_MAX = 18;
  * `setClearColor(FOG_COLOR)`) on purpose — fog that doesn't match the void
  * reads as a visible grey wall hanging in space at the fade distance instead of
  * as depth, because geometry fades toward one color while the void behind it
- * stays another.
+ * stays another. The nebula sky (below) is a few luminance points brighter
+ * than this in places, so at the very limit of the fog a block becomes a
+ * faintly darker silhouette against the glow rather than vanishing outright —
+ * that is the far-structure-still-readable behaviour the retune wants, and it
+ * is only possible because the sky stays this dark.
  */
 export const FOG_COLOR = 0x05060a;
 
@@ -591,6 +595,85 @@ export const STARFIELD_OPACITY = 0.55;
 /** Star tint — the same cool blue-white the scene's hemisphere fill uses, so
  * the backdrop belongs to the same lighting world as the voxels. */
 export const STARFIELD_COLOR = 0xbcd0ff;
+
+// ---------------------------------------------------------------------------
+// Nebula sky (Phase 7)
+// ---------------------------------------------------------------------------
+//
+// Direct feedback: "I also want a world box for the night sky that has subtle
+// color effects in all cardinalities so that the eye has some directional
+// orientation for navigation. I like the star box now but it should have some
+// color swirls like galaxies or nebulas in different areas so one can navigate
+// by the stars so to speak."
+//
+// So: a procedural cubemap (`engine/NebulaSky.ts`), rendered once at startup
+// and set as `scene.background`, in which every cardinal direction has its own
+// hue, a pale band arcs overhead, and a few brighter knots sit at fixed
+// bearings. The starfield draws on top of it unchanged. `?sky=0` falls back to
+// the flat clear color for A/B; `window.lsv.sky.regenerate(seed)` re-rolls the
+// nebulae from the console.
+
+/**
+ * Nebula hue per cardinal direction, as sRGB hex, in the order
+ * `+X, -X, +Y, -Y, +Z, -Z`. This is the navigation contract: a glance at the
+ * sky says which way you face, so the six must be far apart on the hue wheel
+ * and each must be nameable —
+ *
+ *     +X  warm amber          -X  deep blue
+ *     +Y  pale (the band)     -Y  dull red, the darkest region
+ *     +Z  violet / magenta    -Z  teal / green
+ *
+ * — with opposites chosen as complements (amber/blue, violet/teal) so turning
+ * around is the biggest colour change of all. Between cardinals the shader
+ * blends by the squared direction components, so a diagonal is an even mix of
+ * its two neighbours and there are no seams. The values are muted on purpose:
+ * `SKY_BRIGHTNESS` scales the whole sky and the hues here only set the
+ * proportions, but a saturated hue at low brightness still reads as garish
+ * where two nebulae overlap.
+ */
+export const SKY_CARDINAL_COLORS: readonly [number, number, number, number, number, number] = [
+  0xd8903c, 0x3a5cd0, 0xa9bbdc, 0x7a2e2e, 0xa24cd2, 0x2fb89a,
+];
+
+/** The overhead band's own colour — a pale, slightly cool off-white, so it
+ * reads as a distant Milky Way rather than as another nebula. */
+export const SKY_BAND_COLOR = 0xc9d3e8;
+
+/** Core colour of the galaxy knots — near-white, warm, so a knot is the one
+ * thing in the sky that reads as a light rather than a glow. Each knot is
+ * still tinted by the nebula hue of the region it sits in. */
+export const SKY_KNOT_COLOR = 0xfff0dc;
+
+/**
+ * Global sky brightness, a linear-light multiplier on everything the shader
+ * draws. The sky is a backdrop and a compass, not a subject: the cubes and the
+ * HUD must stay the brightest things on screen. Measured headlessly at 0.075,
+ * looking along each axis from the world centre with the world hidden: mean
+ * sky luminance 19 / 8 / 23 / 2 / 6 / 12 (/255) for +X / -X / +Y / -Y / +Z /
+ * -Z (+Y is the band, -Y the nadir), 99th percentile 40-52, and not a single
+ * sky pixel above 90 — against the HUD's dimmest text at 146
+ * (`--hud-text-dim`), a fogged cube at 25 units at ~105, and a lit one up
+ * close at 150-190. The clear colour it replaces is 6. The first pass at 0.16
+ * put the band at a mean of 43 and the knots at 200: a grey smear you looked
+ * at instead of a glow you steered by.
+ */
+export const SKY_BRIGHTNESS = 0.075;
+
+/**
+ * Cubemap face size in pixels. 512 per 90° face is ~5.7 texels per degree;
+ * a 1600 px-wide 70° view magnifies that ~4x, which is invisible on fBm this
+ * soft — the finest octave the shader evaluates is ~1.3 cycles per degree,
+ * still 4+ texels per cycle — and there are no hard edges anywhere in the sky
+ * to reveal it. 1024 would cost 4x the VRAM (6 MB vs 1.5 MB) for a texture
+ * that is only ever looked up.
+ */
+export const SKY_FACE_PX = 512;
+
+/** Default noise seed. Any integer; deterministic so the sky is byte-identical
+ * across reloads (the same reason `Starfield` seeds its PRNG — headless
+ * before/after comparisons, and a landmark someone noticed is still there next
+ * session). Re-roll from the console with `lsv.sky.regenerate(n)`. */
+export const SKY_SEED = 7;
 
 // ---------------------------------------------------------------------------
 // Phase 1 synthetic field (kept for the `?synthetic=1` fallback view)
