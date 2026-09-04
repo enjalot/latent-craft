@@ -102,6 +102,17 @@ export async function loadPointIndex(
  * the manifest's mapping is the "unmapped" case; a template that doesn't
  * reference it (MONET's) resolves fine regardless.
  */
+/**
+ * The subset a `row_id` belongs to (`covers`, `plates`, `laion`,
+ * `synthetic-flux-klein`, …), or `null` for an out-of-range row or a subset
+ * code the manifest doesn't name. The lightbox uses it to explain a missing
+ * original (`SYNTHETIC_SUBSET_PREFIX` in `config.ts`).
+ */
+export function resolveSubsetName(index: PointIndex, rowId: number): string | null {
+  if (rowId < 0 || rowId >= index.subsetCode.length) return null;
+  return index.subsetNames[index.subsetCode[rowId]] ?? null;
+}
+
 export function resolveThumbUrl(index: PointIndex, rowId: number): string | null {
   if (rowId < 0 || rowId >= index.subsetCode.length) return null;
   const subsetName = index.subsetNames[index.subsetCode[rowId]];

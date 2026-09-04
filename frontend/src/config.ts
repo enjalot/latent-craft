@@ -25,6 +25,20 @@ export interface DatasetConfig {
   /** Human-readable label for the HUD. */
   label: string;
   /**
+   * Id of the POINTS TABLE this chunk-pack was binned from — the `<points_id>`
+   * segment of the data server's per-row original-image lookup,
+   * `GET /meta/<points_id>/<row_id>` (see `streaming/PointMeta.ts`). This is
+   * NOT the chunk-pack id: a points table is one UMAP fit's worth of rows,
+   * and every voxel resolution built from it shares the same `row_id`s, so
+   * `bl` and `bl-160` both look up `bl`, and each MONET arm's 96^3 and 160^3
+   * packs both look up that arm (`monet-random`, …). Required rather than
+   * defaulted from the key so that a new pack can't silently ask the server
+   * about a table that doesn't exist (a 404 there reads as "no original for
+   * any row", which is exactly the kind of quiet wrongness a lookup like this
+   * should never produce).
+   */
+  pointsId: string;
+  /**
    * Path to this dataset's 2D minimap pack (Phase 5), or absent for a dataset
    * that has no 2D pack built yet — in which case the app simply runs without
    * a minimap panel rather than failing.
@@ -53,12 +67,14 @@ export const DATASETS: Record<string, DatasetConfig> = {
   bl: {
     path: "/chunks/bl",
     label: "BL · num_voxels=96",
+    pointsId: "bl",
     minimapPath: "/minimap/bl",
     thumbsBasePath: "/thumbs/bl",
   },
   "bl-160": {
     path: "/chunks/bl-160",
     label: "BL · num_voxels=160",
+    pointsId: "bl",
     minimapPath: "/minimap/bl",
     thumbsBasePath: "/thumbs/bl",
   },
@@ -72,16 +88,19 @@ export const DATASETS: Record<string, DatasetConfig> = {
   "monet-random": {
     path: "/chunks/monet-random",
     label: "MONET · random draw",
+    pointsId: "monet-random",
     minimapPath: "/minimap/monet-random",
   },
   "monet-sscd": {
     path: "/chunks/monet-sscd",
     label: "MONET · sscd draw",
+    pointsId: "monet-sscd",
     minimapPath: "/minimap/monet-sscd",
   },
   "monet-annfaiss": {
     path: "/chunks/monet-annfaiss",
     label: "MONET · annfaiss draw",
+    pointsId: "monet-annfaiss",
     minimapPath: "/minimap/monet-annfaiss",
   },
   // 160^3 variants of the same three arms ("I want 160 for monet"), built
@@ -90,16 +109,19 @@ export const DATASETS: Record<string, DatasetConfig> = {
   "monet-random-160": {
     path: "/chunks/monet-random-160",
     label: "MONET · random draw · num_voxels=160",
+    pointsId: "monet-random",
     minimapPath: "/minimap/monet-random",
   },
   "monet-sscd-160": {
     path: "/chunks/monet-sscd-160",
     label: "MONET · sscd draw · num_voxels=160",
+    pointsId: "monet-sscd",
     minimapPath: "/minimap/monet-sscd",
   },
   "monet-annfaiss-160": {
     path: "/chunks/monet-annfaiss-160",
     label: "MONET · annfaiss draw · num_voxels=160",
+    pointsId: "monet-annfaiss",
     minimapPath: "/minimap/monet-annfaiss",
   },
   // `monet-theirfaiss` gets added the same way once the research project
@@ -1154,6 +1176,88 @@ export const THUMBS_BASE_PATH = "/thumbs";
 export const INVENTORY_THUMBS_PAGE_SIZE = 60;
 
 // ---------------------------------------------------------------------------
+// Lightbox — full-resolution originals
+// ---------------------------------------------------------------------------
+//
+// The thumbnails on this machine top out at 256 px, and until now "view
+// bigger" in the lightbox honestly meant "the same 256 px file, larger on
+// screen". The pipeline now ships a per-row lookup (`point_meta.bin`, served
+// as `GET /meta/<points_id>/<row_id>` → `{url, width, height}`) that says
+// where each thumbnail's ORIGINAL lives on the open web — BL's full-resolution
+// Flickr scans, MONET's crawl-source images — so the lightbox shows the local
+// thumbnail at once and then, if the row has one, fetches the original behind
+// it and swaps it in. Everything about that fetch is best-effort: the URLs
+// were crawled years ago (spot checks put ~1/3 of MONET's dead), some hosts
+// refuse hotlinks, and a quarter of a million MONET rows are synthetic images
+// for which no larger version exists anywhere. The knobs below shape that.
+
+/**
+ * Base path of the per-row original-image lookup, proxied same-origin like
+ * `/chunks`, `/thumbs` and `/minimap` (see `vite.config.ts`, and the Private
+ * Network Access reasoning at the top of this file). `resolvePointMetaUrl`
+ * builds the full URL: `/meta/<DatasetConfig.pointsId>/<row_id>`.
+ */
+export const META_BASE_PATH = "/meta";
+
+/**
+ * How long the lightbox waits for an original to arrive before giving up on
+ * it and declaring the link dead, ms. The failure modes are slow ones — a
+ * host that accepts the connection and never answers, a CDN edge returning
+ * 522 after its own upstream timeout — and a browser image load has no
+ * timeout of its own, so without this a dead link would leave "loading
+ * original …" up forever. 15 s is long enough for a multi-megabyte Flickr
+ * `_o` scan on a slow link (the BL originals run to several thousand px on
+ * a side) and short enough that a dead host resolves within the time it
+ * takes to look at the thumbnail. A timed-out row is remembered as
+ * unavailable for the session; paging back to it does not retry.
+ */
+export const LIGHTBOX_ORIGINAL_TIMEOUT_MS = 15_000;
+
+/**
+ * How much of the viewport an original may fill, as fractions of the window's
+ * width and height. The thumbnail keeps its 256 px box; a loaded original
+ * grows the lightbox to show it at up to this size (never past its own
+ * native pixels — a 700 px MONET crawl image is shown at 700 px, not
+ * stretched). 0.9 / 0.78 leaves room for the frame's chrome, the status and
+ * caption lines under the image, and a margin of scrim on every side so the
+ * modal still reads as a modal rather than a full-screen takeover.
+ */
+export const LIGHTBOX_ORIGINAL_MAX_VIEWPORT_FRAC: readonly [number, number] = [0.9, 0.78];
+
+/**
+ * Cross-fade from the thumbnail to the original once it has loaded, ms. The
+ * two images share a box and an aspect ratio, so the fade reads as the
+ * picture coming into focus rather than as a cut; long enough to register,
+ * short enough not to feel like waiting on an animation. A cached original
+ * (paging back to a row already seen this session) skips it and appears at
+ * once.
+ */
+export const LIGHTBOX_ORIGINAL_CROSSFADE_MS = 220;
+
+/**
+ * Subset-name prefix that marks a row as a generated (synthetic) image —
+ * MONET's `synthetic-flux-klein`, `synthetic-flux-schnell`, `synthetic-
+ * z-image`. Such rows have `url: null` in `/meta` for a different reason
+ * than a BL cover does: there is no original to have lost — the image was
+ * generated at the dataset's own thumbnail size and the local thumbnail is
+ * the largest copy that exists — and the lightbox says so instead of
+ * implying an original might exist somewhere else.
+ */
+export const SYNTHETIC_SUBSET_PREFIX = "synthetic-";
+
+/**
+ * Longest side, in px, of the largest copy that exists of a synthetic MONET
+ * image — the HuggingFace Hub's own thumbnail size for `jasperai/monet`. The
+ * local packs carry 256 px thumbnails (the atlas/inventory size), so this is
+ * what the lightbox quotes for a synthetic row rather than the local size:
+ * "384 px is the largest available" is a statement about the world, not
+ * about this machine. `/meta`'s `width`/`height` for these rows report the
+ * generator's 1024x1024 and must not be shown as a size anything can be
+ * fetched at.
+ */
+export const SYNTHETIC_MAX_THUMB_PX = 384;
+
+// ---------------------------------------------------------------------------
 // Hotbar / equippable tools (Phase 4)
 // ---------------------------------------------------------------------------
 
@@ -1394,4 +1498,24 @@ export function resolveThumbsBaseUrl(datasetKey: string): string {
   const dataset = DATASETS[datasetKey];
   const origin = CHUNK_SERVER_ORIGIN ?? "";
   return `${origin}${dataset?.thumbsBasePath ?? THUMBS_BASE_PATH}`;
+}
+
+/**
+ * The points-table id a dataset key's `/meta` lookups go to
+ * (`DatasetConfig.pointsId`), or `null` for an unknown key — callers treat
+ * that as "no original-image lookup for this dataset" rather than failing.
+ */
+export function resolvePointsId(datasetKey: string): string | null {
+  return DATASETS[datasetKey]?.pointsId ?? null;
+}
+
+/**
+ * URL of one row's original-image record: `/meta/<points_id>/<row_id>`.
+ * Same same-origin/Vite-proxy reasoning as `resolveDatasetBaseUrl` (see
+ * `vite.config.ts`'s `/meta` route); `pointsId` is `DatasetConfig.pointsId`,
+ * never the chunk-pack key.
+ */
+export function resolvePointMetaUrl(pointsId: string, rowId: number): string {
+  const origin = CHUNK_SERVER_ORIGIN ?? "";
+  return `${origin}${META_BASE_PATH}/${encodeURIComponent(pointsId)}/${rowId}`;
 }

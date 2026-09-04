@@ -33,6 +33,13 @@ export default defineConfig({
       // 2D minimap pack (Phase 5) — same static data server, same proxy reason
       // as /chunks and /thumbs above (Chrome Private/Local Network Access).
       "/minimap": "http://localhost:8802",
+      // Per-row original-image lookup (lightbox originals) — the data server's
+      // dynamic /meta/<points_id>/<row_id> route over point_meta.bin, which
+      // answers {url, width, height} for one row so the lightbox can fetch
+      // the full-resolution original behind a thumbnail. Same proxy reason
+      // as the three above. Note <points_id> is the POINTS TABLE (bl,
+      // monet-random, …), not the chunk-pack id — see DatasetConfig.pointsId.
+      "/meta": "http://localhost:8802",
     },
   },
 });
