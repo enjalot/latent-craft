@@ -1,4 +1,3 @@
-import * as THREE from "three";
 import type { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import { EXTRACTION_FLOOR_OPACITY, XRAY_OPACITY } from "../config.ts";
 
@@ -61,19 +60,19 @@ export function combinedVoxelOpacity(extractedFraction: number, xrayActive: bool
 }
 
 /**
- * Flips a chunk's material into the transparent render path, once. Cheap to
- * call unconditionally (assigning `true` when already `true` is a no-op) —
- * deliberately never flipped back to `false` even once every voxel in a
- * chunk is back at opacity 1, since a fully-opaque material rendered via the
- * transparent queue is visually identical to one in the opaque queue, just
- * with marginally more sort overhead for that one mesh; not worth tracking
- * "does this chunk still need transparency" just to revert it.
+ * Formerly flipped a chunk's material into the transparent render path the
+ * first time any of its voxels was faded. That was the cause of the "a
+ * transparent block makes some of the blocks behind it disappear" bug — see
+ * `createVoxelMaterial`'s doc comment for the mechanism. Per-instance opacity
+ * now goes through alpha-to-coverage on a material that is created ready for
+ * it, so there is nothing to flip: every chunk material handles any mix of
+ * opaque and faded voxels from the moment it's built.
  *
- * Shared by `MiningController` and `XRayController` (both write to the same
- * per-instance opacity channel on the same chunk meshes) so either one can
- * be the first to touch a given chunk without needing to coordinate.
+ * Kept as an explicit no-op for now only because its call sites
+ * (`MiningController`, `XRayController`) are being edited concurrently by the
+ * container work; the calls come out with that work's landing, and this
+ * function goes with them.
  */
 export function ensureTransparentMaterial(mesh: InstancedMesh2): void {
-  const material = mesh.material as THREE.Material;
-  if (!material.transparent) material.transparent = true;
+  void mesh;
 }

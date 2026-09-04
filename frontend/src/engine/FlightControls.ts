@@ -2,6 +2,8 @@ import * as THREE from "three";
 import {
   FLIGHT_ACCEL_TAU_S,
   FLIGHT_SPEED,
+  FLIGHT_SPRINT_DOUBLE_TAP_MS,
+  FLIGHT_SPRINT_MULTIPLIER,
   FLIGHT_VERTICAL_SPEED,
   LOOK_PITCH_LIMIT_RAD,
   LOOK_SENSITIVITY_RAD_PER_PX,
@@ -45,7 +47,8 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
  * Key bindings: WASD = forward/back/strafe (full 3D, follows look pitch),
  * Space = ascend, Shift = descend (world-space, not camera-relative — keeps
  * vertical control predictable regardless of where you're looking). E/Q stay
- * bound to up/down as a legacy alternate.
+ * bound to up/down as a legacy alternate. Double-tap W and hold = sprint
+ * (`FLIGHT_SPRINT_MULTIPLIER` x speed on every axis until W is released).
  *
  * Vertical moved from Q/E to Space/Shift per user feedback after flying the
  * real dataset: that's the binding anyone arriving from Minecraft creative
@@ -53,14 +56,21 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
  *
  *  1. Shift was previously a speed-boost modifier, which now collides. Rather
  *     than rebinding boost to another key (Ctrl, as some Minecraft versions
- *     use for sprint) the boost is GONE, folded into a higher baseline
- *     `FLIGHT_SPEED` — the same feedback round also asked for flight to be
- *     generally faster, so one faster speed satisfies both asks and leaves the
- *     control scheme with one fewer modifier to remember. See `config.ts`.
+ *     use for sprint) the boost went away, folded into a higher baseline
+ *     `FLIGHT_SPEED`. A later round then halved that baseline ("still too
+ *     fast") and brought speed-up back as Minecraft's OWN gesture — the W
+ *     double-tap — which needs no modifier key at all, so the scheme stays as
+ *     lean as it was. See `config.ts`.
  *  2. Q/E are KEPT as an alternate vertical binding rather than dropped. They
  *     cost nothing (no other feature wants those keys), they keep every
  *     screenshot/note from Phases 1-5 accurate, and a left hand already parked
  *     on WASD can reach E/Q without the thumb+pinky stretch.
+ *
+ * Sprint detection lives in the key handlers, not `update()`: a second
+ * non-auto-repeat W keydown within `FLIGHT_SPRINT_DOUBLE_TAP_MS` of the
+ * previous one arms it, W's keyup (or a window blur) disarms it. Only the
+ * TARGET velocity is scaled, so the same easing that rounds off press/release
+ * also rounds off the sprint transition.
  */
 export class FlightControls {
   private readonly camera: THREE.Camera;
@@ -68,6 +78,11 @@ export class FlightControls {
 
   private yaw = 0;
   private pitch = 0;
+
+  private sprinting = false;
+  /** `performance.now()` of the last non-auto-repeat W keydown — the first
+   * half of a double-tap. */
+  private lastForwardPressMs = Number.NEGATIVE_INFINITY;
 
   // Actual velocity eases toward the held-keys' target velocity each frame
   // rather than snapping to it — see the class comment on FLIGHT_ACCEL_TAU_S.
@@ -101,11 +116,29 @@ export class FlightControls {
       // in the HUD would still receive spaces normally.
       if (event.code === "Space" && !isTextEntryTarget(event.target)) event.preventDefault();
       this.keys.add(event.code);
+      // Holding a key fires repeated keydowns with `repeat === true`; only a
+      // genuine fresh press can be half of a double-tap.
+      if (event.code === "KeyW" && !event.repeat) {
+        const now = performance.now();
+        if (now - this.lastForwardPressMs <= FLIGHT_SPRINT_DOUBLE_TAP_MS) this.sprinting = true;
+        this.lastForwardPressMs = now;
+      }
     });
-    window.addEventListener("keyup", (event) => this.keys.delete(event.code));
+    window.addEventListener("keyup", (event) => {
+      this.keys.delete(event.code);
+      if (event.code === "KeyW") this.sprinting = false;
+    });
     // Don't let movement keys get "stuck" held down if the tab loses focus
     // (alt-tab etc.) without a matching keyup.
-    window.addEventListener("blur", () => this.keys.clear());
+    window.addEventListener("blur", () => {
+      this.keys.clear();
+      this.sprinting = false;
+    });
+  }
+
+  /** True while a double-tap-W sprint is held — for the HUD readout. */
+  get isSprinting(): boolean {
+    return this.sprinting;
   }
 
   /** Re-derives yaw/pitch from the camera's current quaternion. */
@@ -167,18 +200,24 @@ export class FlightControls {
     // projection needed.
     this.right.set(1, 0, 0).applyQuaternion(this.camera.quaternion);
 
+    // Sprint scales every axis (see the class comment) — a strafe or climb
+    // mid-sprint keeps pace with the forward motion.
+    const speedScale = this.sprinting ? FLIGHT_SPRINT_MULTIPLIER : 1;
+    const speed = FLIGHT_SPEED * speedScale;
+    const verticalSpeed = FLIGHT_VERTICAL_SPEED * speedScale;
+
     this.targetVelocity.set(0, 0, 0);
-    if (this.keys.has("KeyW")) this.targetVelocity.addScaledVector(this.forward, FLIGHT_SPEED);
-    if (this.keys.has("KeyS")) this.targetVelocity.addScaledVector(this.forward, -FLIGHT_SPEED);
-    if (this.keys.has("KeyD")) this.targetVelocity.addScaledVector(this.right, FLIGHT_SPEED);
-    if (this.keys.has("KeyA")) this.targetVelocity.addScaledVector(this.right, -FLIGHT_SPEED);
+    if (this.keys.has("KeyW")) this.targetVelocity.addScaledVector(this.forward, speed);
+    if (this.keys.has("KeyS")) this.targetVelocity.addScaledVector(this.forward, -speed);
+    if (this.keys.has("KeyD")) this.targetVelocity.addScaledVector(this.right, speed);
+    if (this.keys.has("KeyA")) this.targetVelocity.addScaledVector(this.right, -speed);
     // Vertical is world-space, independent of camera pitch/roll. Space/Shift
     // is the primary (Minecraft creative) binding; E/Q the legacy alternate.
     if (this.keys.has("Space") || this.keys.has("KeyE")) {
-      this.targetVelocity.addScaledVector(this.up, FLIGHT_VERTICAL_SPEED);
+      this.targetVelocity.addScaledVector(this.up, verticalSpeed);
     }
     if (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || this.keys.has("KeyQ")) {
-      this.targetVelocity.addScaledVector(this.up, -FLIGHT_VERTICAL_SPEED);
+      this.targetVelocity.addScaledVector(this.up, -verticalSpeed);
     }
 
     const blend = 1 - Math.exp(-deltaSeconds / FLIGHT_ACCEL_TAU_S);

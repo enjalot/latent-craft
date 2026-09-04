@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { InstancedMesh2 } from "@three.ez/instanced-mesh";
-import { ATLAS_TILE_INSET_TEXELS, VOXEL_UNDERLIGHT } from "../config.ts";
+import { ATLAS_TILE_INSET_TEXELS, VOXEL_COVERAGE_DITHER, VOXEL_UNDERLIGHT } from "../config.ts";
 
 /**
  * Per-instance uniform schema every voxel chunk mesh declares. `tileIndex` is
@@ -70,11 +70,28 @@ const ATLAS_MAP_FRAGMENT = /* glsl */ `
  * `normal` (view-space, already normalized by `<normal_fragment_begin>`) and
  * `viewMatrix` (declared in three's own fragment prefix) are both in scope
  * here; `viewMatrix * vec4(worldUp, 0)` is the world Y axis in view space.
+ *
+ * The second half is the alpha-to-coverage dither — see `createVoxelMaterial`
+ * for why translucency goes through coverage at all. With 4x MSAA the hardware
+ * turns alpha into one of only five coverage levels (0/4 … 4/4), so a plain
+ * `diffuseColor.a = 0.3` would render as a flat 25% and the continuous
+ * extraction fade would visibly step. Offsetting alpha per pixel by a 4x4
+ * Bayer threshold (±half a coverage level, `uCoverageDither`) spreads the
+ * quantization across neighbouring pixels so the average coverage tracks the
+ * requested alpha — ordered dithering, the same trick as screen-door
+ * transparency but hidden under the MSAA resolve. Guarded on `a < 1.0` so the
+ * common fully-opaque voxel pays nothing and stays exactly opaque.
  */
-const VOXEL_UNDERLIGHT_FRAGMENT = /* glsl */ `
+const VOXEL_OUTPUT_FRAGMENT = /* glsl */ `
 	vec3 lsUpView = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );
 	float lsDownFacing = 0.5 - 0.5 * clamp( dot( normal, lsUpView ), -1.0, 1.0 );
 	outgoingLight += diffuseColor.rgb * uUnderlight * lsDownFacing;
+	if ( diffuseColor.a < 1.0 ) {
+		const float lsBayer4[16] = float[16]( 0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0 );
+		ivec2 lsPx = ivec2( gl_FragCoord.xy ) & 3;
+		float lsThreshold = ( lsBayer4[ lsPx.y * 4 + lsPx.x ] + 0.5 ) / 16.0;
+		diffuseColor.a = clamp( diffuseColor.a + ( lsThreshold - 0.5 ) * uCoverageDither, 0.0, 1.0 );
+	}
 	#include <opaque_fragment>
 `;
 
@@ -101,6 +118,38 @@ export interface VoxelMaterialParams {
  *
  * v1 scope: one thumbnail per voxel, repeated on all six faces — that matches
  * the data contract, which stores a single `repr_row_id`/tile per voxel.
+ *
+ * ## Translucency is alpha-to-coverage, NOT alpha blending
+ *
+ * Per-voxel fading (extraction, X-Ray, flashlight) writes an instance opacity
+ * through `InstancedMesh2.setOpacityAt`, which reaches the shader as
+ * `diffuseColor.a` (the library defines `USE_COLOR_ALPHA`, so three's own
+ * `<color_fragment>` multiplies it in). The material stays in the OPAQUE queue
+ * with depth writes on and `alphaToCoverage: true`: the MSAA hardware converts
+ * that alpha into a per-sample coverage mask, and the resolve blends the
+ * covered samples with whatever is behind. Visually it's transparency; in the
+ * pipeline it's an opaque draw.
+ *
+ * Why not `material.transparent = true` (what Phases 3.5-6.6 did): a chunk is
+ * ONE instanced draw, and InstancedMesh2 emits instances in its own
+ * culling-reordered sequence, not back-to-front. With the material in the
+ * transparent queue but depth writes still on, a faded cube drawn before the
+ * cubes behind it stamped its depth first, so the ones drawn later failed the
+ * depth test and vanished wherever it covered them — while cubes drawn earlier
+ * showed through fine. The user-visible symptom was "a transparent block makes
+ * some, but not all, of the blocks behind it disappear." Turning depth writes
+ * off instead would have needed per-instance back-to-front sorting every frame
+ * (~10K+ instances in X-Ray) and still left the proxy cloud/gizmo compositing
+ * wrong against un-written depth. Coverage is order-independent: no sorting,
+ * correct depth for raycasts and for everything drawn after, and one code path
+ * whether zero or every voxel in a chunk is faded.
+ *
+ * Requirements this leans on: the renderer's drawing buffer is multisampled
+ * (`Engine` creates it with `antialias: true`) — alpha-to-coverage is a no-op
+ * on a single-sample target, so any future post-processing chain has to render
+ * into a multisampled target or this silently reverts to fully opaque. Three
+ * also stops forcing `diffuseColor.a = 1.0` (its `OPAQUE` define) precisely
+ * when `alphaToCoverage` is set, which is what lets the alpha through.
  */
 export function createVoxelMaterial(params: VoxelMaterialParams): THREE.MeshStandardMaterial {
   const { atlas, tilesPerSide, tilePx } = params;
@@ -109,11 +158,13 @@ export function createVoxelMaterial(params: VoxelMaterialParams): THREE.MeshStan
     map: atlas,
     roughness: 0.9,
     metalness: 0.0,
+    alphaToCoverage: true,
   });
 
   const tilesPerSideUniform = { value: tilesPerSide };
   const tileInsetUniform = { value: ATLAS_TILE_INSET_TEXELS / tilePx };
   const underlightUniform = { value: VOXEL_UNDERLIGHT };
+  const coverageDitherUniform = { value: VOXEL_COVERAGE_DITHER };
 
   // Set BEFORE the material is ever rendered: InstancedMesh2 saves whatever
   // `onBeforeCompile` it finds as its "base" and calls it first, then layers
@@ -123,20 +174,22 @@ export function createVoxelMaterial(params: VoxelMaterialParams): THREE.MeshStan
     shader.uniforms.uTilesPerSide = tilesPerSideUniform;
     shader.uniforms.uTileInset = tileInsetUniform;
     shader.uniforms.uUnderlight = underlightUniform;
+    shader.uniforms.uCoverageDither = coverageDitherUniform;
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <map_pars_fragment>",
-        "#include <map_pars_fragment>\nuniform float uTilesPerSide;\nuniform float uTileInset;\nuniform float uUnderlight;",
+        "#include <map_pars_fragment>\nuniform float uTilesPerSide;\nuniform float uTileInset;\nuniform float uUnderlight;\nuniform float uCoverageDither;",
       )
       .replace("#include <map_fragment>", ATLAS_MAP_FRAGMENT)
-      .replace("#include <opaque_fragment>", VOXEL_UNDERLIGHT_FRAGMENT);
+      .replace("#include <opaque_fragment>", VOXEL_OUTPUT_FRAGMENT);
   };
   // Every chunk compiles byte-identical shader source, so a constant key lets
-  // all of them share one GL program instead of one per chunk. Bumped to v2
-  // when the underlight patch was added — the key is what three's program
-  // cache dedupes on, so a stale v1 entry would keep serving the old,
-  // black-bottomed shader within a session that had already compiled one.
-  material.customProgramCacheKey = () => "ls-voxel-atlas-v2";
+  // all of them share one GL program instead of one per chunk. The key is what
+  // three's program cache dedupes on, so it's bumped whenever the patched
+  // source changes (v2: underlight; v3: coverage dither) — a stale entry would
+  // otherwise keep serving the previous shader within a session that had
+  // already compiled one.
+  material.customProgramCacheKey = () => "ls-voxel-atlas-v3";
 
   return material;
 }

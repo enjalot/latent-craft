@@ -137,11 +137,12 @@ export const CHUNK_SERVER_ORIGIN: string | null = null;
  * zoom.
  *
  * At 50 the world spans 100 units per axis (173 on the diagonal); at the
- * unchanged `FLIGHT_SPEED` of 16 that is ~6.3s to cross an axis and ~11s
- * corner-to-corner, up from ~3.1s/5.4s. That slower crossing IS the ask, so
- * `FLIGHT_SPEED` deliberately was NOT raised to compensate — see its doc
- * comment. Going much beyond 2x would start to make the empty stretches dead
- * time rather than a sense of scale.
+ * `FLIGHT_SPEED` of 16 this was tuned against, that was ~6.3s to cross an axis
+ * and ~11s corner-to-corner, up from ~3.1s/5.4s. That slower crossing IS the
+ * ask, so `FLIGHT_SPEED` deliberately was NOT raised to compensate — see its
+ * doc comment (it has since been halved again on request, with a sprint
+ * gesture covering the long trips). Going much beyond 2x would start to make
+ * the empty stretches dead time rather than a sense of scale.
  */
 export const WORLD_SCALE = 50;
 
@@ -187,6 +188,18 @@ export const ATLAS_TILE_INSET_TEXELS = 0.5;
  * flattening into unshaded sprites.
  */
 export const VOXEL_UNDERLIGHT = 0.34;
+
+/**
+ * Strength of the per-pixel ordered dither applied to a faded voxel's alpha
+ * before alpha-to-coverage (see `VoxelMaterial.ts` for why translucency goes
+ * through coverage at all), in units of alpha. 0.25 is exactly one coverage
+ * step of the renderer's 4x MSAA — the smallest amount that lets neighbouring
+ * pixels land on adjacent coverage levels and average out to the requested
+ * opacity, so the continuous extraction fade reads as continuous instead of
+ * stepping through 100/75/50/25%. Larger values only add visible noise; 0
+ * disables the dither entirely.
+ */
+export const VOXEL_COVERAGE_DITHER = 0.25;
 
 // ---------------------------------------------------------------------------
 // Streaming rings
@@ -375,14 +388,23 @@ export const SYNTHETIC_INSTANCE_COUNT = 150_000;
  * corner-to-corner diagonal ~5.4s -> ~11s. That is a journey, not dead time,
  * and the R2 residency ring (8 chunk edges, which scales with the world) still
  * keeps two-thirds of an axis streamed in around you the whole way.
+ *
+ * 16 -> 8, from the next round of real use: "the movement speed is still too
+ * fast, we should move half as fast in all directions." Cruise is now for
+ * browsing — reading thumbnails as they go by — and covering distance is an
+ * explicit, opt-in gesture instead: double-tap-and-hold W sprints at
+ * `FLIGHT_SPRINT_MULTIPLIER` x this (Minecraft's own sprint binding, so it
+ * needs no new key). At 8 an axis takes ~12.5s to cross at cruise, ~5s
+ * sprinting.
  */
-export const FLIGHT_SPEED = 16;
+export const FLIGHT_SPEED = 8;
 
 /** Vertical (Space/Shift, or the legacy E/Q) speed, world units / second.
  * Matched to `FLIGHT_SPEED` on purpose: with vertical bound to the same hand
  * position as in Minecraft creative, a slower climb than cruise reads as the
- * controls sticking rather than as a deliberate axis difference. */
-export const FLIGHT_VERTICAL_SPEED = 16;
+ * controls sticking rather than as a deliberate axis difference. Halved with
+ * it ("half as fast in all directions"). */
+export const FLIGHT_VERTICAL_SPEED = 8;
 
 /**
  * Exponential time constant (seconds) the actual flight velocity takes to
@@ -394,6 +416,27 @@ export const FLIGHT_VERTICAL_SPEED = 16;
  * matching this project's Descent-adjacent framing.
  */
 export const FLIGHT_ACCEL_TAU_S = 0.15;
+
+/**
+ * Sprint: double-tap W and keep it held (Minecraft's sprint gesture) to fly
+ * faster until W is released; applies to every axis while it's held, so a
+ * strafe or climb during a sprint keeps up with the forward motion instead of
+ * lagging it. 2.5x the halved cruise speed lands at 20 units/s — a bit above
+ * the 16 that was "too fast" for browsing, which is the right place for a
+ * gesture whose whole purpose is getting somewhere. The easing
+ * (`FLIGHT_ACCEL_TAU_S`) applies to the sprint transition too, so engaging it
+ * is a surge, not a jump cut.
+ */
+export const FLIGHT_SPRINT_MULTIPLIER = 2.5;
+
+/**
+ * Two W presses closer together than this count as the sprint double-tap.
+ * 300ms is Minecraft's own window (7 ticks at 20 Hz = 350ms, rounded down
+ * slightly): long enough to be reliable on a normal keyboard, short enough
+ * that stop-and-go browsing (press W, release, press W a moment later) never
+ * triggers it by accident. Auto-repeat keydowns from holding W don't count.
+ */
+export const FLIGHT_SPRINT_DOUBLE_TAP_MS = 300;
 
 /** Camera near/far planes and FOV.
  *
