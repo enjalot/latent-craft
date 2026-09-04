@@ -46,9 +46,11 @@ const ATLAS_MAP_FRAGMENT = /* glsl */ `
  * is where `outgoingLight` has been assembled but not yet written out).
  *
  * The bug this fixes: the scene's lighting is one directional sun from above
- * plus a hemisphere light whose ground color is near-black, and nothing else —
- * no ambient term, and no ground to bounce off, because the world is a cube of
- * blocks floating in a void. A face pointing straight down therefore gets
+ * plus a hemisphere light whose ground color is near-black — no ambient term,
+ * and no ground to bounce off, because the world is a cube of blocks floating
+ * in a void. (The Phase 7 headlamp is a point light behind the camera, so it
+ * reaches an underside only while you are beneath it; the argument stands.) A
+ * face pointing straight down therefore gets
  * `max(dot(n, sunDir), 0) == 0` from the sun and the pure ground color from the
  * hemisphere, i.e. essentially zero light. Measured on a real voxel before this
  * fix: the -Y face read luminance 6/255 (visually black) while the +X face read

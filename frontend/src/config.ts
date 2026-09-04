@@ -189,7 +189,8 @@ export const ATLAS_TILE_INSET_TEXELS = 0.5;
  * a face's own sampled albedo (0 = off, the pre-fix behaviour).
  *
  * Why this exists: the scene lights voxels with one directional sun from above
- * plus a hemisphere light whose ground color is near-black (`main.ts`), so a
+ * plus a hemisphere light whose ground color is near-black (`main.ts`; the
+ * Phase 7 headlamp only reaches an underside while you are beneath it), so a
  * face whose normal points straight DOWN receives zero direct light and zero
  * hemisphere sky — it rendered as a black square instead of the voxel's
  * thumbnail (measured: luminance 6/255 on the -Y face vs 133 on a side face

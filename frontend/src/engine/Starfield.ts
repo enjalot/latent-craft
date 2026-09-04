@@ -34,8 +34,9 @@ function mulberry32(seed: number): () => number {
  * frame, and there is no cue for how far away an isolated cluster is. Every
  * space-flight game in this project's reference set (Descent, Elite, No Man's
  * Sky) solves that the same cheap way. The fog added alongside this
- * (`Engine`'s `FogExp2`) covers absolute distance; the stars cover *motion* —
- * they are the only thing on screen when you're crossing empty space.
+ * (`Engine`'s `FogExp2`) covers absolute distance; the stars cover *motion*,
+ * and the nebula sky behind them (`NebulaSky.ts`, Phase 7) covers *bearing* —
+ * between them they are all that's on screen when you're crossing empty space.
  *
  * Deliberate choices:
  *
