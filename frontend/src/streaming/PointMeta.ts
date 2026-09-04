@@ -29,22 +29,47 @@ interface PointMetaJson {
 }
 
 /**
+ * What a `/meta` lookup can come back with. Three answers, and the
+ * distinction between the last two is the whole point:
+ *
+ *   `PointMeta`   the row's record (200)
+ *   `null`        the server's own final "no such row / no such table" (404)
+ *   `undefined`   NOT KNOWN — the lookup itself failed: the fetch threw
+ *                 (server down, connection dropped) or the answer was some
+ *                 other non-2xx (the Vite proxy's 500/504 while the data
+ *                 server restarts, a 5xx from the server). The row may well
+ *                 have an original; we simply could not ask.
+ *
+ * `undefined` is the same value `peekPointMeta` returns for a row nobody has
+ * asked about yet, and it means the same thing: nothing is on record for
+ * this row, so ask again.
+ */
+export type PointMetaLookup = PointMeta | null | undefined;
+
+/**
  * `/meta` lookups, cached per `(points_id, row_id)` for the life of the page
  * and de-duplicated while in flight, so paging back and forth through a
  * lightbox stack never re-asks the server about a row it already knows, and
  * two callers asking about the same row at once share one request.
  *
- * The cache also holds `null`s: a 404 (row out of range, unknown points table)
- * is as final as a hit, and a network failure retrying every arrow-key press
- * would be worse than remembering it. Nothing here ever throws — the lightbox
- * calls this on a keypress and has no sensible way to surface an exception,
- * so every failure mode collapses to "no meta for this row" (`null`) plus one
- * `console.warn` for a genuinely unexpected shape.
+ * Only DEFINITIVE answers are cached — a record, or the 404 that says there
+ * is none. A lookup that fails for any other reason resolves `undefined` and
+ * leaves nothing behind, so the next visit to the row retries: a transient
+ * hiccup (the data server restarting under the Vite proxy) must not label a
+ * row "no original" until the page is reloaded. Retrying costs nothing
+ * extra — every un-cached row already costs one request per visit, and a
+ * failed request is answered at least as fast as a good one.
+ *
+ * Nothing here ever throws — the lightbox calls this on a keypress — so a
+ * thrown fetch collapses to `undefined` like any other failed lookup, and a
+ * 200 whose body is not the shape above is a definitive `null` plus one
+ * `console.warn`: that is the server's answer, however malformed, and
+ * retrying would only warn again.
  */
 const cache = new Map<string, PointMeta | null>();
-const inFlight = new Map<string, Promise<PointMeta | null>>();
+const inFlight = new Map<string, Promise<PointMetaLookup>>();
 
-export async function fetchPointMeta(pointsId: string, rowId: number): Promise<PointMeta | null> {
+export async function fetchPointMeta(pointsId: string, rowId: number): Promise<PointMetaLookup> {
   const key = `${pointsId}:${rowId}`;
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
@@ -52,9 +77,9 @@ export async function fetchPointMeta(pointsId: string, rowId: number): Promise<P
   if (pending) return pending;
 
   const request = fetchPointMetaUncached(pointsId, rowId)
-    .catch(() => null)
+    .catch(() => undefined)
     .then((meta) => {
-      cache.set(key, meta);
+      if (meta !== undefined) cache.set(key, meta);
       inFlight.delete(key);
       return meta;
     });
@@ -64,15 +89,19 @@ export async function fetchPointMeta(pointsId: string, rowId: number): Promise<P
 
 /** The cached answer for a row, if it has already been fetched — for callers
  * that need to decide something synchronously (the lightbox's status line on
- * a keypress) without waiting a round-trip they already paid for. */
-export function peekPointMeta(pointsId: string, rowId: number): PointMeta | null | undefined {
+ * a keypress) without waiting a round-trip they already paid for. `undefined`
+ * when the row has never been looked up, or its last lookup failed. */
+export function peekPointMeta(pointsId: string, rowId: number): PointMetaLookup {
   return cache.get(`${pointsId}:${rowId}`);
 }
 
-async function fetchPointMetaUncached(pointsId: string, rowId: number): Promise<PointMeta | null> {
+async function fetchPointMetaUncached(pointsId: string, rowId: number): Promise<PointMetaLookup> {
   const response = await fetch(resolvePointMetaUrl(pointsId, rowId));
-  // 404 is the server's "no such row / no such table" — silent, final.
-  if (!response.ok) return null;
+  // 404 is the server's "no such row / no such table" — silent, final. Any
+  // other failure status is the proxy or the server being unwell, not an
+  // answer about the row.
+  if (response.status === 404) return null;
+  if (!response.ok) return undefined;
   const raw = (await response.json()) as Partial<PointMetaJson>;
   if (
     typeof raw.row_id !== "number" ||

@@ -46,8 +46,18 @@ export interface LightboxOptions {
  *   `shown`        the original is on screen in place of the thumbnail
  *   `unavailable`  there IS a URL on record, but it failed or timed out
  *   `none`         no original exists on record (synthetic image, BL cover)
+ *   `unreachable`  the `/meta` lookup itself failed (server or network), so
+ *                  whether an original exists is not known; nothing is
+ *                  cached and paging back to the row asks again
  */
-export type LightboxOriginalState = "idle" | "checking" | "loading" | "shown" | "unavailable" | "none";
+export type LightboxOriginalState =
+  | "idle"
+  | "checking"
+  | "loading"
+  | "shown"
+  | "unavailable"
+  | "none"
+  | "unreachable";
 
 /** Session cache of originals, per row: the decoded `Image` (kept alive so
  * paging back is a DOM insert, not a refetch or a re-decode), or `"failed"`
@@ -395,7 +405,13 @@ export class Lightbox {
     const meta = await fetchPointMeta(pointsId, rowId);
     if (token !== this.showToken) return;
 
-    if (!meta) {
+    if (meta === undefined) {
+      // The lookup failed, not the row: say so rather than "no record", and
+      // leave the door open — nothing was cached, so paging back retries.
+      this.setStatus("original lookup failed · paging back retries", "unreachable", null);
+      return;
+    }
+    if (meta === null) {
       this.setStatus("original not available (no record)", "none", null);
       return;
     }
