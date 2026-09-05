@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from . import _vendored_map_pack_core as core
+from .overview import build_overview_density
 
 
 def build_minimap_pack(
@@ -29,6 +30,7 @@ def build_minimap_pack(
     subsets: dict[str, int],
     corpus_column: str = "subset",
     seed: int = 0,
+    overview_only: bool = False,
 ) -> dict:
     n = len(points_df)
     row_ids = points_df["row_id"].to_numpy()
@@ -62,7 +64,7 @@ def build_minimap_pack(
 
     print("[minimap] computing frame ...", flush=True)
     frame = core.compute_frame(coords)
-    max_zoom = core.choose_max_zoom(n)
+    max_zoom = 1 if overview_only else core.choose_max_zoom(n)
     print(f"[minimap] N={n:,} Z={max_zoom} extent={frame['extent']}", flush=True)
 
     qx, qy = core.quantize(coords, frame["extent"])
@@ -71,7 +73,7 @@ def build_minimap_pack(
     )
 
     t0 = time.time()
-    dens = core.build_density(out_dir, qx, qy, corpus, n_corpora, max_zoom)
+    dens = build_overview_density(out_dir, qx, qy) if overview_only else core.build_density(out_dir, qx, qy, corpus, n_corpora, max_zoom)
     t_density = time.time() - t0
     print(f"[minimap] density {t_density:.1f}s", flush=True)
 
@@ -84,7 +86,12 @@ def build_minimap_pack(
     t_points = time.time() - t0
 
     t0 = time.time()
-    lod = core.build_lod(out_dir, qx, qy, packed, tile_id, max_zoom, dens["finest_counts"], seed)
+    if overview_only:
+        np.empty(0, dtype=core.LOD_DTYPE).tofile(out_dir / "points" / "lod.bin")
+        lod = dict(record_bytes=core.LOD_DTYPE.itemsize, n_points=0, budget=0,
+            min_zoom_counts=[0, 0], min_zoom_offsets=[0, 0, 0], disabled_reason="overview heatmap, no point sprites")
+    else:
+        lod = core.build_lod(out_dir, qx, qy, packed, tile_id, max_zoom, dens["finest_counts"], seed)
     t_lod = time.time() - t0
     print(f"[minimap] points {t_points:.1f}s lod {t_lod:.1f}s", flush=True)
 
@@ -95,6 +102,7 @@ def build_minimap_pack(
         "dataset_id": dataset_id,
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "n_points": int(n),
+        "display_strategy": "overview-png-v1" if overview_only else "density-pyramid-v1",
         "source_coordinates": {"path": str(coords2d_path), **core.file_entry(coords2d_path)},
         "corpus_codes": {str(v): k for k, v in subsets.items()},
         "corpus_counts": {str(c): int(counts_by_corpus[c]) for c in range(n_corpora)},
@@ -111,7 +119,7 @@ def build_minimap_pack(
             "scheme": "square grid over the squared trimmed-core extent",
             "tile_bins": core.TILE_BINS,
             "max_zoom": max_zoom,
-            "zoom_rule": "smallest z with (256*2^z)^2 >= N, capped at 5",
+            "zoom_rule": "fixed 512x512 overview" if overview_only else "smallest z with (256*2^z)^2 >= N, capped at 5",
             "tile_id": "row-major, ty * 2^z + tx, y-down",
             "levels": dens["levels"],
         },
@@ -153,7 +161,7 @@ def validate_minimap_pack(out_dir: Path) -> dict:
     n_points = manifest["n_points"]
 
     xy_id_path = out_dir / "points" / "xy_id.bin"
-    xy_id = np.fromfile(xy_id_path, dtype=core.POINT_DTYPE)
+    xy_id = np.memmap(xy_id_path, mode="r", dtype=core.POINT_DTYPE)
     if len(xy_id) != n_points:
         raise ValueError(f"xy_id.bin has {len(xy_id)} points, manifest says {n_points}")
 
@@ -173,7 +181,12 @@ def validate_minimap_pack(out_dir: Path) -> dict:
     for level in manifest["tiles"]["levels"]:
         z = level["z"]
         idx = json.loads((out_dir / "density" / f"z{z}" / "index.json").read_text())
+        if sum(tile["n"] for tile in idx["tiles"].values()) != n_points:
+            raise ValueError(f"density z{z} does not conserve point counts")
         for tile_key, tile_meta in idx["tiles"].items():
+            png = out_dir / "density" / f"z{z}" / f"{tile_key}.png"
+            if not png.is_file():
+                raise FileNotFoundError(png)
             for c in tile_meta["corpora"]:
                 p = out_dir / "density" / f"z{z}" / f"{tile_key}.{c}.u32"
                 if not p.is_file():

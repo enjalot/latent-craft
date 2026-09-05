@@ -120,7 +120,7 @@ def publish_geometry(args, dataset, points_path, points, coord_paths, minimap, s
     if args.resume and (minimap / "manifest.json").exists():
         validate_minimap_pack(minimap)
     else:
-        build_minimap_pack(dataset, coord_paths[0], points, minimap, dict(MONET_SOURCES))
+        build_minimap_pack(dataset, coord_paths[0], points, minimap, dict(MONET_SOURCES), overview_only=True)
     thumbs = MonetThumbnailSource(points)
     try:
         assign_and_build(dataset_id=dataset, points_df=points, coords3d=np.load(coord_paths[1], mmap_mode="r"),
