@@ -12,7 +12,8 @@ const PANEL_STYLE: Partial<CSSStyleDeclaration> = {
   top: "14px",
   right: "14px",
   width: "300px",
-  maxHeight: "calc(100vh - 28px)",
+  height: "calc(100dvh - 28px)",
+  boxSizing: "border-box",
   display: "flex",
   flexDirection: "column",
   fontSize: "11px",
@@ -37,6 +38,8 @@ export interface InventoryPanelOptions {
   /** Fired when the pointer enters/leaves a stack row — drives the 3D + 2D
    * flashlight (see `MinimapBridge.highlightVoxel`). `null` on leave. */
   onHoverStack: (stack: InventoryStack | null) => void;
+  /** Fly directly to this source voxel, including evicted chunks. */
+  onTeleportStack: (stack: InventoryStack) => void;
   /** Points-table id for the lightbox's original-image lookup
    * (`DatasetConfig.pointsId`); `null` leaves the lightbox thumbnail-only. */
   pointsId: string | null;
@@ -190,6 +193,7 @@ export class InventoryPanel {
     Object.assign(this.bodyEl.style, {
       display: "flex",
       flexDirection: "column",
+      flex: "1 1 auto",
       minHeight: "0",
     } satisfies Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.bodyEl);
@@ -219,7 +223,8 @@ export class InventoryPanel {
       this.render(this.inventory.stacks);
     });
     this.bodyEl.appendChild(this.stackPager);
-    Object.assign(this.minimapDock.style, { flex: "none", margin: "8px auto" });
+    Object.assign(this.minimapDock.style, { flex: "none", margin: "auto auto 8px", paddingTop: "8px" });
+    this.minimapDock.className = "ls-inventory-minimap";
     this.root.appendChild(this.minimapDock);
 
     // Coarse safety net for the row-level hover handlers below: whatever the
@@ -438,6 +443,7 @@ export class InventoryPanel {
 
     const label = document.createElement("div");
     label.style.flex = "1";
+    label.style.minWidth = "0";
     const countEl = document.createElement("div");
     countEl.className = "ls-inventory-count";
     countEl.classList.add(HUD_CLASS.readout);
@@ -448,6 +454,20 @@ export class InventoryPanel {
     originEl.textContent = `chunk ${stack.chunkId} · voxel ${stack.localVoxelId}`;
     label.append(countEl, originEl);
     summary.appendChild(label);
+
+    const teleport = document.createElement("button");
+    teleport.type = "button";
+    teleport.className = `ls-inventory-teleport ${HUD_CLASS.button}`;
+    teleport.textContent = "↗ Go";
+    teleport.title = `Fly to chunk ${stack.chunkId} · voxel ${stack.localVoxelId}`;
+    teleport.setAttribute("aria-label", teleport.title);
+    Object.assign(teleport.style, { flex: "none", padding: "4px 6px" });
+    teleport.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.focusMined(stack.id, stack.rowIds.at(stack.rowIds.length - 1)!);
+      this.options.onTeleportStack(stack);
+    });
+    summary.appendChild(teleport);
 
     const caret = document.createElement("span");
     caret.textContent = "▸";

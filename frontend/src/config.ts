@@ -1148,7 +1148,7 @@ export function extractionBatchSize(totalPoints: number, pickaxeEquipped: boolea
  * The upper bound is not a taste call: it MUST stay meaningfully below
  * `XRAY_OPACITY` (0.40). `combinedVoxelOpacity()` composes the two with
  * `min()`, so a floor at or above 0.40 would render a fully drained voxel
- * IDENTICALLY to an untouched one whenever Pickaxe glass view is active — silently
+ * IDENTICALLY to an untouched one whenever X-ray glass view is active — silently
  * deleting the extraction readout in exactly the mode built for looking inside
  * a cluster. 0.30 keeps a visible gap; 0.38 would technically pass with none.
  */
@@ -1279,7 +1279,7 @@ export const SYNTHETIC_MAX_THUMB_PX = 384;
 // ---------------------------------------------------------------------------
 
 /**
- * Opacity all resident voxels render at while Pickaxe glass view is active
+ * Opacity all resident voxels render at while X-ray glass view is active
  * (1 = fully opaque, matching a normal untouched voxel). Combined
  * with a voxel's own extraction-derived opacity via `combinedVoxelOpacity()`
  * (`voxels/VoxelOpacity.ts`) using min(), not product — see that function's
@@ -1310,7 +1310,7 @@ export const EFFECTOR_MIN_RADIUS_VOXELS = 1;
 export const EFFECTOR_MAX_RADIUS_CHUNKS = 3;
 /** Radius change for 100 CSS-pixel-equivalent units of wheel travel. This
  * keeps mouse-wheel notches deliberate while letting a trackpad resize the
- * rings smoothly. */
+ * field smoothly. */
 export const EFFECTOR_RADIUS_STEP_VOXELS = 0.25;
 
 /** How far (world units) the field's computed sphere center has to move
@@ -1320,9 +1320,8 @@ export const EFFECTOR_RADIUS_STEP_VOXELS = 0.25;
  * a voxel instead of a fraction of a chunk, since this test is per-voxel. */
 export const EFFECTOR_UPDATE_MOVE_EPSILON_VOXEL_FRAC = 0.25;
 
-/** Muted cyan for the calibrated range rings. Kept below the brighter hover /
- * extraction teal so the always-on guide remains background information. */
-export const EFFECTOR_RING_COLOR = 0x66d9e8;
+/** Cyan surface particles briefly reveal the boundary when scrolling. */
+export const EFFECTOR_DOT_COLOR = 0x66d9e8;
 
 // ---------------------------------------------------------------------------
 // 2D minimap (Phase 5)

@@ -23,7 +23,7 @@ export function extractionOpacity(extractedFraction: number): number {
  * (`setOpacityAt`/`getOpacityAt` — see `MiningController`'s doc comment for
  * how that channel was discovered and why it's independent of the
  * visibility/raycast gate): mining's per-voxel extraction state, and the
- * Pickaxe glass view's chunk-wide "see through everything" toggle.
+ * X-ray glass view's chunk-wide "see through everything" toggle.
  *
  * Phase 6.5 widened the first argument from a boolean (`mined`) to the voxel's
  * extracted FRACTION, since mining is now continuous — but the composition
@@ -47,7 +47,7 @@ export function extractionOpacity(extractedFraction: number): number {
  * The mirror-image constraint lives on the constants themselves and is worth
  * repeating here, since it is this function that enforces it: the extraction
  * floor has to stay BELOW `XRAY_OPACITY`, or `min()` collapses "fully drained"
- * and "untouched" to the same rendered value while Pickaxe is equipped. See
+ * and "untouched" to the same rendered value while X-ray is equipped. See
  * `EXTRACTION_FLOOR_OPACITY`'s doc comment.
  */
 export function combinedVoxelOpacity(extractedFraction: number, xrayActive: boolean): number {

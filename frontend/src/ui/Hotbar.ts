@@ -2,9 +2,9 @@
  * Minecraft-style equippable hotbar (Phase 4). Bottom-of-screen bar with
  * numbered slots.
  *
- * Slot 1 is the explicit empty hand; slot 2 is the Pickaxe. Empty hand mines
- * one image per cycle with normal opaque rendering. Pickaxe mines a bulk
- * batch and enables the glass view. The always-on Effector Field is no longer
+ * Slot 1 is the explicit empty hand; slot 2 is the Pickaxe; slot 3 is X-ray.
+ * Empty hand and X-ray mine one image per cycle. Pickaxe mines a bulk
+ * batch; only X-ray enables the glass view. The always-on Effector Field is no longer
  * equipment and therefore deliberately does not appear here.
  *
  * This file deliberately owns ALL hotbar/tool-status UI on screen — per the
@@ -13,7 +13,7 @@
  */
 import { applyHudPanelChrome, HUD_CLASS } from "./hudPanel.ts";
 
-export type ToolId = "pickaxe";
+export type ToolId = "pickaxe" | "xray";
 
 interface HotbarItemDef {
   id: ToolId;
@@ -24,6 +24,7 @@ interface HotbarItemDef {
 
 const ITEMS: HotbarItemDef[] = [
   { id: "pickaxe", keyLabel: "2", keyCode: "Digit2", label: "Pickaxe" },
+  { id: "xray", keyLabel: "3", keyCode: "Digit3", label: "X-ray" },
 ];
 
 /** The empty-hand slot's key — slot 1, the leftmost. */

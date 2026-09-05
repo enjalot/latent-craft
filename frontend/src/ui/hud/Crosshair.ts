@@ -1,33 +1,16 @@
-/**
- * Cursor-anchored extraction progress ring.
- *
- * Phase 1-3 had a fixed center-screen crosshair, because the pointer was
- * locked/hidden and hover targeting always fired from the middle of the
- * viewport by construction — the crosshair WAS the reticle. Phase 3.5
- * dropped pointer lock (see `FlightControls.ts`), so the OS cursor is always
- * visible and IS the reticle now; a redundant fixed-center or
- * cursor-mirroring dot would just double up on what the browser already
- * draws. What the OS cursor can't show is hold-to-extract *progress*, so
- * this component is repurposed for exactly that: a small ring, positioned
- * at the live cursor location, hidden except while a hold is actually armed.
- * Idle hover feedback (is anything targetable here at all) is handled far
- * more cheaply via `main.ts` swapping the canvas's CSS `cursor` style —
- * no DOM/position updates needed for that case.
- *
- * There used to be a second, amber "restore" tint for holding on a drained
- * voxel to push its stack back; drained voxels are pass-through to the
- * cursor now and returns go through the inventory, so the ring has one job
- * and one colour.
- */
+/** Cursor-anchored energy reticle: remaining-image count on hover, with the
+ * same ring showing overall depletion while mining. One DOM/SVG tree. */
 export interface HoldProgressRing {
-  /** Shows the ring at zero progress. */
+  /** Starts the mining arc at zero progress. */
   show(): void;
-  /** Hides the ring. Safe to call even if already hidden. */
+  /** Ends mining feedback; the hover reticle remains until setHover(null). */
   hide(): void;
   /** 0..1 fraction of the hold's duration elapsed so far. */
   setProgress(fraction: number): void;
   /** Cursor position in CSS pixels, viewport-relative. */
   setPosition(xPx: number, yPx: number): void;
+  /** Null removes hover feedback; overview distinguishes aggregated proxies. */
+  setHover(remaining: number | null, total: number, overview?: boolean): void;
   /** Removes the ring from the document. */
   dispose(): void;
 }
@@ -72,6 +55,21 @@ export function createHoldProgressRing(container: HTMLElement): HoldProgressRing
   root.appendChild(svg);
 
   const center = SIZE / 2;
+  const count = document.createElement("div");
+  count.className = "ls-hover-count";
+  Object.assign(count.style, {
+    position: "absolute", top: "40px", left: "50%", transform: "translateX(-50%)",
+    whiteSpace: "nowrap", padding: "3px 7px", borderRadius: "3px",
+    color: RING_COLOR, background: "rgba(2, 9, 13, 0.8)",
+    font: "11px var(--hud-font, monospace)", letterSpacing: "0.03em",
+  });
+  root.appendChild(count);
+  let holding = false;
+  let hovered = false;
+  const refresh = () => {
+    root.style.display = hovered ? "block" : "none";
+    root.classList.toggle("is-mining", holding);
+  };
 
   // Four L-shaped corner ticks: the same targeting-bracket motif the panels
   // use, at reticle scale. Static chrome — never recolored per action.
@@ -128,6 +126,7 @@ export function createHoldProgressRing(container: HTMLElement): HoldProgressRing
   progress.setAttribute("cy", String(center));
   progress.setAttribute("r", String(RADIUS));
   progress.setAttribute("fill", "none");
+  progress.setAttribute("stroke", RING_COLOR);
   progress.setAttribute("stroke-width", "2.5");
   progress.setAttribute("stroke-linecap", "round");
   progress.setAttribute("stroke-dasharray", String(CIRCUMFERENCE));
@@ -144,6 +143,16 @@ export function createHoldProgressRing(container: HTMLElement): HoldProgressRing
   dot.setAttribute("fill", "rgba(223, 251, 255, 0.92)");
   svg.appendChild(dot);
 
+  // Broken outer arcs give the idle cursor a charged, circular silhouette.
+  const energy = document.createElementNS(svgNs, "circle");
+  energy.setAttribute("cx", String(center));
+  energy.setAttribute("cy", String(center));
+  energy.setAttribute("r", "15.5");
+  energy.setAttribute("fill", "none");
+  energy.setAttribute("stroke", RING_COLOR);
+  energy.setAttribute("stroke-width", "1");
+  energy.setAttribute("stroke-dasharray", "14 10.35");
+  svg.appendChild(energy);
   container.appendChild(root);
 
   return {
@@ -153,10 +162,12 @@ export function createHoldProgressRing(container: HTMLElement): HoldProgressRing
       // instrumentation against the dim chrome track underneath it.
       progress.style.filter = `drop-shadow(0 0 3px ${RING_COLOR})`;
       progress.setAttribute("stroke-dashoffset", String(CIRCUMFERENCE));
-      root.style.display = "block";
+      holding = true;
+      refresh();
     },
     hide() {
-      root.style.display = "none";
+      holding = false;
+      refresh();
     },
     setProgress(fraction) {
       const clamped = Math.max(0, Math.min(1, fraction));
@@ -165,8 +176,21 @@ export function createHoldProgressRing(container: HTMLElement): HoldProgressRing
     setPosition(xPx, yPx) {
       root.style.transform = `translate(${xPx}px, ${yPx}px)`;
     },
+    setHover(remaining, total, overview = false) {
+      hovered = remaining !== null;
+      const text = remaining === null ? "" : formatVoxelCount(remaining, total, overview);
+      if (count.textContent !== text) count.textContent = text;
+      if (!holding) this.setProgress(total > 0 ? 1 - (remaining ?? total) / total : 0);
+      refresh();
+    },
     dispose() {
       root.remove();
     },
   };
+}
+
+export function formatVoxelCount(remaining: number, total: number, overview = false): string {
+  const n = Math.max(0, Math.round(remaining));
+  const label = `${n.toLocaleString("en-US")} ${n === 1 ? "image" : "images"}`;
+  return overview ? `${label} · overview` : n < total ? `${label} left` : label;
 }

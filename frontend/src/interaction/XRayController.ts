@@ -4,8 +4,8 @@ import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import { combinedVoxelOpacity } from "../voxels/VoxelOpacity.ts";
 
 /**
- * Pickaxe glass view: a global, chunk-wide true-transparency toggle.
- * Equipping the Pickaxe makes every resident voxel render translucent — still
+ * X-ray glass view: a global, chunk-wide true-transparency toggle.
+ * Equipping X-ray makes every resident voxel render translucent — still
  * fully interactive, since hover/extract raycast against the visibility gate,
  * never against opacity (Phase 3.5's discovery that
  * `InstancedMesh2.setOpacityAt` is completely independent of
@@ -53,7 +53,7 @@ export class XRayController {
     return this.active;
   }
 
-  /** Equips or un-equips Pickaxe glass view. Reapplies (or restores) opacity
+  /** Equips or un-equips X-ray glass view. Reapplies (or restores) opacity
    * across every currently-resident chunk immediately — no per-frame polling
    * needed, since nothing about this effect depends on the camera. */
   setActive(active: boolean): void {
@@ -86,7 +86,7 @@ export class XRayController {
     // The container cages vanish under glass view — a per-chunk mesh visibility
     // flip, not an opacity, so a
     // hidden chunk's worth of cages costs nothing to not draw. Re-applied on
-    // residency like everything else here, so a chunk streamed in while Pickaxe
+    // residency like everything else here, so a chunk streamed in while X-ray
     // is equipped comes up cageless too.
     chunk.containers.setXrayActive(this.active);
     const occupied = chunk.meta.occupied;

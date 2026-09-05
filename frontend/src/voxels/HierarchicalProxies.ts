@@ -22,6 +22,10 @@ export class HierarchicalProxies {
   private readonly failures = new Map<string, number>();
   private readonly coarse: InstancedMesh2;
   private readonly material = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
+  // Missing-detail regions are a faint spatial hint, not solid obstacles.
+  private readonly coarseMaterial = new THREE.MeshBasicMaterial({
+    transparent: true, opacity: 0.08, depthWrite: false,
+  });
   private readonly coarseIds: ProxyVoxel[] = [];
   private readonly handles = new Map<number, { brick: Brick; instance: number }>();
   private lit = new Set<number>();
@@ -36,7 +40,7 @@ export class HierarchicalProxies {
 
   private constructor(private readonly manifest: Manifest, private readonly hierarchy: Hierarchy,
     private readonly renderer: THREE.WebGLRenderer) {
-    this.coarse = new InstancedMesh2(new THREE.BoxGeometry(1, 1, 1), this.material, { capacity: 512, renderer });
+    this.coarse = new InstancedMesh2(new THREE.BoxGeometry(1, 1, 1), this.coarseMaterial, { capacity: 512, renderer });
     this.coarse.addInstances(512);
     for (let i = 0; i < 512; i++) this.coarse.setVisibilityAt(i, false);
     this.mesh.add(this.coarse);
@@ -217,5 +221,6 @@ export class HierarchicalProxies {
     this.mesh.removeFromParent();
     for (const brick of this.bricks.values()) { brick.mesh.dispose(); brick.mesh.geometry.dispose(); }
     this.bricks.clear(); this.coarse.dispose(); this.coarse.geometry.dispose(); this.material.dispose();
+    this.coarseMaterial.dispose();
   }
 }

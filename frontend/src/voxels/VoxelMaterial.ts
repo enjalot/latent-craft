@@ -83,7 +83,7 @@ const ATLAS_MAP_FRAGMENT = /* glsl */ `
  * quantization across neighbouring pixels so the average coverage tracks the
  * requested alpha — ordered dithering, the same trick as screen-door
  * transparency but hidden under the MSAA resolve. Guarded by both
- * `ALPHA_TO_COVERAGE` and `a < 1.0`, so Pickaxe's true blend path gets clean
+ * `ALPHA_TO_COVERAGE` and `a < 1.0`, so X-ray's true blend path gets clean
  * alpha and the common fully-opaque voxel pays nothing.
  */
 const VOXEL_OUTPUT_FRAGMENT = /* glsl */ `

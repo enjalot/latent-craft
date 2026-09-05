@@ -46,11 +46,14 @@ During development, `LSV_DATA_PROXY_TARGET` can override Vite's default
 
 - Drag to look; WASD flies, Space/Shift moves vertically, and double-tap W sprints.
 - Hold on a textured voxel to extract its points into Inventory.
-- Click Inventory's header to collapse it; click a stack to reveal thumbnails.
+- Click Inventory's header to collapse its list; the minimap stays docked at
+  the bottom. Click a stack to reveal thumbnails, or its **Go** button to fly
+  to the source block.
 - `1` equips the empty hand (one point per mining cycle); `2` equips the Pickaxe
-  (up to 100 points per cycle plus glass view).
+  (up to 100 points per cycle); `3` equips X-ray (glass view).
 - The Effector Field is always active; scroll over the 3D world to resize its
-  calibrated range rings (default radius: two voxels).
+  radius (default: two voxels). Surface dots mark the boundary while scrolling,
+  then fade out. Hovering a block turns the cursor into a count/depletion dial.
 - Hover or click the minimap to relate the independent 2D and 3D UMAP fits.
 
 ## Data pipeline

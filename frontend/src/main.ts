@@ -24,6 +24,7 @@ import { MiningController, type ExtractionCycle } from "./interaction/MiningCont
 import { PointerController, type VoxelTarget } from "./interaction/PointerController.ts";
 import { XRayController } from "./interaction/XRayController.ts";
 import { EffectorFieldController } from "./interaction/EffectorField.ts";
+import { planVoxelFlight } from "./interaction/VoxelFlight.ts";
 import { Hud, type HudStreamingState } from "./ui/Hud.ts";
 import { DatasetPicker } from "./ui/DatasetPicker.ts";
 import { createHoldProgressRing } from "./ui/hud/Crosshair.ts";
@@ -155,10 +156,9 @@ const datasetPicker = new DatasetPicker(app, datasetKey, DATASETS, useSynthetic)
 const hud = new Hud(app);
 const holdRing = createHoldProgressRing(app);
 
-// Two-slot hotbar. Pickaxe owns both bulk extraction and glass view; the
-// Effector Field is always active and independent of equipment.
+// Hand / bulk extraction / glass view are separate slots; the field is always on.
 const hotbar = new Hotbar(app, (tool) => {
-  xrayController?.setActive(tool === "pickaxe");
+  xrayController?.setActive(tool === "xray");
 });
 
 // Fly-to-inventory tiles (one per extraction cycle) — see ExtractionFlight.ts.
@@ -198,6 +198,12 @@ let syntheticVoxelField: InstancedMesh2 | null = null;
 // driven from the per-frame loop below rather than from PointerController's
 // event callbacks — see that class's doc comment.
 let holdElapsedSeconds = 0;
+let pointerOverWorld = false;
+engine.renderer.domElement.addEventListener("pointerenter", () => { pointerOverWorld = true; },
+  { signal: appLifetime.signal });
+engine.renderer.domElement.addEventListener("pointerleave", () => { pointerOverWorld = false; },
+  { signal: appLifetime.signal });
+window.addEventListener("blur", () => { pointerOverWorld = false; }, { signal: appLifetime.signal });
 
 const pointerController = new PointerController(engine.renderer.domElement, flightControls, {
   hitTestVoxel: (ndc) => resolveVoxelTarget(raycastAt(ndc)),
@@ -356,7 +362,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
       miningController?.extractedFraction(chunkId, localVoxelId) ?? 0,
     );
     // Respect a keypress made while the world was still loading.
-    xrayController.setActive(hotbar.equippedTool === "pickaxe");
+    xrayController.setActive(hotbar.equippedTool === "xray");
     effectorField = new EffectorFieldController(
       chunkStore,
       manifest,
@@ -370,6 +376,23 @@ async function bootstrapStreamedWorld(): Promise<void> {
       getPointIndex: loadPointIndexOnce,
       onReturnRow: (stackId, rowId) => miningController?.returnRow(stackId, rowId) ?? false,
       onReturnStack: (stackId) => miningController?.returnStack(stackId) ?? false,
+      onTeleportStack: (stack) => {
+        if (!manifest || !chunkStore) return;
+        const plan = planVoxelFlight(manifest, stack.chunkId, stack.localVoxelId,
+          engine.camera.position, effectorField?.currentRadius ?? 0);
+        if (!plan) return;
+        pointerController.cancelHold();
+        minimap?.cancelHoverLook();
+        flightControls.cancelLookTransition();
+        chunkStore.prioritizeTeleport(plan.target, engine.camera);
+        engine.teleportTo(plan.destination, {
+          lookAt: plan.target,
+          onArrive: () => {
+            flightControls.lookAt(plan.target);
+            chunkStore?.clearTeleportTarget();
+          },
+        });
+      },
       // `minimap` is a module-scope `let` that only gets assigned once the 2D
       // pack finishes loading in the background (see `bootstrapMinimap`), and
       // this closure only ever runs from a real pointer event — so hovering an
@@ -567,11 +590,9 @@ function computeHotbarStatus(): string {
     : useSynthetic
       ? ""
       : "Effector loading…";
-  if (tool !== "pickaxe") return fieldStatus;
-  return (
-    `Pickaxe · up to 100 points/cycle · glass opacity ${XRAY_OPACITY}\n` +
-    fieldStatus
-  );
+  if (tool === "pickaxe") return `Pickaxe · up to 100 points/cycle\n${fieldStatus}`;
+  if (tool === "xray") return `X-ray · glass opacity ${XRAY_OPACITY} · 1 point/cycle\n${fieldStatus}`;
+  return fieldStatus;
 }
 
 engine.start((dt) => {
@@ -649,7 +670,7 @@ engine.start((dt) => {
   minimap?.setHoveredRow(hoveredRowId);
 
   // The focused face is a single high-resolution texture, also while hovering.
-  if (target && !pointerController.isDragging) {
+  if (target && pointerOverWorld && !pointerController.isDragging) {
     void loadPointIndexOnce().catch(() => undefined);
     const next = miningController?.nextRowId(target.chunkId, target.localVoxelId) ?? null;
     if (next !== null && pointIndexReady?.ensure) void pointIndexReady.ensure(next).catch(() => undefined);
@@ -734,17 +755,22 @@ engine.start((dt) => {
   }
 
   // --- cursor position/state feedback -----------------------------------
-  if (holdTarget) {
+  const showReticle = pointerOverWorld && !pointerController.isDragging && !!(target || proxyVoxel);
+  if (showReticle) {
     const xPx = (pointerController.ndc.x * 0.5 + 0.5) * window.innerWidth;
     const yPx = (1 - (pointerController.ndc.y * 0.5 + 0.5)) * window.innerHeight;
     holdRing.setPosition(xPx, yPx);
   }
-  // A proxy voxel deliberately gets the plain arrow, not the crosshair: the
-  // crosshair means "hold here extracts", and on a proxy it doesn't.
+  const hoverState = target ? miningController?.extractionState(target.chunkId, target.localVoxelId) : null;
+  const hoverTotal = target
+    ? chunkStore?.chunk(target.chunkId)?.meta.count[target.localVoxelId] ?? 0
+    : proxyVoxel?.count ?? 0;
+  holdRing.setHover(showReticle ? hoverTotal - (hoverState?.extracted.size ?? 0) : null,
+    hoverTotal, !!proxyVoxel);
   if (pointerController.isDragging) {
     setCursorStyle("grabbing");
-  } else if (target) {
-    setCursorStyle("crosshair");
+  } else if (showReticle) {
+    setCursorStyle("none");
   } else {
     setCursorStyle("default");
   }
