@@ -63,6 +63,12 @@ export interface DatasetConfig {
 }
 
 export const DATASETS: Record<string, DatasetConfig> = {
+  "monet-clip-basemap-pool-512": {
+    path: "/chunks/monet-clip-basemap-pool-20260905a-512-stream",
+    label: "MONET · CLIP ViT-B/32 · basemap · 19.34M · 512³",
+    pointsId: "monet-clip-basemap-pool-20260905a",
+    minimapPath: "/minimap/monet-clip-basemap-pool-20260905a",
+  },
   "monet-clip-basemap-training-512": {
     path: "/chunks/monet-clip-basemap-training-20260905a-512-stream",
     label: "MONET · CLIP ViT-B/32 · basemap · 2.01M · 512³",

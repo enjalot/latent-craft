@@ -31,4 +31,15 @@ describe("dataset identities", () => {
       minimapPath: "/minimap/monet-clip-basemap-training-20260905a",
     });
   });
+
+  it("pins the audited full pool to its own immutable 2D/3D pack", () => {
+    expect(DATASETS["monet-clip-basemap-pool-512"]).toMatchObject({
+      label: expect.stringContaining("basemap · 19.34M · 512³"),
+      path: "/chunks/monet-clip-basemap-pool-20260905a-512-stream",
+      pointsId: "monet-clip-basemap-pool-20260905a",
+      minimapPath: "/minimap/monet-clip-basemap-pool-20260905a",
+    });
+    expect(DATASETS["monet-clip-basemap-pool-512"].pointsId)
+      .not.toBe(DATASETS["monet-clip-basemap-training-512"].pointsId);
+  });
 });

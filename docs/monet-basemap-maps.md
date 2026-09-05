@@ -57,6 +57,42 @@ tracked chunk/atlas allocation), 6,968 resident voxels, five sharp images and
 CPU pixels. These are a view sample, not an entire-browser memory measurement;
 the chunk admission budget remains 256 MiB and the range cache 16 MiB.
 
+## Full-pool release
+
+Picker key: `monet-clip-basemap-pool-512`.
+Pack: `/chunks/monet-clip-basemap-pool-20260905a-512-stream`.
+Points and 2D minimap ID: `monet-clip-basemap-pool-20260905a`.
+
+- **19,344,847 points**, 1,087,246 occupied voxels across 3,988 chunks at 512³.
+- Densest voxel: **11,536 images**, with byte-ranged postings for mining.
+- KTX2 atlases: **181,276,657 bytes** (172.9 MiB) across the entire map.
+  Loading every atlas as RGBA would require 9,449,721,856 bytes (8.80 GiB);
+  the browser does not do that.
+- Hierarchical bricks: 25,373,168 bytes, with 4,904 hierarchy nodes.
+- Complete static streaming pack: **3,217,756,466 bytes** (3.00 GiB).
+  Roughly 1.9 GiB is the copied multi-level 2D density pyramid, including raw
+  count planes. The cockpit minimap fetches only four z1 PNGs, not those count
+  planes or the full pyramid. Points tables, URL metadata and source thumbnail
+  blobs are separate from this pack total.
+- 1,517 blank representative tiles (0.14%); no points were discarded.
+
+The full audit verified all manifest-referenced hashes, every posting partition,
+posting offsets, thumbnail/corpus joins, proxy count sums, 2D/3D row joins, and
+all 19,344,847 coordinate-to-voxel assignments against the source projection.
+
+A focused browser check showed 42 resident chunks, 23,353 resident voxels and
+**50,999,616 bytes (48.6 MiB)** of tracked chunk/atlas allocation. Four 128px
+previews were visible from the fixed pool. The range cache held **669,360 bytes
+(0.64 MiB)**; observed point/spatial responses were all HTTP 206 and at most
+32 KiB. Mining extracted 100 images and advanced the face from row 28,224 to
+10,666,870. No browser/shader errors occurred. These figures describe one view,
+not a maximum or a total browser-process memory measurement; software rendering
+was used for correctness, not as a GPU performance benchmark.
+
+Frontend verification: 66 unit tests, TypeScript check and production build pass.
+Focused pipeline verification: 14 tests pass. The existing large-JS-bundle build
+warning remains; it is independent of the dataset streaming payload.
+
 ## Reproduction
 
 From `pipeline/`:
