@@ -63,9 +63,13 @@ export interface DatasetConfig {
 }
 
 export const DATASETS: Record<string, DatasetConfig> = {
+  // Display the projection embedding separately from the sampling arm. MONET's
+  // SSCD label describes how rows were drawn, not the embedding used by UMAP.
+  // Verified source/model evidence: docs/dataset-provenance.md. Keep URL keys and
+  // points IDs stable so bookmarks and row metadata still address the same data.
   "bl-160": {
     path: "/chunks/bl-160",
-    label: "BL · num_voxels=160",
+    label: "BL · SigLIP 2 · 1.08M · 160³",
     pointsId: "bl",
     minimapPath: "/minimap/bl",
     thumbsBasePath: "/thumbs/bl",
@@ -82,19 +86,19 @@ export const DATASETS: Record<string, DatasetConfig> = {
   // table, fit and minimap pack per arm — only the voxel binning differs.
   "monet-random-160": {
     path: "/chunks/monet-random-160",
-    label: "MONET · random draw · num_voxels=160",
+    label: "MONET · CLIP ViT-B/32 · random draw · 2M · 160³",
     pointsId: "monet-random",
     minimapPath: "/minimap/monet-random",
   },
   "monet-sscd-160": {
     path: "/chunks/monet-sscd-160-stream-20260904b",
-    label: "MONET · sscd draw · num_voxels=160",
+    label: "MONET · CLIP ViT-B/32 · SSCD draw · 2M · 160³",
     pointsId: "monet-sscd",
     minimapPath: "/minimap/monet-sscd",
   },
   "monet-annfaiss-160": {
     path: "/chunks/monet-annfaiss-160",
-    label: "MONET · annfaiss draw · num_voxels=160",
+    label: "MONET · CLIP ViT-B/32 · ANN-FAISS draw · 2M · 160³",
     pointsId: "monet-annfaiss",
     minimapPath: "/minimap/monet-annfaiss",
   },
@@ -102,7 +106,7 @@ export const DATASETS: Record<string, DatasetConfig> = {
   // packs are built by the same per-arm chain as the other three.
   "monet-theirfaiss-160": {
     path: "/chunks/monet-theirfaiss-160",
-    label: "MONET · theirfaiss draw · num_voxels=160",
+    label: "MONET · CLIP ViT-B/32 · their-FAISS draw · 2M · 160³",
     pointsId: "monet-theirfaiss",
     minimapPath: "/minimap/monet-theirfaiss",
   },
