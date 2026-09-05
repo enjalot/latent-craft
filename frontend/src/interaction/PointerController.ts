@@ -70,6 +70,7 @@ export class PointerController {
     private readonly flightControls: FlightControls,
     private readonly callbacks: PointerControllerCallbacks,
   ) {
+    domElement.tabIndex = -1;
     domElement.addEventListener("pointerdown", this.handlePointerDown);
     domElement.addEventListener("pointermove", this.handlePointerMove);
     domElement.addEventListener("pointerup", this.handlePointerUp);
@@ -120,6 +121,9 @@ export class PointerController {
   private handlePointerDown = (event: PointerEvent): void => {
     if (event.button !== 0) return; // left button only
     event.preventDefault();
+    // preventDefault suppresses the browser's native focus transfer. Explicitly
+    // release sliders/selects so subsequent movement/hotbar keys target the world.
+    this.domElement.focus({ preventScroll: true });
     this.updateNdc(event.clientX, event.clientY);
     this.domElement.setPointerCapture(event.pointerId);
 

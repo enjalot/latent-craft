@@ -314,8 +314,11 @@ async function bootstrapStreamedWorld(): Promise<void> {
     const atlasCache = new AtlasCache(engine.renderer);
     const chunkLoader = new ChunkLoader(manifest, atlasCache, engine.renderer);
     chunkStore = new ChunkStore(manifest, chunkLoader, {
+      onDisplayChanged: (chunkId, shown) => {
+        voxelProxy?.setChunkResident(chunkId, shown);
+        effectorField?.onChunkDisplayChanged();
+      },
       onResidencyChanged: (chunkId, resident) => {
-        voxelProxy?.setChunkResident(chunkId, resident);
         // Re-apply whatever this chunk's voxels should look like/be visible
         // as before it was evicted — mined-but-not-restored opacity
         // (MiningController), Pickaxe's glass toggle (XRayController), and
@@ -334,7 +337,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
     engine.scene.add(chunkStore.group);
     // Both layers are hover targets. The raycaster returns the nearest hit
     // across all of them, and a chunk's proxy run is un-raycastable while its
-    // textured mesh is resident (`VoxelProxyCloud.setChunkResident`), so the
+    // textured mesh is displayed (`VoxelProxyCloud.setChunkResident`), so the
     // two can never both be hit at one voxel's position.
     raycastTargets = [chunkStore.group, voxelProxy.mesh];
     raycastRecursive = true;
@@ -603,7 +606,7 @@ function computeHotbarStatus(): string {
   const tool = hotbar.equippedTool;
   const fieldStatus = effectorField
     ? `Effector ${effectorField.currentRadiusVoxels.toFixed(2)} vox · ` +
-      `${effectorField.suppressedCount} hidden · scroll over world to resize`
+      `${effectorField.suppressedCount} ghosted · scroll over world to resize`
     : useSynthetic
       ? ""
       : "Effector loading…";

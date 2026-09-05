@@ -219,6 +219,10 @@ export class ChunkLoader {
 
       containers = VoxelContainers.build(entry, meta, this.manifest, this.renderer);
       mesh.add(containers.mesh);
+      // Three's recursive raycaster does not honor Object3D.visible itself.
+      // Warm prefetched chunks must not intercept the visible proxy layer.
+      const raycastMesh = mesh, raycast = mesh.raycast.bind(mesh);
+      mesh.raycast = (ray, hits) => { if (raycastMesh.visible) raycast(ray, hits); };
 
       return {
         entry,

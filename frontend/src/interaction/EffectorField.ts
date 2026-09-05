@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { createEffectorSurface, buildEffectorSurfaceGeometry, effectorSurfaceOpacity } from "./EffectorSurface.ts";
 import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
+import { createEffectorGhosts } from "../voxels/EffectorGhosts.ts";
 import {
   EFFECTOR_DEFAULT_RADIUS_VOXELS,
   EFFECTOR_MAX_RADIUS_CHUNKS,
@@ -15,9 +16,9 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /**
- * Always-on, resizable bubble centered on the camera that HIDES (not fades)
- * whatever voxels currently fall inside it, so the player can push into a
- * dense cluster and see what's around them.
+ * Always-on camera-centered bubble: hides the textured/pickable instances and
+ * replaces them with faint untextured ghost geometry, so the player can reach
+ * through a dense cluster while retaining a spatial trace of its blocks.
  *
  * This is a deliberately DIFFERENT mechanism from X-Ray/mining's
  * `setOpacityAt` translucency (`voxels/VoxelOpacity.ts`): the goal here is
@@ -25,8 +26,9 @@ function clamp(value: number, min: number, max: number): number {
  * faded, so this uses `InstancedMesh2.setVisibilityAt(id, false)` — per
  * Phase 3's original documented finding (the one Phase 3.5 later moved
  * mining itself away from, see `MiningController`'s doc comment): one call
- * makes an instance BOTH invisible AND un-raycastable, which is exactly
- * "reach through" needs. Un-hiding (`setVisibilityAt(id, true)`) restores
+ * makes the textured instance invisible AND un-raycastable. A separate bounded
+ * ghost draw has opacity XRAY_OPACITY/3, no atlas, no depth writes or picking.
+ * Un-hiding (`setVisibilityAt(id, true)`) restores
  * both at once, for any voxel that leaves the volume.
  *
  * Position: the field is CENTERED ON THE CAMERA — its center IS
@@ -55,6 +57,8 @@ function clamp(value: number, min: number, max: number): number {
  */
 export class EffectorFieldController {
   readonly gizmo: THREE.Group;
+  readonly ghosts = createEffectorGhosts();
+  private readonly ghostMatrix = new THREE.Matrix4();
 
   private radius: number;
   private readonly surface: ReturnType<typeof createEffectorSurface>;
@@ -103,6 +107,7 @@ export class EffectorFieldController {
     this.gizmo.add(this.surface);
     this.gizmo.visible = false;
     scene.add(this.gizmo);
+    scene.add(this.ghosts);
 
     wheelTarget.addEventListener("wheel", this.handleWheel, { passive: false });
   }
@@ -169,6 +174,8 @@ export class EffectorFieldController {
     this.recomputeSuppression();
   }
 
+  onChunkDisplayChanged(): void { this.lastRadius = -1; }
+
   adjustRadius(deltaSteps: number): void {
     if (!Number.isFinite(deltaSteps) || deltaSteps === 0) return;
     this.lastResizeAt = performance.now();
@@ -234,6 +241,20 @@ export class EffectorFieldController {
 
     this.applySuppressionDiff(next);
     this.suppressed = next;
+    let count = 0;
+    for (const [id, suppressed] of next) {
+      const chunk = this.chunkStore.chunk(id);
+      if (!chunk?.mesh.visible) continue;
+      for (let instance = 0; instance < chunk.meta.occupied.length && count < this.ghosts.instanceMatrix.count; instance++) {
+        if (!suppressed.has(chunk.meta.occupied[instance])) continue;
+        chunk.mesh.getMatrixAt(instance, this.ghostMatrix);
+        this.ghosts.setMatrixAt(count++, this.ghostMatrix);
+      }
+    }
+    this.ghosts.count = count;
+    this.ghosts.instanceMatrix.clearUpdateRanges();
+    if (count) this.ghosts.instanceMatrix.addUpdateRange(0, count * 16);
+    this.ghosts.instanceMatrix.needsUpdate = true;
   }
 
   private applySuppressionDiff(next: Map<number, Set<number>>): void {
@@ -307,5 +328,6 @@ export class EffectorFieldController {
     this.surface.geometry.dispose();
     this.surface.material.dispose();
     this.gizmo.clear();
+    this.ghosts.removeFromParent(); this.ghosts.geometry.dispose(); this.ghosts.material.dispose(); this.ghosts.dispose();
   }
 }

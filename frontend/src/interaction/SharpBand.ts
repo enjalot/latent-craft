@@ -6,6 +6,7 @@ import { resolveThumbUrl, type PointIndex } from "../streaming/PointIndex.ts";
 import type { MiningController } from "./MiningController.ts";
 import { PreviewPool, PREVIEW_SLOTS, type PreviewTarget } from "../voxels/PreviewPool.ts";
 import { combinedVoxelOpacity } from "../voxels/VoxelOpacity.ts";
+import { OpaqueHover } from "../voxels/OpaqueHover.ts";
 
 type Voxel = { chunkId: number; localVoxelId: number; instanceId: number; owner: LoadedChunk };
 
@@ -18,6 +19,7 @@ export function isSharpBandCell(distanceSquared: number, radius: number, voxelSi
  * Hover is always first, including outside the shell. No global point scan. */
 export class SharpBand {
   readonly pool: PreviewPool;
+  readonly opaqueHover: OpaqueHover;
   private candidates: Voxel[] = [];
   private lastScan = -Infinity;
   private lastRadius = -1;
@@ -31,6 +33,7 @@ export class SharpBand {
     private readonly store: ChunkStore, private readonly manifest: Manifest,
     private readonly mining: MiningController, private readonly getIndex: () => Promise<PointIndex>) {
     this.pool = new PreviewPool(scene, renderer);
+    this.opaqueHover = new OpaqueHover(scene);
   }
 
   update(camera: THREE.Camera, radius: number, hover: { chunkId: number; localVoxelId: number } | null, xray: boolean): void {
@@ -39,6 +42,7 @@ export class SharpBand {
     for (const c of this.covered) if (this.store.chunk(c.chunkId) === c.owner)
       c.owner.mesh.setOpacityAt(c.instanceId, combinedVoxelOpacity(this.mining.extractedFraction(c.chunkId, c.localVoxelId), xray));
     this.covered = [];
+    this.opaqueHover.mesh.visible = false;
     this.center.copy(camera.position); camera.getWorldDirection(this.forward);
     const now = performance.now(), size = this.manifest.voxelWorldSize;
     if (now - this.lastScan >= 100 || radius !== this.lastRadius) {
@@ -46,7 +50,7 @@ export class SharpBand {
       const candidates: (Voxel & { priority: number })[] = [];
       const reach = radius + size + this.manifest.chunkWorldSize * Math.sqrt(3) / 2;
       for (const chunkId of this.store.residentChunkIds) {
-        const owner = this.store.chunk(chunkId); if (!owner) continue;
+        const owner = this.store.chunk(chunkId); if (!owner || !owner.mesh.visible) continue;
         this.manifest.chunkCenterWorld(chunkId, this.scratch);
         if (this.scratch.distanceToSquared(this.center) > reach * reach) continue;
         for (let instanceId = 0; instanceId < owner.meta.occupied.length; instanceId++) {
@@ -72,7 +76,7 @@ export class SharpBand {
     const targets: PreviewTarget[] = [];
     const owners = new Map<string, Voxel>();
     for (const v of voxels) {
-      if (targets.length >= PREVIEW_SLOTS || this.store.chunk(v.chunkId) !== v.owner ||
+      if (targets.length >= PREVIEW_SLOTS || !v.owner.mesh.visible || this.store.chunk(v.chunkId) !== v.owner ||
         this.mining.isFullyExtracted(v.chunkId, v.localVoxelId)) continue;
       this.manifest.voxelCenterWorld(v.owner.entry.cx, v.owner.entry.cy, v.owner.entry.cz, v.localVoxelId, this.scratch);
       const d2 = this.scratch.distanceToSquared(this.center);
@@ -86,7 +90,7 @@ export class SharpBand {
       // The source's coverage is zero while replaced, so no enlarged overlay
       // or depth bias is needed. Preserve exact clearance from border cages.
       const matrix = this.matrix.clone();
-      targets.push({ key, matrix, opacity: combinedVoxelOpacity(this.mining.extractedFraction(v.chunkId, v.localVoxelId), xray),
+      targets.push({ key, matrix, focused, opacity: combinedVoxelOpacity(this.mining.extractedFraction(v.chunkId, v.localVoxelId), xray),
         valid: () => this.store.chunk(v.chunkId) === v.owner && !this.mining.isFullyExtracted(v.chunkId, v.localVoxelId),
         resolve: async () => {
           const row = await this.mining.previewRowId(v.chunkId, v.localVoxelId);
@@ -96,6 +100,19 @@ export class SharpBand {
         } });
     }
     this.pool.update(targets, xray, camera);
+    if (xray) {
+      const focused = targets.find(t => t.focused);
+      if (focused && !this.pool.visibleKeys.has(focused.key)) {
+        const v = owners.get(focused.key)!;
+        const material = (Array.isArray(v.owner.mesh.material) ? v.owner.mesh.material[0] : v.owner.mesh.material) as THREE.MeshStandardMaterial;
+        if (material.map) {
+          this.opaqueHover.show(focused.matrix, material.map,
+            this.manifest.compactAtlases ? v.instanceId : v.localVoxelId,
+            v.owner.entry.atlas_tiles_per_side ?? this.manifest.tilesPerSide, this.manifest.tilePx);
+          v.owner.mesh.setOpacityAt(v.instanceId, 0); this.covered.push(v);
+        }
+      }
+    }
     for (const key of this.pool.visibleKeys) {
       const v = owners.get(key);
       if (v) { v.owner.mesh.setOpacityAt(v.instanceId, 0); this.covered.push(v); }
@@ -105,6 +122,6 @@ export class SharpBand {
   dispose(): void {
     for (const v of this.covered) if (this.store.chunk(v.chunkId) === v.owner)
       v.owner.mesh.setOpacityAt(v.instanceId, combinedVoxelOpacity(this.mining.extractedFraction(v.chunkId, v.localVoxelId), false));
-    this.covered = []; this.pool.dispose();
+    this.covered = []; this.pool.dispose(); this.opaqueHover.dispose();
   }
 }

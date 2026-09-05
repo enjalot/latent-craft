@@ -527,6 +527,8 @@ export const CONTAINER_DEPLETION_OPACITY_FLOOR = 0.15;
  * radii it happens well inside the headlamp's reach.
  */
 export const RING_R0_CHUNKS = 1.5;
+/** Prefetch is not visibility: keep a coherent nearer thumbnail horizon. */
+export const THUMBNAIL_SHOW_RADIUS_CHUNKS = 1.9;
 export const RING_R1_CHUNKS = 2.5;
 export const RING_R2_CHUNKS = 3.5;
 

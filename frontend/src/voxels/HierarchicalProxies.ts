@@ -5,6 +5,7 @@ import { rangeReader } from "../streaming/RangeReader.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
 import type { ProxyVoxel, VoxelProxyStats } from "./VoxelProxyCloud.ts";
 import { VOXEL_FILL } from "../config.ts";
+import { selectProxyCut, proxyBrickLod } from "./ProxyCut.ts";
 
 interface Level { offset: number; count: number; step: number }
 interface Leaf { chunk: number; xyz: number[]; count: number; levels: Level[] }
@@ -21,10 +22,10 @@ export class HierarchicalProxies {
   private readonly pending = new Set<string>();
   private readonly failures = new Map<string, number>();
   private readonly coarse: InstancedMesh2;
-  private readonly material = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
+  private readonly material = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, emissive: 0x18242a, emissiveIntensity: .3 });
   // Missing-detail regions are a faint spatial hint, not solid obstacles.
   private readonly coarseMaterial = new THREE.MeshBasicMaterial({
-    transparent: true, opacity: 0.16, depthWrite: false,
+    transparent: true, opacity: 0.22, depthWrite: false,
   });
   private readonly coarseIds: ProxyVoxel[] = [];
   private readonly handles = new Map<number, { brick: Brick; instance: number }>();
@@ -35,8 +36,8 @@ export class HierarchicalProxies {
   private tick = 0;
   private shown = 0;
   private readonly lastPosition = new THREE.Vector3(Infinity, 0, 0);
-  private readonly lastRotation = new THREE.Quaternion();
   private lastHeight = -1;
+  private lastFov = -1;
 
   private constructor(private readonly manifest: Manifest, private readonly hierarchy: Hierarchy,
     private readonly renderer: THREE.WebGLRenderer) {
@@ -72,33 +73,28 @@ export class HierarchicalProxies {
     const now = performance.now();
     const height = this.renderer.domElement.clientHeight;
     if (!this.dirty && this.lastPosition.distanceToSquared(camera.position) < 0.01 &&
-      Math.abs(this.lastRotation.dot(camera.quaternion)) > 0.99999 && this.lastHeight === height) return;
+      this.lastHeight === height && this.lastFov === camera.fov) return;
     if (!this.dirty && now - this.lastUpdate < 150) return;
     this.lastUpdate = now;
     this.dirty = false;
-    this.lastPosition.copy(camera.position); this.lastRotation.copy(camera.quaternion); this.lastHeight = height;
+    this.lastPosition.copy(camera.position); this.lastHeight = height; this.lastFov = camera.fov;
     this.tick++;
-    const frustum = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
     const box = new THREE.Box3();
     const center = new THREE.Vector3();
     const matrix = new THREE.Matrix4();
     const scale = new THREE.Vector3();
     const rotation = new THREE.Quaternion();
     const pixelScale = this.renderer.domElement.clientHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
-    const cut: Node[] = [];
-    const stack = this.hierarchy.tree.length ? [0] : [];
-    while (stack.length) {
-      const node = this.hierarchy.tree[stack.pop()!];
+    const cut = selectProxyCut(this.hierarchy.tree, index => {
+      const node = this.hierarchy.tree[index];
       const size = node.span * this.manifest.chunkWorldSize;
       box.min.set(...node.origin as [number, number, number]).multiplyScalar(this.manifest.chunkWorldSize).addScalar(-this.manifest.worldScale);
       box.max.copy(box.min).addScalar(size);
-      if (!frustum.intersectsBox(box)) continue;
-      box.getCenter(center);
+      // A camera-centered 360-degree detail cut: turning does not evict or
+      // replace gray bricks. Instanced GPU culling still rejects offscreen cubes.
       const distance = Math.max(this.manifest.voxelWorldSize, box.distanceToPoint(camera.position));
-      if (node.children.length && size * pixelScale / distance > 80 && cut.length + stack.length + node.children.length < 512) {
-        stack.push(...node.children);
-      } else cut.push(node);
-    }
+      return size * pixelScale / distance;
+    }).map(index => this.hierarchy.tree[index]);
     cut.sort((a, b) => {
       const distance = (n: Node) => n.origin.reduce((sum, value, k) => sum +
         ((value + n.span / 2) * this.manifest.chunkWorldSize - this.manifest.worldScale - camera.position.getComponent(k)) ** 2, 0);
@@ -113,13 +109,21 @@ export class HierarchicalProxies {
         if (this.resident.has(leaf.chunk)) continue;
         this.manifest.chunkCenterWorld(leaf.chunk, center);
         const pixels = this.manifest.voxelWorldSize * pixelScale / Math.max(1, camera.position.distanceTo(center) - this.manifest.chunkWorldSize);
-        const lod = pixels >= 8 ? 2 : pixels >= 3 ? 1 : 0;
+        const lod = proxyBrickLod(camera.position.distanceTo(center) / this.manifest.chunkWorldSize, pixels);
         const level = leaf.levels[lod];
         const key = `${leaf.chunk}:${lod}`;
         let brick = this.bricks.get(key);
-        if (!brick && brickCount < 64) this.request(key, leaf, level);
+        if (!brick && brickCount < 64) {
+          // Establish cheap gray coverage before spending range/instance
+          // budgets on a dense fine brick. Both are bounded by the same cache.
+          const baseKey = `${leaf.chunk}:0`;
+          if (!this.bricks.has(baseKey)) this.request(baseKey, leaf, leaf.levels[0]);
+          else this.request(key, leaf, level);
+        }
         // A cached coarser brick is a better loading placeholder than a solid chunk.
         brick ??= this.bricks.get(`${leaf.chunk}:0`);
+        if (brick && fineCount + brick.ids.length > 32768)
+          brick = this.bricks.get(`${leaf.chunk}:0`);
         if (brick && brickCount < 64 && fineCount + brick.ids.length <= 32768) {
           brick.mesh.visible = true;
           brick.lastUsed = this.tick;
@@ -165,7 +169,8 @@ export class HierarchicalProxies {
           this.manifest.voxelCenterWorldById(leaf.chunk, x + y * vpc + z * vpc * vpc, instance.position);
           instance.position.addScalar((level.step - 1) * this.manifest.voxelWorldSize / 2);
           instance.scale.setScalar(this.manifest.voxelWorldSize * level.step * VOXEL_FILL);
-          const color = new THREE.Color().setRGB(data.getUint8(offset + 12) / 255, data.getUint8(offset + 13) / 255, data.getUint8(offset + 14) / 255, THREE.SRGBColorSpace).multiplyScalar(0.65);
+          const color = new THREE.Color().setRGB(data.getUint8(offset + 12) / 255, data.getUint8(offset + 13) / 255, data.getUint8(offset + 14) / 255, THREE.SRGBColorSpace)
+            .lerp(new THREE.Color(0x82949a), .65).multiplyScalar(.8);
           instance.color = color;
           colors.push(color);
           ids.push({ chunkId: leaf.chunk, localVoxelId: data.getUint16(offset + 6, true), count: data.getUint32(offset + 8, true) });

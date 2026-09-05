@@ -16,6 +16,19 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 afterEach(() => { pools.splice(0).forEach(p => p.dispose()); vi.restoreAllMocks(); });
 
 describe("bounded sharp preview pool", () => {
+  it("renders only X-ray hover opaque with depth writes, sharing the sharp texture", async () => {
+    const p=pool(), focused={...target("focus"),focused:true,opacity:.4}, other={...target("glass"),opacity:.4};
+    p.update([focused,other],true,camera);await settle();p.update([focused,other],true,camera);
+    expect(p.focusMesh.count).toBe(1);expect(p.mesh.count).toBe(1);
+    expect(p.focusMesh.material.transparent).toBe(false);expect(p.focusMesh.material.depthWrite).toBe(true);
+    expect(p.focusMesh.geometry.getAttribute("previewAlpha").getX(0)).toBe(1);
+    expect(p.mesh.material.transparent).toBe(true);expect(p.mesh.material.depthWrite).toBe(false);
+    expect(p.stats.cpuPixelBytes).toBe(8*1024**2);
+    p.update([{...focused,focused:false},other],true,camera);
+    expect(p.focusMesh.count).toBe(0);expect(p.mesh.count).toBe(2);
+    p.update([focused,other],false,camera);
+    expect(p.focusMesh.count).toBe(0);expect(p.mesh.count).toBe(2);
+  });
   it("keeps mining fades in the depth-writing queue, before neighbouring cages", async () => {
     const p = pool(), a = target("a"), b = target("b");
     p.update([a,b],false,camera); await settle(); p.update([a,b],false,camera);

@@ -91,6 +91,33 @@ afterEach(() => {
 });
 
 describe("ChunkStore scheduling", () => {
+  it("prefetches without showing distant thumbnails, and retains proxies until the nearer horizon is ready", async () => {
+    const base = manifest(true).raw, summaryBytes = 32 + 4096 * 16;
+    const chunks = [0,1,2].map(cx=>({...base.chunks[0],chunk_id:cx,cx,meta_bytes:summaryBytes,
+      atlas_size_px:32,postings:{path:`${cx}.bin`,bytes:4,sha256:"x"}}));
+    const m = new Manifest({...base,world:{...base.world,num_voxels:128,chunks_per_axis:8},chunks,
+      streaming:{version:1,hierarchy:"hierarchy.json"},point_source:{...base.point_source,n_points:3},
+      point_index:{...base.point_index,bytes:24},row_to_voxel:{...base.row_to_voxel,bytes:24}},"/chunks",80);
+    const complete = new Map<number,(chunk:LoadedChunk)=>void>();
+    const loader = {load:vi.fn(entry=>new Promise<LoadedChunk>(resolve=>complete.set(entry.chunk_id,resolve))),
+      unload:vi.fn(),dispose:vi.fn()} as unknown as ChunkLoader;
+    const onDisplayChanged=vi.fn(), store=new ChunkStore(m,loader,{onDisplayChanged});
+    const camera=new THREE.PerspectiveCamera();camera.position.copy(m.chunkCenterWorld(0,new THREE.Vector3()));
+    store.updateCamera(camera,true);
+    const loaded=chunks.map(loadedChunk);
+    complete.get(1)!(loaded[1]);complete.get(2)!(loaded[2]);
+    await Promise.resolve();await Promise.resolve();
+    expect(loaded[1].mesh.visible).toBe(false); // nearer chunk 0 isn't ready
+    expect(loaded[2].mesh.visible).toBe(false); // downloaded, outside display radius
+    complete.get(0)!(loaded[0]);await Promise.resolve();await Promise.resolve();
+    expect(loaded[0].mesh.visible).toBe(true);expect(loaded[1].mesh.visible).toBe(true);
+    expect(loaded[2].mesh.visible).toBe(false);
+    expect(onDisplayChanged).not.toHaveBeenCalledWith(2,true);
+    camera.position.copy(m.chunkCenterWorld(2,new THREE.Vector3()));store.updateCamera(camera,true);
+    expect(loaded[0].mesh.visible).toBe(false);expect(loaded[2].mesh.visible).toBe(true);
+    expect(onDisplayChanged).toHaveBeenCalledWith(0,false);
+    store.dispose();
+  });
   it("does not reclassify a stationary, settled world", () => {
     const loader = { load: vi.fn(), unload: vi.fn(), dispose: vi.fn() } as unknown as ChunkLoader;
     const store = new ChunkStore(manifest(false), loader);

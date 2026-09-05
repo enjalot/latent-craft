@@ -18,6 +18,7 @@ import {
   RING_R0_CHUNKS,
   RING_R1_CHUNKS,
   RING_R2_CHUNKS,
+  THUMBNAIL_SHOW_RADIUS_CHUNKS,
 } from "../config.ts";
 
 export interface ChunkStoreStats {
@@ -35,10 +36,10 @@ export interface ChunkStoreStats {
 }
 
 export interface ChunkStoreEvents {
-  /** Fired when a chunk becomes resident or is evicted — the voxel proxy
-   * layer subscribes so the chunk's flat stand-ins step aside for the real
-   * thing (and come back when it is evicted), and the per-voxel controllers
-   * re-apply their state to a freshly built mesh. */
+  /** Shown textures replace proxies; merely prefetched textures do not. */
+  onDisplayChanged?: (chunkId: number, shown: boolean) => void;
+  /** Fired on load/eviction so per-voxel controllers can initialize fresh
+   * meshes. Visibility/proxy replacement is a separate onDisplayChanged event. */
   onResidencyChanged?: (chunkId: number, resident: boolean) => void;
 }
 
@@ -84,6 +85,7 @@ export class ChunkStore {
   };
 
   private readonly resident = new Map<number, LoadedChunk>();
+  private readonly displayed = new Set<number>();
   private readonly loading = new Map<number, AbortController>();
   private readonly failures = new Map<number, ChunkFailure>();
   private readonly retryTimers = new Map<number, number>();
@@ -216,6 +218,28 @@ export class ChunkStore {
     this.evictOutOfRange();
     this.startLoads();
     this.enforceBudget();
+    this.refreshDisplay();
+  }
+
+  /** A missing nearer chunk holds the display horizon back, rather than
+   * exposing farther images simply because a cheaper download finished first.
+   * Prefetch remains independent and proxies cover every withheld chunk. */
+  private refreshDisplay(): void {
+    let horizon = this.manifest.raw.streaming ? THUMBNAIL_SHOW_RADIUS_CHUNKS : Infinity;
+    if (this.manifest.raw.streaming) for (const c of this.candidates) {
+      // A definitive failed resource remains a proxy, but must not hold the
+      // entire world's texture horizon back forever.
+      if (c.distance <= horizon && !this.resident.has(c.entry.chunk_id) && !this.failures.get(c.entry.chunk_id)?.permanent)
+        horizon = Math.max(0, c.distance - 1e-6);
+    }
+    for (const [id, chunk] of this.resident) {
+      const distance = this.centers.get(id)!.distanceTo(this.lastUpdatePosition) / this.manifest.chunkWorldSize;
+      const shown = distance <= horizon;
+      chunk.mesh.visible = shown;
+      if (shown === this.displayed.has(id)) continue;
+      if (shown) this.displayed.add(id); else this.displayed.delete(id);
+      this.events.onDisplayChanged?.(id, shown);
+    }
   }
 
   private classify(cameraPosition: THREE.Vector3): void {
@@ -352,6 +376,7 @@ export class ChunkStore {
         return;
       }
       this.group.add(chunk.mesh);
+      chunk.mesh.visible = false;
       this.resident.set(entry.chunk_id, chunk);
       this.residentBytes += chunk.bytes;
       const center = this.centers.get(entry.chunk_id);
@@ -363,6 +388,7 @@ export class ChunkStore {
       }
       this.clearFailure(entry.chunk_id, true);
       this.events.onResidencyChanged?.(entry.chunk_id, true);
+      this.refreshDisplay();
     } catch (error) {
       if (!isAbortError(error)) {
         this.recordFailure(entry.chunk_id, error);
@@ -477,6 +503,7 @@ export class ChunkStore {
     const chunk = this.resident.get(chunkId);
     if (!chunk) return;
     this.resident.delete(chunkId);
+    if (this.displayed.delete(chunkId)) this.events.onDisplayChanged?.(chunkId, false);
     this.residentBytes -= chunk.bytes;
     this.loader.unload(chunk);
     this.events.onResidencyChanged?.(chunkId, false);

@@ -7,6 +7,7 @@ export interface PreviewTarget {
   key: string;
   matrix: THREE.Matrix4;
   opacity: number;
+  focused?: boolean;
   valid: () => boolean;
   resolve: () => Promise<string | null>;
 }
@@ -44,6 +45,7 @@ export async function previewPixels(target: PreviewTarget, signal: AbortSignal):
 export class PreviewPool {
   readonly mesh: THREE.InstancedMesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>;
   readonly texture: THREE.DataArrayTexture;
+  readonly focusMesh: THREE.InstancedMesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>;
   private entries = new Map<string, Entry>();
   private active = 0;
   private frame = 0;
@@ -84,6 +86,16 @@ export class PreviewPool {
     // No overlay ever participates in interaction raycasts.
     this.mesh.raycast = () => {};
     scene.add(this.mesh);
+    const focusGeometry = new THREE.BoxGeometry(1, 1, 1);
+    focusGeometry.setAttribute("previewLayer", new THREE.InstancedBufferAttribute(new Float32Array(1), 1));
+    focusGeometry.setAttribute("previewAlpha", new THREE.InstancedBufferAttribute(new Float32Array([1]), 1));
+    const focusMaterial = material.clone();
+    focusMaterial.onBeforeCompile = material.onBeforeCompile;
+    focusMaterial.customProgramCacheKey = material.customProgramCacheKey;
+    this.focusMesh = new THREE.InstancedMesh(focusGeometry, focusMaterial, 1);
+    this.focusMesh.name = "xray-opaque-sharp-hover";
+    this.focusMesh.count = 0; this.focusMesh.frustumCulled = false; this.focusMesh.raycast = () => {};
+    scene.add(this.focusMesh);
   }
 
   update(targets: PreviewTarget[], xray: boolean, camera: THREE.Camera): void {
@@ -138,8 +150,8 @@ export class PreviewPool {
         }
       }).finally(() => { this.active--; });
     }
-    // Transparent previews have far-to-near instance order; their alpha is
-    // the same as the source cube. Never replace glass with opaque overlays.
+    // Glass previews sort far-to-near. The explicitly focused X-ray image is
+    // the exception: one opaque depth-writing draw sharing the same array.
     const visible = this.desired.filter(t => this.entries.get(t.key)?.state === "ready");
     // Mining must NOT move the entire pool into the transparent queue: one
     // fading image would then overpaint neighbouring depth-write-free cages.
@@ -148,9 +160,18 @@ export class PreviewPool {
     const transparent = xray;
     if (transparent) visible.sort((a,b) => distance2(b.matrix, camera.position) - distance2(a.matrix, camera.position));
     let count = 0;
+    this.focusMesh.count = 0;
     this.visibleKeys.clear();
     for (const target of visible) {
       this.visibleKeys.add(target.key);
+      if (xray && target.focused && !this.focusMesh.count) {
+        this.focusMesh.setMatrixAt(0, target.matrix);
+        this.focusMesh.instanceMatrix.needsUpdate = true;
+        const layer = this.focusMesh.geometry.getAttribute("previewLayer") as THREE.InstancedBufferAttribute;
+        layer.setX(0, this.entries.get(target.key)!.slot); layer.needsUpdate = true;
+        this.focusMesh.count = 1;
+        continue;
+      }
       this.mesh.setMatrixAt(count, target.matrix);
       this.layers.setX(count, this.entries.get(target.key)!.slot);
       this.alphas.setX(count, target.opacity);
@@ -165,7 +186,7 @@ export class PreviewPool {
     }
   }
 
-  get stats() { return { slots: this.entries.size, visible: this.mesh.count, pending: this.active,
+  get stats() { return { slots: this.entries.size, visible: this.mesh.count + this.focusMesh.count, pending: this.active,
     gpuBytes: PREVIEW_SLOTS * (PREVIEW_EDGE ** 2 * 4 - 1) / 3 * 4, cpuPixelBytes: this.pixels.byteLength }; }
 
   dispose(): void {
@@ -173,6 +194,8 @@ export class PreviewPool {
     for (const entry of this.entries.values()) entry.request.abort();
     this.entries.clear(); this.desired = [];
     this.mesh.removeFromParent(); this.mesh.geometry.dispose(); this.mesh.material.dispose(); this.texture.dispose();
+    this.focusMesh.removeFromParent(); this.focusMesh.geometry.dispose(); this.focusMesh.material.dispose(); this.focusMesh.dispose();
+    this.mesh.dispose();
   }
 }
 
