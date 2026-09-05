@@ -17,6 +17,7 @@ import { createSceneFog } from "./Fog.ts";
 import { NebulaSky } from "./NebulaSky.ts";
 import { Starfield } from "./Starfield.ts";
 import { createStudioEnvironment } from "./StudioEnvironment.ts";
+import { SkyBackdrop } from "./SkyBackdrop.ts";
 
 export type TickCallback = (deltaSeconds: number, elapsedSeconds: number) => void;
 
@@ -141,6 +142,7 @@ export class Engine {
   /** The nebula cubemap behind the stars (see `NebulaSky.ts`), or null under
    * `?sky=0`. Same ownership argument as the starfield. */
   readonly sky: NebulaSky | null;
+  private readonly skyBackdrop: SkyBackdrop | null;
   /** The camera-carried point light (see `HEADLAMP_*` in config.ts), or null
    * under `?headlamp=0`. Owned here because following the camera has to happen
    * after the tick callback has moved it and before the render — i.e. inside
@@ -192,7 +194,8 @@ export class Engine {
     // else exists — it is the first thing the renderer ever draws, into an
     // offscreen target, so the main scene never sees a frame without it.
     this.sky = options.sky === false ? null : new NebulaSky(this.renderer);
-    if (this.sky) this.scene.background = this.sky.texture;
+    this.skyBackdrop = this.sky ? new SkyBackdrop(this.sky.texture) : null;
+    if (this.skyBackdrop) this.scene.add(this.skyBackdrop.mesh);
     this.studioEnvironment = createStudioEnvironment(this.renderer);
     this.scene.environment = this.studioEnvironment.texture;
     this.starfield = new Starfield();
@@ -405,6 +408,7 @@ export class Engine {
 
   dispose(): void {
     this.stop();
+    this.skyBackdrop?.dispose();
     this.sky?.dispose();
     this.studioEnvironment.dispose();
     this.headlamp?.removeFromParent();

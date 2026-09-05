@@ -50,6 +50,10 @@ IndexedDB or server-backed persistence later.
   derivative-filtered brushed grain, fine seams and ceramic corner inlays.
   Existing instanced cage draws and depletion behavior are retained.
 - Missing hierarchy regions use opacity .16 instead of .08.
+- The baked sky is sampled on one fullscreen triangle instead of a camera-
+  enclosing cube. This removes the flat polygon seams reproduced in WebGL
+  at the basemap spawn view; it replaces the existing background draw, without
+  another texture, pass, or per-frame procedural sky computation.
 
 ### Mining-border flicker
 

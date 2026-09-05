@@ -322,9 +322,9 @@ function bearingToDirection(b: SkyBearing): THREE.Vector3 {
 
 /**
  * The procedural nebula backdrop: a cubemap rendered ONCE (at construction,
- * and again on `regenerate`) into a `WebGLCubeRenderTarget`, then set as
- * `scene.background` by `Engine`. Per frame it costs one cubemap lookup per
- * background pixel — three draws a background cube first, depth test off, in
+ * and again on `regenerate`) into a `WebGLCubeRenderTarget`, then sampled by
+ * `SkyBackdrop` in `Engine`. Per frame it costs one cubemap lookup per
+ * background pixel — one fullscreen triangle first, depth test off, in
  * its own unfogged material — and nothing else. The shader is heavy (two
  * warp levels, four swirls, four galaxies — ~20-30 value-noise evaluations
  * per texel over 1.57M texels) but it runs once; it costs startup time, never
@@ -442,7 +442,7 @@ export class NebulaSky {
     this.regenerate(seed);
   }
 
-  /** The cubemap, for `scene.background`. */
+  /** The cubemap, sampled by SkyBackdrop. */
   get texture(): THREE.CubeTexture {
     return this.target.texture;
   }
