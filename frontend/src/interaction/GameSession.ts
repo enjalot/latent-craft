@@ -1,8 +1,7 @@
 import type { MiningController } from "./MiningController.ts";
-import { miningSaveCsv, miningSaveFromCsv, validateMiningSave, type MiningSave } from "./MiningSave.ts";
+import { miningSaveCsv, miningSaveFromCsv, validateMiningSave } from "./MiningSave.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
-import { parseChunkMeta } from "../streaming/ChunkLoader.ts";
-import { PagedRecords, rangeReader } from "../streaming/RangeReader.ts";
+import { verifyMiningPostings } from "./VerifyMiningSave.ts";
 import { resolveThumbUrl, type PointIndex } from "../streaming/PointIndex.ts";
 import type { InventoryPanel } from "../ui/InventoryPanel.ts";
 import { HUD_CLASS } from "../ui/hudPanel.ts";
@@ -64,7 +63,7 @@ export class GameSession {
         if (selected.size > 64 * 1024 ** 2) throw new Error("CSV is over the 64 MiB import limit.");
         const save = validateMiningSave(miningSaveFromCsv(await selected.text()), this.dataset, this.manifest);
         this.status("Checking CSV against this map’s image index…");
-        await this.verifyPostings(save);
+        await verifyMiningPostings(save, this.manifest, () => this.disposed);
         if (this.disposed) return;
         if (this.mining.inventory.totalPoints && !window.confirm("Replace this dataset’s current inventory with the imported CSV?")) {
           this.status("Import cancelled; inventory unchanged."); return;
@@ -103,27 +102,6 @@ export class GameSession {
   private focusLatest(): void {
     const latest = this.mining.inventory.stacks.reduce<typeof this.mining.inventory.stacks[number] | null>((a,b) => !a || b.lastExtractedAt > a.lastExtractedAt ? b : a, null);
     if (latest) this.panel.focusMined(latest.id, latest.rowIds.at(-1)!);
-  }
-
-  /** Only the consumed posting prefix, not the entire voxel, is read. This
-   * rejects edited/wrong row IDs even when their counts look plausible. */
-  private async verifyPostings(save: MiningSave): Promise<void> {
-    for (const stack of save.stacks) {
-      if (this.disposed) throw new Error("Map closed.");
-      const entry = this.manifest.chunksById.get(stack.chunkId)!;
-      const meta = parseChunkMeta(await rangeReader.read(this.manifest.url(entry.meta_path), 0, entry.meta_bytes, entry.meta_bytes));
-      if (meta.count[stack.localVoxelId] !== stack.totalPoints || meta.reprRowId[stack.localVoxelId] !== stack.reprRowId)
-        throw new Error("Block metadata does not match this map.");
-      const rows = new Set([...stack.rowIds, ...stack.returned]);
-      const start = meta.pointOffset[stack.localVoxelId];
-      const records = entry.postings ? new PagedRecords(this.manifest.url(entry.postings.path), entry.n_points, 4) : null;
-      for (let i = 0; i < stack.cursor; i += 256) {
-        if (this.disposed) throw new Error("Map closed.");
-        const batch = await Promise.all(Array.from({length: Math.min(256, stack.cursor-i)}, async (_, j) =>
-          records ? (await records.record(start+i+j)).getUint32(0,true) : meta.pointIds[start+i+j]));
-        for (const row of batch) if (!rows.delete(row)) throw new Error("Image rows do not match the mined posting prefix.");
-      }
-    }
   }
 
   private status(text: string): void { this.message.textContent = this.storageWarning || text; }
