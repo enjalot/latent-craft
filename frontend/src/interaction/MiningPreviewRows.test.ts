@@ -7,7 +7,7 @@ import type { Manifest } from "../streaming/Manifest.ts";
 afterEach(() => vi.restoreAllMocks());
 function setup() {
   const chunk = { entry: { postings: { path: "postings.bin" }, n_points: 4 },
-    meta: { count: new Uint32Array([2,2]), pointOffset: new Uint32Array([0,2]) } };
+    meta: { count: new Uint32Array([2,2]), pointOffset: new Uint32Array([0,2]), reprRowId: new Uint32Array([101,103]) } };
   const lookup = vi.fn(() => chunk);
   const mining = new MiningController({ chunk: lookup } as unknown as ChunkStore,
     () => false, () => false, { url: (s:string)=>s, totalPoints: 1000 } as Manifest);
@@ -20,7 +20,7 @@ describe("independent sharp-band row lookup", () => {
     const { mining }=setup();
     mining.prepare(0,0); await new Promise(resolve=>setTimeout(resolve,0));
     expect(mining.nextRowId(0,0)).toBe(100);
-    expect(await mining.previewRowId(0,1)).toBe(102);
+    expect(await mining.previewRowId(0,1)).toBe(103);
     expect(mining.nextRowId(0,0)).toBe(100);
     expect(await mining.previewRowId(0,2)).toBeNull();
   });
@@ -28,12 +28,22 @@ describe("independent sharp-band row lookup", () => {
     let complete!: (v:DataView)=>void;
     vi.spyOn(PagedRecords.prototype,"record").mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
     const { mining,lookup }=setup();
+    vi.spyOn(mining,"extractionState").mockReturnValue({cursor:1,returned:new Set()} as never);
     const pending=mining.previewRowId(0,0);
     lookup.mockReturnValue(undefined as never); complete(record(100));
     expect(await pending).toBeNull();
   });
   it("does not let an invalid posting address a different point table", async () => {
     vi.spyOn(PagedRecords.prototype,"record").mockResolvedValue(record(1000));
-    expect(await setup().mining.previewRowId(0,0)).toBeNull();
+    const {mining}=setup();
+    vi.spyOn(mining,"extractionState").mockReturnValue({cursor:1,returned:new Set()} as never);
+    expect(await mining.previewRowId(0,0)).toBeNull();
+  });
+  it("sharpens the atlas representative without fetching postings until mining begins", async () => {
+    const fetch=vi.spyOn(PagedRecords.prototype,"record").mockResolvedValue(record(102));
+    const {mining}=setup();
+    expect(await mining.previewRowId(0,0)).toBe(101); expect(fetch).not.toHaveBeenCalled();
+    vi.spyOn(mining,"extractionState").mockReturnValue({cursor:1,returned:new Set()} as never);
+    expect(await mining.previewRowId(0,0)).toBe(102); expect(fetch).toHaveBeenCalledOnce();
   });
 });

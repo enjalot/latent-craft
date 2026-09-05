@@ -41,6 +41,28 @@ const ATLAS_MAP_FRAGMENT = /* glsl */ `
 #endif
 `;
 
+/** Virtual bevel, evaluated in the face's derivative-derived tangent frame.
+ * No extra geometry, textures or draw calls. Screen derivatives soften the
+ * bevel below pixel size, avoiding sparkling on distant 32px atlas blocks. */
+export const VOXEL_BEVEL_FRAGMENT = /* glsl */ `
+  #include <normal_fragment_maps>
+  #ifdef USE_MAP
+    vec2 lsFace = vMapUv - 0.5;
+    vec2 lsAA = max(fwidth(vMapUv), vec2(0.001));
+    vec2 lsEdge = smoothstep(vec2(0.455) - lsAA, vec2(0.5) + lsAA, abs(lsFace));
+    vec3 lsDx = dFdx(-vViewPosition), lsDy = dFdy(-vViewPosition);
+    vec2 lsUx = dFdx(vMapUv), lsUy = dFdy(vMapUv);
+    float lsDet = lsUx.x * lsUy.y - lsUx.y * lsUy.x;
+    vec3 lsT = (lsDx * lsUy.y - lsDy * lsUx.y) * sign(lsDet);
+    vec3 lsB = (lsDy * lsUx.x - lsDx * lsUy.x) * sign(lsDet);
+    lsT /= max(length(lsT), 1e-8);
+    lsB /= max(length(lsB), 1e-8);
+    normal = normalize(normal + 0.65 * (lsT * sign(lsFace.x) * lsEdge.x + lsB * sign(lsFace.y) * lsEdge.y));
+    // Polished edges around a satin image face. No high-frequency noise.
+    roughnessFactor = mix(roughnessFactor, 0.23, max(lsEdge.x, lsEdge.y));
+  #endif
+`;
+
 /**
  * Ground-bounce fill, injected just before three's `<opaque_fragment>` (which
  * is where `outgoingLight` has been assembled but not yet written out).
@@ -166,9 +188,9 @@ export function createVoxelMaterial(params: VoxelMaterialParams): THREE.MeshStan
 
   const material = new THREE.MeshStandardMaterial({
     map: atlas,
-    roughness: 0.38,
+    roughness: 0.42,
     metalness: 0.04,
-    envMapIntensity: 0.45,
+    envMapIntensity: 0.8,
     alphaToCoverage: true,
   });
 
@@ -192,16 +214,17 @@ export function createVoxelMaterial(params: VoxelMaterialParams): THREE.MeshStan
         "#include <map_pars_fragment>\nuniform float uTilesPerSide;\nuniform float uTileInset;\nuniform float uUnderlight;\nuniform float uCoverageDither;",
       )
       .replace("#include <map_fragment>", ATLAS_MAP_FRAGMENT)
+      .replace("#include <normal_fragment_maps>", VOXEL_BEVEL_FRAGMENT)
       .replace("#include <opaque_fragment>", VOXEL_OUTPUT_FRAGMENT);
   };
   // Every chunk compiles byte-identical shader source, so a constant key lets
   // all of them share one GL program instead of one per chunk. The key is what
   // three's program cache dedupes on, so it's bumped whenever the patched
   // source changes (v2: underlight; v3: coverage dither; v4: glass-mode
-  // dither guard; v5: exact zero coverage for sharp replacements) — a stale entry would
+  // dither guard; v5: exact zero coverage; v6: filtered bevel normals) — a stale entry would
   // otherwise keep serving the previous shader within a session that had
   // already compiled one.
-  material.customProgramCacheKey = () => "ls-voxel-atlas-v5";
+  material.customProgramCacheKey = () => "ls-voxel-atlas-v6-bevel";
 
   return material;
 }

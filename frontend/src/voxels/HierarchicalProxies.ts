@@ -5,7 +5,9 @@ import { rangeReader } from "../streaming/RangeReader.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
 import type { ProxyVoxel, VoxelProxyStats } from "./VoxelProxyCloud.ts";
 import { VOXEL_FILL } from "../config.ts";
-import { selectProxyCut, proxyBrickLod } from "./ProxyCut.ts";
+import { selectProxyCut, proxyBrickLod, allocateProxyBricks } from "./ProxyCut.ts";
+
+const CUT_CAPACITY = 1024;
 
 interface Level { offset: number; count: number; step: number }
 interface Leaf { chunk: number; xyz: number[]; count: number; levels: Level[] }
@@ -13,7 +15,7 @@ interface Node { origin: number[]; span: number; count: number; leaf?: number; c
 interface Hierarchy { version: number; file: string; bytes: number; nodes: Leaf[]; tree: Node[] }
 interface Brick { mesh: InstancedMesh2; ids: ProxyVoxel[]; colors: THREE.Color[]; lastUsed: number }
 
-/** View-dependent octree cut + range-loaded 4/2/1 voxel bricks. Resident fine
+/** Distance-prioritized octree cut + range-loaded 4/2/1 voxel bricks. Resident fine
  * geometry never scales with corpus size. A missing brick keeps its parent visible. */
 export class HierarchicalProxies {
   readonly mesh = new THREE.Group();
@@ -21,6 +23,8 @@ export class HierarchicalProxies {
   private readonly bricks = new Map<string, Brick>();
   private readonly pending = new Set<string>();
   private readonly failures = new Map<string, number>();
+  private readonly protectedBases = new Set<string>();
+  private lastLods = new Map<number, number>();
   private readonly coarse: InstancedMesh2;
   private readonly material = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, emissive: 0x18242a, emissiveIntensity: .3 });
   // Missing-detail regions are a faint spatial hint, not solid obstacles.
@@ -41,9 +45,9 @@ export class HierarchicalProxies {
 
   private constructor(private readonly manifest: Manifest, private readonly hierarchy: Hierarchy,
     private readonly renderer: THREE.WebGLRenderer) {
-    this.coarse = new InstancedMesh2(new THREE.BoxGeometry(1, 1, 1), this.coarseMaterial, { capacity: 512, renderer });
-    this.coarse.addInstances(512);
-    for (let i = 0; i < 512; i++) this.coarse.setVisibilityAt(i, false);
+    this.coarse = new InstancedMesh2(new THREE.BoxGeometry(1, 1, 1), this.coarseMaterial, { capacity: CUT_CAPACITY, renderer });
+    this.coarse.addInstances(CUT_CAPACITY);
+    for (let i = 0; i < CUT_CAPACITY; i++) this.coarse.setVisibilityAt(i, false);
     this.mesh.add(this.coarse);
   }
 
@@ -93,27 +97,42 @@ export class HierarchicalProxies {
       // A camera-centered 360-degree detail cut: turning does not evict or
       // replace gray bricks. Instanced GPU culling still rejects offscreen cubes.
       const distance = Math.max(this.manifest.voxelWorldSize, box.distanceToPoint(camera.position));
-      return size * pixelScale / distance;
-    }).map(index => this.hierarchy.tree[index]);
+      // Distance to the nearest surface, not projected node size: a large far
+      // branch must not displace a small nearby one as the camera translates.
+      return 1 / (distance / this.manifest.chunkWorldSize + .01);
+    }, CUT_CAPACITY, 1 / 12).map(index => this.hierarchy.tree[index]);
     cut.sort((a, b) => {
       const distance = (n: Node) => n.origin.reduce((sum, value, k) => sum +
         ((value + n.span / 2) * this.manifest.chunkWorldSize - this.manifest.worldScale - camera.position.getComponent(k)) ** 2, 0);
-      return distance(a) - distance(b);
+      return distance(a) - distance(b) || (a.leaf ?? -1) - (b.leaf ?? -1);
     });
+    const leaves = cut.filter(node => node.leaf !== undefined && !this.resident.has(this.hierarchy.nodes[node.leaf].chunk));
+    const nextLods = new Map<number, number>();
+    const levels = allocateProxyBricks(leaves.map(node => {
+      const leaf = this.hierarchy.nodes[node.leaf!];
+      this.manifest.chunkCenterWorld(leaf.chunk, center);
+      const distance = camera.position.distanceTo(center);
+      const pixels = this.manifest.voxelWorldSize * pixelScale / Math.max(1, distance - this.manifest.chunkWorldSize);
+      const lod = proxyBrickLod(distance / this.manifest.chunkWorldSize, pixels, this.lastLods.get(leaf.chunk));
+      nextLods.set(leaf.chunk, lod);
+      return { counts: leaf.levels.map(level => level.count), lod };
+    }));
+    this.lastLods = nextLods;
+    const selected = new Map(leaves.slice(0, levels.length).map((node, i) => [node.leaf!, levels[i]]));
+    this.protectedBases.clear();
+    for (const leaf of selected.keys()) this.protectedBases.add(`${this.hierarchy.nodes[leaf].chunk}:0`);
     for (const brick of this.bricks.values()) brick.mesh.visible = false;
     this.handles.clear();
-    let coarseCount = 0, fineCount = 0, brickCount = 0;
+    let coarseCount = 0, fineCount = 0;
     for (const node of cut) {
       if (node.leaf !== undefined) {
         const leaf = this.hierarchy.nodes[node.leaf];
         if (this.resident.has(leaf.chunk)) continue;
-        this.manifest.chunkCenterWorld(leaf.chunk, center);
-        const pixels = this.manifest.voxelWorldSize * pixelScale / Math.max(1, camera.position.distanceTo(center) - this.manifest.chunkWorldSize);
-        const lod = proxyBrickLod(camera.position.distanceTo(center) / this.manifest.chunkWorldSize, pixels);
+        const lod = selected.get(node.leaf) ?? 0;
         const level = leaf.levels[lod];
         const key = `${leaf.chunk}:${lod}`;
         let brick = this.bricks.get(key);
-        if (!brick && brickCount < 64) {
+        if (!brick && selected.has(node.leaf)) {
           // Establish cheap gray coverage before spending range/instance
           // budgets on a dense fine brick. Both are bounded by the same cache.
           const baseKey = `${leaf.chunk}:0`;
@@ -121,13 +140,11 @@ export class HierarchicalProxies {
           else this.request(key, leaf, level);
         }
         // A cached coarser brick is a better loading placeholder than a solid chunk.
-        brick ??= this.bricks.get(`${leaf.chunk}:0`);
-        if (brick && fineCount + brick.ids.length > 32768)
-          brick = this.bricks.get(`${leaf.chunk}:0`);
-        if (brick && brickCount < 64 && fineCount + brick.ids.length <= 32768) {
+        for (let fallback = lod - 1; !brick && fallback >= 0; fallback--)
+          brick = this.bricks.get(`${leaf.chunk}:${fallback}`);
+        if (brick && selected.has(node.leaf)) {
           brick.mesh.visible = true;
           brick.lastUsed = this.tick;
-          brickCount++;
           fineCount += brick.ids.length;
           for (let i = 0; i < brick.ids.length; i++) {
             const id = brick.ids[i];
@@ -147,7 +164,7 @@ export class HierarchicalProxies {
       this.coarse.setVisibilityAt(coarseCount, true);
       this.coarseIds[coarseCount++] = { chunkId: node.leaf === undefined ? -1 : this.hierarchy.nodes[node.leaf].chunk, localVoxelId: -1, count: node.count };
     }
-    for (let i = coarseCount; i < 512; i++) this.coarse.setVisibilityAt(i, false);
+    for (let i = coarseCount; i < CUT_CAPACITY; i++) this.coarse.setVisibilityAt(i, false);
     this.coarse.computeBoundingSphere();
     this.shown = fineCount + coarseCount;
     this.trim();
@@ -192,8 +209,8 @@ export class HierarchicalProxies {
   private trim(): void {
     let count = [...this.bricks.values()].reduce((sum, brick) => sum + brick.ids.length, 0);
     for (const [key, brick] of [...this.bricks].sort((a, b) => a[1].lastUsed - b[1].lastUsed)) {
-      if (count <= 65536 && this.bricks.size <= 96) break;
-      if (brick.mesh.visible) continue;
+      if (count <= 131072 && this.bricks.size <= 256) break;
+      if (brick.mesh.visible || this.protectedBases.has(key)) continue;
       count -= brick.ids.length;
       brick.mesh.removeFromParent(); brick.mesh.dispose(); brick.mesh.geometry.dispose();
       this.bricks.delete(key);

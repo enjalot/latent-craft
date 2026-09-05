@@ -9,8 +9,9 @@ export function createStudioEnvironment(renderer: THREE.WebGLRenderer): THREE.We
   const geometry = new THREE.PlaneGeometry(1, 1);
   const cards: THREE.Mesh[] = [];
   for (const [position, size, color, intensity] of [
-    [[4, 6, 3], [4, 6], 0xffeedb, 4],
-    [[-5, 1, -3], [2, 7], 0xa5d9ff, 2.5],
+    [[4, 6, 3], [4, 6], 0xffeedb, 4.5],
+    [[-5, 1, -3], [2, 7], 0xa5d9ff, 3.5],
+    [[0, -4, 2], [5, 2], 0xaab8ce, 1.2],
   ] as const) {
     const material = new THREE.MeshBasicMaterial({ color, toneMapped: false });
     material.color.multiplyScalar(intensity);

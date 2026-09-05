@@ -284,7 +284,7 @@ export const SUN_DIRECTION: readonly [number, number, number] = [1, 1.4, 0.8];
  */
 export const HEMISPHERE_SKY_COLOR = 0xbcd0ff;
 export const HEMISPHERE_GROUND_COLOR = 0x14141f;
-export const HEMISPHERE_INTENSITY = 0.75;
+export const HEMISPHERE_INTENSITY = 0.6;
 export const SUN_COLOR = 0xfff2e0;
 export const SUN_INTENSITY = 1.8;
 
@@ -528,7 +528,11 @@ export const CONTAINER_DEPLETION_OPACITY_FLOOR = 0.15;
  */
 export const RING_R0_CHUNKS = 1.5;
 /** Prefetch is not visibility: keep a coherent nearer thumbnail horizon. */
-export const THUMBNAIL_SHOW_RADIUS_CHUNKS = 1.9;
+export const THUMBNAIL_SHOW_RADIUS_CHUNKS = 2.2;
+export const THUMBNAIL_HIDE_RADIUS_CHUNKS = 2.4;
+export const STREAM_MAX_CHUNKS = 96;
+export const STREAM_MAX_BYTES = 384 * 1024 * 1024;
+export const STREAM_MAX_INSTANCES = 98304;
 export const RING_R1_CHUNKS = 2.5;
 export const RING_R2_CHUNKS = 3.5;
 

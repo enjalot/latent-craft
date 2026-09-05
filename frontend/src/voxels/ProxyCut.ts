@@ -28,6 +28,32 @@ export function selectProxyCut(
 
 /** Dense full-resolution bricks are only useful near the thumbnail horizon.
  * Farther ahead, small 4³-voxel aggregates provide coverage cheaply. */
-export function proxyBrickLod(distanceInChunks: number, voxelPixels: number): number {
+export function proxyBrickLod(distanceInChunks: number, voxelPixels: number, previous = 0): number {
+  // Exit deadbands prevent small forward/back movements from repeatedly
+  // changing geometry at the detail boundaries. No camera-angle dependence.
+  if (previous === 2 && distanceInChunks <= 2.2 && voxelPixels >= 7) return 2;
+  if (previous >= 1 && distanceInChunks <= 4.25 && voxelPixels >= 2.5)
+    return distanceInChunks <= 2 && voxelPixels >= 8 ? 2 : 1;
   return distanceInChunks <= 2 && voxelPixels >= 8 ? 2 : distanceInChunks <= 4 && voxelPixels >= 3 ? 1 : 0;
+}
+
+/** Inputs are nearest-first. Reserve cheap coverage for every admitted leaf
+ * BEFORE upgrades. Selection depends on metadata, never cache/load timing. */
+export function allocateProxyBricks(
+  leaves: readonly { counts: readonly number[]; lod: number }[],
+  maxBricks = 128, maxInstances = 65536,
+): number[] {
+  const selected: number[] = [];
+  let used = 0;
+  for (const leaf of leaves) {
+    if (selected.length >= maxBricks || used + leaf.counts[0] > maxInstances) break;
+    selected.push(0); used += leaf.counts[0];
+  }
+  for (let i = 0; i < selected.length; i++) {
+    for (let lod = leaves[i].lod; lod > 0; lod--) {
+      const extra = leaves[i].counts[lod] - leaves[i].counts[0];
+      if (used + extra <= maxInstances) { selected[i] = lod; used += extra; break; }
+    }
+  }
+  return selected;
 }

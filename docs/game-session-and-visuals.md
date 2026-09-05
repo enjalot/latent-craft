@@ -1,5 +1,9 @@
 # Game saves and visual pass — September 5, 2026
 
+The marker layout and lighting below describe the earlier pass. See
+[distance-stable rendering](distance-stable-rendering.md) for the subsequent
+fixed-physical-size markers, revised budgets, shading and image-identity fix.
+
 Settings replaces Telemetry and shares its 420px dock width with the dataset
 picker. Movement instructions remain in the collapsible header. Flight defaults
 to **8 voxel cells/second**, adjustable from 1–64, with the existing double-W

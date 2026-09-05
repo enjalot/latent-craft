@@ -258,6 +258,14 @@ export class MiningController {
     if (returned !== undefined) return returned;
     const cursor = state?.cursor ?? 0;
     if (cursor >= (chunk.meta.count[localVoxelId] ?? 0)) return null;
+    // Atlases use the point nearest the voxel centre, not the first row in
+    // the sorted postings list. Hover/sharp-band must sharpen THAT image
+    // until mining starts; after mining, preview the next remaining row.
+    if (cursor === 0) {
+      const representative = chunk.meta.reprRowId[localVoxelId];
+      return Number.isSafeInteger(representative) && (!this.manifest || representative < this.manifest.totalPoints)
+        ? representative : null;
+    }
     const offset = chunk.meta.pointOffset[localVoxelId] + cursor;
     let row: number;
     if (chunk.entry.postings && this.manifest) {

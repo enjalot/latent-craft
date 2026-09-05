@@ -19,6 +19,8 @@ import {
   RING_R1_CHUNKS,
   RING_R2_CHUNKS,
   THUMBNAIL_SHOW_RADIUS_CHUNKS,
+  THUMBNAIL_HIDE_RADIUS_CHUNKS,
+  STREAM_MAX_CHUNKS, STREAM_MAX_BYTES, STREAM_MAX_INSTANCES,
 } from "../config.ts";
 
 export interface ChunkStoreStats {
@@ -199,11 +201,16 @@ export class ChunkStore {
     const moved = this.lastUpdatePosition.distanceToSquared(position);
     const turnCos = Math.abs(this.lastUpdateQuaternion.dot(camera.quaternion));
     const turned = 2 * Math.acos(Math.min(1, turnCos));
+    // A fixed 1.5-world-unit step is almost half a chunk on a 512³ pack:
+    // distance gates would jump many voxels at a time. Scale with the grid.
+    const moveEpsilon = this.manifest.raw.streaming
+      ? Math.min(CHUNK_UPDATE_MOVE_EPSILON, this.manifest.voxelWorldSize * .5)
+      : CHUNK_UPDATE_MOVE_EPSILON;
     if (
       !force &&
       !this.scheduleDirty &&
       Number.isFinite(this.lastUpdatePosition.x) &&
-      moved < CHUNK_UPDATE_MOVE_EPSILON * CHUNK_UPDATE_MOVE_EPSILON &&
+      moved < moveEpsilon * moveEpsilon &&
       turned < CHUNK_UPDATE_TURN_EPSILON_RAD
     ) {
       return;
@@ -221,18 +228,12 @@ export class ChunkStore {
     this.refreshDisplay();
   }
 
-  /** A missing nearer chunk holds the display horizon back, rather than
-   * exposing farther images simply because a cheaper download finished first.
-   * Prefetch remains independent and proxies cover every withheld chunk. */
+  /** Each chunk has a distance gate with a small exit deadband. An unfinished
+   * download must never retract unrelated, already-visible thumbnails. */
   private refreshDisplay(): void {
-    let horizon = this.manifest.raw.streaming ? THUMBNAIL_SHOW_RADIUS_CHUNKS : Infinity;
-    if (this.manifest.raw.streaming) for (const c of this.candidates) {
-      // A definitive failed resource remains a proxy, but must not hold the
-      // entire world's texture horizon back forever.
-      if (c.distance <= horizon && !this.resident.has(c.entry.chunk_id) && !this.failures.get(c.entry.chunk_id)?.permanent)
-        horizon = Math.max(0, c.distance - 1e-6);
-    }
     for (const [id, chunk] of this.resident) {
+      const horizon = !this.manifest.raw.streaming ? Infinity : this.displayed.has(id)
+        ? THUMBNAIL_HIDE_RADIUS_CHUNKS : THUMBNAIL_SHOW_RADIUS_CHUNKS;
       const distance = this.centers.get(id)!.distanceTo(this.lastUpdatePosition) / this.manifest.chunkWorldSize;
       const shown = distance <= horizon;
       chunk.mesh.visible = shown;
@@ -273,7 +274,7 @@ export class ChunkStore {
       let ring = ringFor(distance, this.radii);
       this.toChunk.subVectors(center, cameraPosition);
       if (this.toChunk.lengthSq() > 0) this.toChunk.normalize();
-      let priority = chunkPriority(distance, this.toChunk, this.forward);
+      let priority = this.manifest.raw.streaming ? distance : chunkPriority(distance, this.toChunk, this.forward);
 
       if (target) {
         const targetDistance = center.distanceTo(target) / chunkSize;
@@ -351,7 +352,9 @@ export class ChunkStore {
       const entry = candidate.entry;
       const side = entry.atlas_size_px ?? this.manifest.raw.atlas.size_px;
       const cost = side * side * 4 + entry.meta_bytes + entry.n_occupied_voxels * 1024;
-      if (allowed.size >= 64 || bytes + cost > 256 * 1024 * 1024 || instances + entry.n_occupied_voxels > 65536) continue;
+      // A distance prefix, not a knapsack: cheap farther chunks cannot jump
+      // over a nearer dense chunk. Costs are reserved before any load finishes.
+      if (allowed.size >= STREAM_MAX_CHUNKS || bytes + cost > STREAM_MAX_BYTES || instances + entry.n_occupied_voxels > STREAM_MAX_INSTANCES) break;
       allowed.add(entry.chunk_id);
       bytes += cost; instances += entry.n_occupied_voxels;
     }

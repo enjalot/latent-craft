@@ -49,8 +49,8 @@ describe("Effector surface rectangles", () => {
       expect(radii[0]).toBeLessThan(radius);
       expect(radii.at(-1)).toBeGreaterThan(radius);
       const layout = effectorRingLayout(radius);
-      expect(layout.map(r => r.count)).toEqual([12, 24, 36]);
-      const verticesPerBar = positions.count / 72;
+      expect(layout.map(r => r.count)).toEqual([3, 6, 9]);
+      const verticesPerBar = positions.count / 18;
       let start = 0;
       for (const ring of layout) {
         const chord = 2 * radius * Math.sin(ring.angle) * Math.sin(Math.PI / ring.count);
@@ -66,11 +66,17 @@ describe("Effector surface rectangles", () => {
       }
       geometry.dispose();
     }
-    // Projected radius (tan(angle)), not just world radius, must grow in
-    // open space. Otherwise camera-centred scaling is visually invisible.
+    // Physical size is constant; perspective, not a screen-space layout
+    // adjustment, makes bars smaller as the surface recedes.
     for (let radius = 1; radius < 48; radius += .25) {
       const before = effectorRingLayout(radius), after = effectorRingLayout(radius + .25);
-      for (let ring = 0; ring < 3; ring++) expect(Math.tan(after[ring].angle)).toBeGreaterThan(Math.tan(before[ring].angle));
+      for (let ring = 0; ring < 3; ring++) {
+        expect(after[ring].angle).toBe(before[ring].angle);
+        expect(after[ring].length).toBe(before[ring].length);
+        expect(after[ring].width).toBe(before[ring].width);
+        expect(after[ring].depth).toBe(before[ring].depth);
+        expect(after[ring].length / (radius + .25)).toBeLessThan(before[ring].length / radius);
+      }
     }
     expect(() => effectorRingLayout(0)).toThrow();
     expect(() => effectorRingLayout(Infinity)).toThrow();
@@ -107,6 +113,10 @@ describe("Effector surface rectangles", () => {
     expect(field.gizmo.visible).toBe(true);
     expect(field.gizmo.scale.x).toBeCloseTo(0.625);
     const geometry = (field.gizmo.children[0] as THREE.Mesh).geometry;
+    const material = (field.gizmo.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    expect(material.isMeshStandardMaterial).toBe(true);
+    expect(material.emissive.getHex()).toBe(0);
+    expect(material.depthTest).toBe(true);
     const pointer = new THREE.Vector2(.4,.2);
     field.update(camera, pointer);
     expect((field.gizmo.children[0] as THREE.Mesh).geometry).toBe(geometry);

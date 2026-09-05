@@ -64,7 +64,6 @@ export class EffectorFieldController {
   private readonly surface: ReturnType<typeof createEffectorSurface>;
   private lastResizeAt = -Infinity;
   private surfaceRadius = 2;
-  private surfaceAngle = .45;
   private readonly surfaceRay = new THREE.Raycaster();
   private readonly surfaceDirection = new THREE.Vector3();
   private readonly inverseCamera = new THREE.Quaternion();
@@ -140,12 +139,10 @@ export class EffectorFieldController {
     this.gizmo.visible = opacity > 0;
     this.recomputeFromCamera(camera, false);
     if (opacity <= 0) return;
-    const perspective = camera as THREE.PerspectiveCamera;
-    const angle = perspective.isPerspectiveCamera ? THREE.MathUtils.degToRad(perspective.fov) * .4 : .45;
-    if (this.surfaceRadius !== this.currentRadiusVoxels || this.surfaceAngle !== angle) {
+    if (this.surfaceRadius !== this.currentRadiusVoxels) {
       this.surface.geometry.dispose();
-      this.surface.geometry = buildEffectorSurfaceGeometry(this.currentRadiusVoxels, angle);
-      this.surfaceRadius = this.currentRadiusVoxels; this.surfaceAngle = angle;
+      this.surface.geometry = buildEffectorSurfaceGeometry(this.currentRadiusVoxels);
+      this.surfaceRadius = this.currentRadiusVoxels;
     }
     this.surfaceRay.setFromCamera(pointer, camera);
     this.inverseCamera.copy(camera.quaternion).invert();
