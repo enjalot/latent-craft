@@ -874,6 +874,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
       return inventoryPanel;
     },
     get gameSession() { return gameSession; },
+    get rangeStats() { return { cacheBytes: rangeReader.cache.weight, transferredBytes: rangeReader.transferred }; },
     // The inventory's lightbox: `currentRowId`, `status` (the rendered
     // status line), `state` (`LightboxOriginalState`), `originalSrc` (the
     // original on screen, or null) — what the harness reads to prove an

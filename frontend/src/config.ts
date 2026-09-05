@@ -63,6 +63,12 @@ export interface DatasetConfig {
 }
 
 export const DATASETS: Record<string, DatasetConfig> = {
+  "monet-clip-basemap-training-512": {
+    path: "/chunks/monet-clip-basemap-training-20260905a-512-stream",
+    label: "MONET · CLIP ViT-B/32 · basemap · 2.01M · 512³",
+    pointsId: "monet-clip-basemap-training-20260905a",
+    minimapPath: "/minimap/monet-clip-basemap-training-20260905a",
+  },
   // Display the projection embedding separately from the sampling arm. MONET's
   // SSCD label describes how rows were drawn, not the embedding used by UMAP.
   // Verified source/model evidence: docs/dataset-provenance.md. Keep URL keys and

@@ -7,6 +7,7 @@ describe("dataset identities", () => {
     for (const [id, dataset] of Object.entries(DATASETS)) {
       if (!id.startsWith("monet-")) continue;
       expect(dataset.label).toContain("CLIP ViT-B/32");
+      if (id.includes("basemap")) continue;
       expect(dataset.label).toContain(`draw · 2M · ${id.split("-").at(-1)}³`);
       expect(dataset.pointsId).toBe(id.replace(/-(160|512)$/, ""));
     }
@@ -21,5 +22,13 @@ describe("dataset identities", () => {
       minimapPath: "/minimap/monet-sscd",
     });
     expect(DATASETS["monet-sscd-160"].path).toBe("/chunks/monet-sscd-160-stream-20260904b");
+  });
+
+  it("keeps basemap training rows separate from the SSCD draw", () => {
+    expect(DATASETS["monet-clip-basemap-training-512"]).toMatchObject({
+      label: expect.stringContaining("basemap · 2.01M · 512³"),
+      pointsId: "monet-clip-basemap-training-20260905a",
+      minimapPath: "/minimap/monet-clip-basemap-training-20260905a",
+    });
   });
 });
