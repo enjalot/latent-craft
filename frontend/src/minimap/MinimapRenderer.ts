@@ -119,7 +119,7 @@ export class MinimapRenderer {
       padding: "1px 2px 4px",
     } satisfies Partial<CSSStyleDeclaration>);
     const title = document.createElement("span");
-    title.textContent = "Map · 2D UMAP";
+    title.textContent = "Map · 2D";
     const count = document.createElement("span");
     count.textContent = `${pack.nPoints.toLocaleString()} pts`;
     count.classList.add(HUD_CLASS.dim);

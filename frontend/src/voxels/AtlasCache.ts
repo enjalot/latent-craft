@@ -153,7 +153,9 @@ export class AtlasCache {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.wrapS = THREE.ClampToEdgeWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
-    texture.magFilter = THREE.LinearFilter;
+    // Crisp pixel-art enlargement; retain linear minification for distant
+    // tiles. The independent 128px preview array keeps its smooth filters.
+    texture.magFilter = THREE.NearestFilter;
     // Legacy packs contain a full mip chain, but atlases are deliberately
     // sampled at level 0: once a mip texel spans a tile boundary it can show a
     // neighbouring image. KTX2Loader transcodes every level it keeps, and

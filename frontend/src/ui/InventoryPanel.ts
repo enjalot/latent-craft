@@ -115,6 +115,7 @@ export class InventoryPanel {
   private stackPage = 0;
   private readonly stackPager = document.createElement("button");
   readonly minimapDock = document.createElement("div");
+  readonly actionsDock = document.createElement("div");
   private readonly emptyEl: HTMLElement;
   /** Public so `main.ts` can hang it off `window.lsv` for the headless
    * harness (current row, original-load status). */
@@ -188,6 +189,7 @@ export class InventoryPanel {
       this.setCollapsed(!this.collapsed);
     });
     this.root.appendChild(this.headerEl);
+    this.root.appendChild(this.actionsDock);
 
     this.bodyEl = document.createElement("div");
     Object.assign(this.bodyEl.style, {

@@ -83,7 +83,9 @@ export class SharpBand {
       if (owners.has(key)) continue;
       owners.set(key, v);
       v.owner.mesh.getMatrixAt(v.instanceId, this.matrix);
-      const matrix = this.matrix.clone().scale(new THREE.Vector3(1.012, 1.012, 1.012));
+      // The source's coverage is zero while replaced, so no enlarged overlay
+      // or depth bias is needed. Preserve exact clearance from border cages.
+      const matrix = this.matrix.clone();
       targets.push({ key, matrix, opacity: combinedVoxelOpacity(this.mining.extractedFraction(v.chunkId, v.localVoxelId), xray),
         valid: () => this.store.chunk(v.chunkId) === v.owner && !this.mining.isFullyExtracted(v.chunkId, v.localVoxelId),
         resolve: async () => {

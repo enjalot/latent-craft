@@ -96,14 +96,12 @@ This keeps broad coverage while spending sharp-image memory near interaction.
 
 ## Effector geometry
 
-The old point sprites are replaced by actual triangle meshes curved onto the
-camera-centered sphere. Three concentric marker rings follow the mouse direction,
-not a point on whichever cube happens to be hovered. Every generated vertex lies
-at the suppression radius, including when looking into empty space. Rectangles
-are 1 voxel long and 0.2 voxel wide along the surface. The nominal ring-center
-offsets are geodesic distances of 3, 6, and 9 voxels from the mouse direction;
-spacing compresses when those offsets cannot fit the forward view at a small
-radius. Markers appear on wheel input, hold briefly, and fade out by 900ms.
+Superseded by the [solid-marker visual pass](game-session-and-visuals.md):
+72 beveled solid bars, merged into one draw, have their centres on the true
+camera-centred sphere. Fixed slots prevent rotation/pop. Angular aperture now
+grows with radius so scrolling is visible in empty space; the original fixed
+3/6/9 geodesic offsets and curved surface patches did not provide that cue.
+Markers appear while resizing, hold briefly, and fade out by 900ms.
 
 Tests cover surface radii/aim/fade, the sharp shell, concurrency/upload/cache
 bounds, stale async completion, retry backoff, transparent state, and independent

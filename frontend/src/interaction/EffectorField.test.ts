@@ -18,15 +18,39 @@ function radiiOf(geometry: ReturnType<typeof buildEffectorSurfaceGeometry>): num
 }
 
 describe("Effector surface rectangles", () => {
-  it("puts every rectangle vertex on the real boundary at all field radii", () => {
+  it("uses closed, lit solids centred on the boundary with stable slots and clearance", () => {
     for (const radius of [1, 2, 2.25, 9, 48]) {
       const geometry = buildEffectorSurfaceGeometry(radius);
-      expect(geometry.getAttribute("position").count).toBe(effectorRingLayout(radius).reduce((n,r) => n+r.count*24,0));
-      expect(radiiOf(geometry)).toEqual([radius]);
+      const positions = geometry.getAttribute("position");
+      expect(geometry.getAttribute("normal").count).toBe(positions.count);
+      expect(geometry.groups).toHaveLength(0); // one draw, not one per bar
+      const radii = radiiOf(geometry);
+      expect(radii[0]).toBeLessThan(radius);
+      expect(radii.at(-1)).toBeGreaterThan(radius);
+      const layout = effectorRingLayout(radius);
+      expect(layout.map(r => r.count)).toEqual([12, 24, 36]);
+      const verticesPerBar = positions.count / 72;
+      let start = 0;
+      for (const ring of layout) {
+        const chord = 2 * radius * Math.sin(ring.angle) * Math.sin(Math.PI / ring.count);
+        expect(Math.hypot(ring.length, ring.width, ring.depth)).toBeLessThan(chord);
+        expect(ring.length).toBeLessThanOrEqual(1);
+        for (let bar = 0; bar < ring.count; bar++) {
+          const centre = new THREE.Vector3();
+          for (let v = 0; v < verticesPerBar; v++) centre.add(new THREE.Vector3().fromBufferAttribute(positions, start++));
+          centre.divideScalar(verticesPerBar);
+          expect(centre.length()).toBeCloseTo(radius, 5);
+          expect(Math.atan2(centre.y, centre.x)).toBeCloseTo(Math.atan2(Math.sin(bar * 2 * Math.PI / ring.count), Math.cos(bar * 2 * Math.PI / ring.count)), 5);
+        }
+      }
       geometry.dispose();
     }
-    expect(effectorRingLayout(48).map(r => r.offset)).toEqual([3,6,9]);
-    expect(effectorRingLayout(2).map(r => r.offset)).toEqual([.3,.6,.8999999999999999]);
+    // Projected radius (tan(angle)), not just world radius, must grow in
+    // open space. Otherwise camera-centred scaling is visually invisible.
+    for (let radius = 1; radius < 48; radius += .25) {
+      const before = effectorRingLayout(radius), after = effectorRingLayout(radius + .25);
+      for (let ring = 0; ring < 3; ring++) expect(Math.tan(after[ring].angle)).toBeGreaterThan(Math.tan(before[ring].angle));
+    }
     expect(() => effectorRingLayout(0)).toThrow();
     expect(() => effectorRingLayout(Infinity)).toThrow();
   });

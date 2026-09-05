@@ -1,5 +1,6 @@
 import { Store } from "../ui/store.ts";
 import { ChunkedRows } from "./ChunkedRows.ts";
+import type { SavedStack } from "./MiningSave.ts";
 
 /**
  * One source voxel's worth of EXTRACTED points.
@@ -57,6 +58,18 @@ export class Inventory {
   readonly store = new Store<InventoryStack[]>([]);
 
   private readonly byId = new Map<string, InventoryStack>();
+
+  replace(stacks: readonly SavedStack[]): void {
+    const next = stacks.map(s => {
+      const rowIds = new ChunkedRows();
+      for (const row of s.rowIds) rowIds.push(row);
+      return { id: s.id, chunkId: s.chunkId, localVoxelId: s.localVoxelId, totalPoints: s.totalPoints,
+        reprRowId: s.reprRowId, firstExtractedAt: s.firstExtractedAt, lastExtractedAt: s.lastExtractedAt, rowIds, revision: 1 };
+    });
+    this.byId.clear();
+    for (const s of next) this.byId.set(s.id, s);
+    this.store.set(next);
+  }
 
   stack(id: string): InventoryStack | undefined {
     return this.byId.get(id);

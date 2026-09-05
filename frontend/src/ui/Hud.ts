@@ -33,7 +33,7 @@ export interface HudState {
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB"];
+  const units = ["KiB", "MiB", "GiB"];
   let value = bytes / 1024;
   let unit = 0;
   while (value >= 1024 && unit < units.length - 1) {
@@ -63,6 +63,10 @@ export class Hud {
   private readonly header: HTMLElement;
   private readonly toggleGlyph: HTMLElement;
   private readonly body: HTMLElement;
+  private readonly controls = document.createElement("div");
+  private readonly readout = document.createElement("div");
+  private radiusInput: HTMLInputElement | null = null;
+  private radiusOutput: HTMLOutputElement | null = null;
   private lastText = "";
   private collapsed = false;
 
@@ -75,7 +79,9 @@ export class Hud {
       left: "14px",
       fontSize: "11px",
       lineHeight: "1.65",
-      pointerEvents: "none",
+      pointerEvents: "auto",
+      width: "min(420px, calc(100vw - 28px))",
+      boxSizing: "border-box",
       zIndex: "10",
     } satisfies Partial<CSSStyleDeclaration>);
     applyHudPanelChrome(this.root);
@@ -91,19 +97,24 @@ export class Hud {
       pointerEvents: "auto",
       userSelect: "none",
     } satisfies Partial<CSSStyleDeclaration>);
-    this.header.title = "Toggle HUD";
+    this.header.title = "Expand/collapse settings";
     this.header.tabIndex = 0;
     this.header.setAttribute("role", "button");
 
     const label = document.createElement("span");
-    label.textContent = "Telemetry";
+    label.textContent = "Settings";
     applyHudTitle(label);
 
     this.toggleGlyph = document.createElement("span");
     this.toggleGlyph.classList.add(HUD_CLASS.title);
     this.toggleGlyph.style.letterSpacing = "0";
 
-    this.header.appendChild(label);
+    const heading = document.createElement("div");
+    const help = document.createElement("div");
+    help.textContent = "Drag to look · WASD fly · Space / Shift up / down\nDouble-tap W to sprint · Scroll to resize field";
+    Object.assign(help.style, { whiteSpace: "pre-line", fontSize: "10px", opacity: ".7", marginTop: "3px" });
+    heading.append(label, help);
+    this.header.appendChild(heading);
     this.header.appendChild(this.toggleGlyph);
     this.header.addEventListener("click", () => this.setCollapsed(!this.collapsed));
     this.header.addEventListener("keydown", (event) => {
@@ -116,15 +127,44 @@ export class Hud {
     this.body.classList.add(HUD_CLASS.readout);
     Object.assign(this.body.style, {
       padding: "7px 14px 11px",
-      whiteSpace: "pre",
+      whiteSpace: "normal",
       letterSpacing: "0.02em",
     } satisfies Partial<CSSStyleDeclaration>);
+    Object.assign(this.readout.style, { whiteSpace: "pre-wrap", overflowWrap: "anywhere", opacity: ".7" });
+    this.body.append(this.controls, this.readout);
 
     this.root.appendChild(this.header);
     this.root.appendChild(this.body);
     container.appendChild(this.root);
 
     this.setCollapsed(this.readPersistedCollapsed());
+  }
+
+  configure(options: { speed: number; radius: number; maxRadius: number; onSpeed: (value: number) => void; onRadius: (value: number) => void }): void {
+    this.controls.replaceChildren();
+    const slider = (name: string, value: number, min: number, max: number, step: number, unit: string, change: (n: number) => void) => {
+      const label = document.createElement("label");
+      const output = document.createElement("output");
+      const input = document.createElement("input");
+      input.type = "range"; input.min = String(min); input.max = String(max); input.step = String(step); input.value = String(value);
+      input.setAttribute("aria-label", name);
+      Object.assign(label.style, { display: "grid", gridTemplateColumns: "1fr auto", gap: "3px", marginBottom: "10px" });
+      Object.assign(input.style, { gridColumn: "1 / -1", width: "100%", accentColor: "#7fffe0", margin: "0" });
+      const update = () => { output.value = `${Number(input.value)} ${unit}`; };
+      update(); input.addEventListener("input", () => { update(); change(Number(input.value)); });
+      label.append(document.createTextNode(name), output, input); this.controls.append(label);
+      return { input, output };
+    };
+    slider("Flying speed", options.speed, 1, 64, 1, "voxels/s", options.onSpeed);
+    const radius = slider("Effector radius", options.radius, 1, options.maxRadius, .25, "voxels", options.onRadius);
+    this.radiusInput = radius.input; this.radiusOutput = radius.output;
+  }
+
+  updateRadius(radius: number): void {
+    if (!this.radiusInput || !this.radiusOutput) return;
+    const value = String(Math.round(radius * 100) / 100);
+    if (this.radiusInput.value !== value) this.radiusInput.value = value;
+    if (this.radiusOutput.value !== `${value} voxels`) this.radiusOutput.value = `${value} voxels`;
   }
 
   private readPersistedCollapsed(): boolean {
@@ -157,14 +197,13 @@ export class Hud {
     const lines: string[] = [];
     if (state.streaming) {
       const s = state.streaming;
-      lines.push(`dataset: ${s.dataset}`);
       lines.push(
         `chunks: ${s.chunksResident}/${s.chunksTotal} resident` +
           (s.chunksLoading > 0 ? `, ${s.chunksLoading} loading` : "") +
           (s.chunksFailed > 0 ? `, ${s.chunksFailed} failed` : "") +
-          ` · proxy voxels: ${s.proxyVoxelsShown.toLocaleString()} shown`,
+          `\nproxies: ${s.proxyVoxelsShown.toLocaleString()} voxels`,
       );
-      lines.push(`atlases: ${formatBytes(s.atlasBytes)}`);
+      lines.push(`atlas + chunk data: ${formatBytes(s.atlasBytes)}`);
     }
     lines.push(`FPS: ${state.fps.toFixed(0)}`);
     lines.push(`voxels: ${state.residentInstances.toLocaleString()} resident`);
@@ -175,21 +214,15 @@ export class Hud {
     }
     const p = state.cameraPosition;
     lines.push(`pos: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`);
-    lines.push(`hover: ${state.hoverLabel}`);
     if (state.status) lines.push(state.status);
     // Free-mouse scheme (Phase 3.5): always-on reference line, since there's
     // no more "click to engage" moment to hide it after.
-    lines.push(
-      state.dragging
-        ? "dragging to look…"
-        : "drag to look · WASD fly · double-tap W = sprint · Space/Shift up/down · hold a voxel to extract it",
-    );
 
     // The HUD text changes at most a few characters per frame; skipping the
     // DOM write when nothing changed keeps it off the layout path entirely.
     const text = lines.join("\n");
     if (text !== this.lastText) {
-      this.body.textContent = text;
+      this.readout.textContent = text;
       this.lastText = text;
     }
   }

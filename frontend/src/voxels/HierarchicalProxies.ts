@@ -24,7 +24,7 @@ export class HierarchicalProxies {
   private readonly material = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
   // Missing-detail regions are a faint spatial hint, not solid obstacles.
   private readonly coarseMaterial = new THREE.MeshBasicMaterial({
-    transparent: true, opacity: 0.08, depthWrite: false,
+    transparent: true, opacity: 0.16, depthWrite: false,
   });
   private readonly coarseIds: ProxyVoxel[] = [];
   private readonly handles = new Map<number, { brick: Brick; instance: number }>();

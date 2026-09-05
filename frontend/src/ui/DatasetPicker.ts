@@ -25,6 +25,8 @@ export class DatasetPicker {
       padding: "6px 9px",
       pointerEvents: "auto",
       fontSize: "11px",
+      width: "min(420px, calc(100vw - 28px))",
+      boxSizing: "border-box",
     } satisfies Partial<CSSStyleDeclaration>);
     applyHudPanelChrome(this.root, { variant: "inset", corners: false });
 
@@ -36,6 +38,7 @@ export class DatasetPicker {
     const select = document.createElement("select");
     select.id = "ls-dataset-select";
     select.className = "hud-select";
+    Object.assign(select.style, { flex: "1", minWidth: "0", width: "0" });
     select.setAttribute("aria-label", "Dataset");
 
     const bl = document.createElement("optgroup");
@@ -66,6 +69,7 @@ export class DatasetPicker {
     }
     const initialValue = synthetic ? SYNTHETIC_VALUE : currentKey;
     select.value = initialValue;
+    select.title = select.selectedOptions[0]?.textContent ?? "Choose dataset";
     select.addEventListener("change", () => {
       if (select.value === initialValue) return;
       const url = new URL(window.location.href);

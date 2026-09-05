@@ -266,23 +266,15 @@ export const SUN_DIRECTION: readonly [number, number, number] = [1, 1.4, 0.8];
  * field on purpose — most BL book illustrations are dark ink on near-white
  * paper, and Phase 1's intensities blew the paper out to flat white.
  *
- * Intensities 1.35 / 1.55 -> 1.0 / 1.2 with the headlamp: measured on a real
- * voxel's camera-facing face (`gl.readPixels`, fog off), the old rig lit it to
- * luminance 151/255 regardless of distance. This rig alone lights the same
- * face to 141-145 (everything is ~7% darker at every distance — less than the
- * intensity cut suggests because `VOXEL_UNDERLIGHT` is independent of the
- * lights), and the headlamp then adds back +45 at 1 unit, +25 at 3 and nothing
- * beyond 25 — so the near field ends up brighter than before, the far field a
- * little darker, and the difference between the two is the cue. Going lower
- * than this made the mid-field (10-25 units, where the headlamp has already
- * fallen off and the fog has barely started) read as murky rather than
- * distant.
+ * A stronger warm key and quieter fill now separate faces more clearly.
+ * main.ts adds a cool rim, Engine bakes a small lighting-only environment and
+ * rolls off highlights with ACES. No shadow maps or postprocessing passes.
  */
 export const HEMISPHERE_SKY_COLOR = 0xbcd0ff;
 export const HEMISPHERE_GROUND_COLOR = 0x14141f;
-export const HEMISPHERE_INTENSITY = 1.0;
+export const HEMISPHERE_INTENSITY = 0.75;
 export const SUN_COLOR = 0xfff2e0;
-export const SUN_INTENSITY = 1.2;
+export const SUN_INTENSITY = 1.8;
 
 /**
  * Headlamp: a `THREE.PointLight` that follows the camera (`Engine` re-places
@@ -351,12 +343,10 @@ export const HEADLAMP_RANGE = WORLD_SCALE * 0.5;
 
 /**
  * Container edge as a multiple of the cube edge (`manifest.voxelWorldSize *
- * VOXEL_FILL`). 1.08 leaves a 4%-of-edge gap on every side — enough that the
- * cage reads as a shell AROUND the block rather than paint ON it, and small
- * enough that with `VOXEL_FILL` at 0.8 neighbouring cages (0.864 of a cell
- * each) still clear each other by 13% of a cell.
+ * VOXEL_FILL`). 1.04 leaves a 2%-of-edge gap per face: a close-fitting housing
+ * with clearance from the image cube (including its sharp replacement).
  */
-export const CONTAINER_SCALE = 1.08;
+export const CONTAINER_SCALE = 1.04;
 
 /** Cages are fine detail, unlike the thumbnail cubes themselves. Past this
  * camera-to-chunk-center distance they contribute mostly fragment discard and
@@ -395,31 +385,26 @@ export function capacityForPoints(points: number): number {
 /**
  * Rail width at capacity 0 and 1, as a fraction of the container edge.
  *
- * The cube's thumbnail has to stay the dominant thing on screen, so even the
- * heaviest rail covers only ~11% of an edge per side — at the spawn framing a
- * cube is ~40-60px across, which puts the rails at ~1.5px (a 1-point voxel: a
- * hairline frame that anti-aliases to a faint outline) up to ~6px (a
- * thousand-point voxel: an unmistakable girder). Rails narrower than ~3% of an
- * edge vanish entirely at browsing distance rather than reading as thin.
+ * 2.5–6.5% keeps the thumbnail dominant. Fine brushed detail is filtered out
+ * at distance; broader pale chamfers remain readable around the inset channel.
  */
-export const CONTAINER_RAIL_WIDTH_MIN = 0.035;
-export const CONTAINER_RAIL_WIDTH_MAX = 0.11;
+export const CONTAINER_RAIL_WIDTH_MIN = 0.025;
+export const CONTAINER_RAIL_WIDTH_MAX = 0.065;
 
 /**
  * Corner brackets: an L-shaped plate at each of the cube's 8 corners, this far
  * along each edge from the corner (fraction of the container edge, at
  * capacity 0 and 1) and this many rail-widths wide. Brackets grow with
  * capacity for the same reason rails do — a heavy crate is braced at the
- * corners, a light one just has edges — and they carry no tick/rivet texture
- * so they read as solid plates against the segmented rails between them.
+ * corners, a light one just has edges. Ceramic shoulder inlays distinguish
+ * the corner plates from the seamed rails between them.
  */
-export const CONTAINER_BRACKET_LENGTH_MIN = 0.14;
-export const CONTAINER_BRACKET_LENGTH_MAX = 0.3;
-export const CONTAINER_BRACKET_WIDTH_MULT = 1.75;
+export const CONTAINER_BRACKET_LENGTH_MIN = 0.10;
+export const CONTAINER_BRACKET_LENGTH_MAX = 0.20;
+export const CONTAINER_BRACKET_WIDTH_MULT = 1.45;
 
 /**
- * Segment ticks per rail (dark notches across the rail, with a rivet at each
- * segment's centre) at capacity 0 and 1. More segments == more hardware ==
+ * Fine expansion seams per rail at capacity 0 and 1. More seams == more hardware ==
  * more inside; 3 is the fewest that still reads as a segmented rail rather
  * than a plain bar, and past ~11 the notches on a 6px rail merge into noise.
  */
@@ -432,8 +417,8 @@ export const CONTAINER_TICKS_MAX = 11;
  * A neutral near-white — no hue at all. It was a cool blue-grey steel
  * (`0x9aa6b4`) with a warm orange fill-line running along every rail, until
  * direct feedback: "i dont want orange on the greeble texture, lets use a more
- * neutral white." So the cage is now one material, a plain pale metal, and
- * every tone on it (rail body, rivet heads at 1.35x, the dark notches) is
+ * neutral white." The cage keeps pale metal and graphite channels, and
+ * every tone on it (brushed body, chamfers, ceramic inlays, fine seams) is
  * this colour at some brightness. Still unmistakably "not the thumbnail"
  * against BL's warm paper/ink scans and MONET's paintings — a grey frame reads
  * as hardware around a picture, not as part of it — and still a clear step
@@ -995,22 +980,18 @@ export const SYNTHETIC_INSTANCE_COUNT = 150_000;
  * rest of the trip is flat proxy voxels resolving into thumbnails as you
  * arrive — see `RING_R0_CHUNKS`.)
  *
- * 16 -> 8, from the next round of real use: "the movement speed is still too
- * fast, we should move half as fast in all directions." Cruise is now for
- * browsing — reading thumbnails as they go by — and covering distance is an
- * explicit, opt-in gesture instead: double-tap-and-hold W sprints at
- * `FLIGHT_SPRINT_MULTIPLIER` x this (Minecraft's own sprint binding, so it
- * needs no new key). At 8 an axis takes ~12.5s to cross at cruise, ~5s
- * sprinting.
+ * Fallback for the synthetic world. Real datasets override this in Settings
+ * with voxel-relative speed: default 8 cells/s (1.5625 world units/s at 512³).
+ * Double-tap-and-hold W remains the explicit opt-in sprint gesture.
  */
-export const FLIGHT_SPEED = 8;
+export const FLIGHT_SPEED = 2;
 
 /** Vertical (Space/Shift, or the legacy E/Q) speed, world units / second.
  * Matched to `FLIGHT_SPEED` on purpose: with vertical bound to the same hand
  * position as in Minecraft creative, a slower climb than cruise reads as the
  * controls sticking rather than as a deliberate axis difference. Halved with
  * it ("half as fast in all directions"). */
-export const FLIGHT_VERTICAL_SPEED = 8;
+export const FLIGHT_VERTICAL_SPEED = 2;
 
 /**
  * Exponential time constant (seconds) the actual flight velocity takes to

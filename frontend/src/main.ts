@@ -24,6 +24,7 @@ import { MiningController, type ExtractionCycle } from "./interaction/MiningCont
 import { PointerController, type VoxelTarget } from "./interaction/PointerController.ts";
 import { XRayController } from "./interaction/XRayController.ts";
 import { EffectorFieldController } from "./interaction/EffectorField.ts";
+import { GameSession } from "./interaction/GameSession.ts";
 import { planVoxelFlight } from "./interaction/VoxelFlight.ts";
 import { Hud, type HudStreamingState } from "./ui/Hud.ts";
 import { DatasetPicker } from "./ui/DatasetPicker.ts";
@@ -83,6 +84,10 @@ engine.scene.add(hemiLight);
 const sunLight = new THREE.DirectionalLight(SUN_COLOR, SUN_INTENSITY);
 sunLight.position.set(...SUN_DIRECTION);
 engine.scene.add(sunLight);
+// Cool edge separation against the warm key, without shadow-map passes.
+const rimLight = new THREE.DirectionalLight(0x94cfff, .65);
+rimLight.position.set(-2, .6, -1.5);
+engine.scene.add(rimLight);
 
 const flightControls = new FlightControls(engine.camera);
 
@@ -188,6 +193,7 @@ let xrayController: XRayController | null = null;
 let effectorField: EffectorFieldController | null = null;
 let minimap: MinimapBridge | null = null;
 let inventoryPanel: InventoryPanel | null = null;
+let gameSession: GameSession | null = null;
 let syntheticVoxelField: InstancedMesh2 | null = null;
 
 // --- pointer: click-and-drag to look, click-and-HOLD to extract -------------
@@ -411,6 +417,19 @@ async function bootstrapStreamedWorld(): Promise<void> {
     // first thing on screen is the most interesting part of the embedding
     // rather than an arbitrary corner of empty space.
     frameDensestChunk(manifest);
+    gameSession = new GameSession(datasetKey, manifest, miningController, inventoryPanel, loadPointIndexOnce);
+    const settings = gameSession.settings;
+    flightControls.setSpeed(settings.speed * manifest.voxelWorldSize);
+    effectorField.setRadiusVoxels(settings.radius, false);
+    if (settings.position) engine.camera.position.fromArray(settings.position);
+    if (settings.quaternion) {
+      engine.camera.quaternion.fromArray(settings.quaternion).normalize();
+      const forward = engine.camera.getWorldDirection(new THREE.Vector3());
+      flightControls.lookAt(engine.camera.position.clone().add(forward));
+    }
+    hud.configure({ speed: settings.speed, radius: settings.radius, maxRadius: 48,
+      onSpeed: value => { settings.speed = value; flightControls.setSpeed(value * manifest!.voxelWorldSize); },
+      onRadius: value => effectorField?.setRadiusVoxels(value) });
     // Places the always-on field at the post-frame spawn before the first
     // chunk residency callback can apply suppression.
     effectorField.update(engine.camera);
@@ -607,6 +626,10 @@ engine.start((dt) => {
   chunkStore?.updateCamera(engine.camera);
   if (voxelProxy instanceof HierarchicalProxies) voxelProxy.update(engine.camera);
   effectorField?.update(engine.camera, pointerController.ndc);
+  if (effectorField) {
+    hud.updateRadius(effectorField.currentRadiusVoxels);
+    gameSession?.saveSettings(engine.camera.position.toArray(), engine.camera.quaternion.toArray(), effectorField.currentRadiusVoxels);
+  }
   minimap?.update(engine.camera, dt);
   // Self-corrects a stuck inventory-hover flashlight; a no-op (one null check)
   // whenever no inventory row is hovered. See `InventoryPanel.validateHover`
@@ -850,6 +873,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
     get inventoryPanel() {
       return inventoryPanel;
     },
+    get gameSession() { return gameSession; },
     // The inventory's lightbox: `currentRowId`, `status` (the rendered
     // status line), `state` (`LightboxOriginalState`), `originalSrc` (the
     // original on screen, or null) — what the harness reads to prove an
@@ -884,6 +908,8 @@ function disposeApp(): void {
   window.removeEventListener("pagehide", disposeApp);
   appLifetime.abort();
   engine.stop();
+  if (effectorField) gameSession?.saveSettings(engine.camera.position.toArray(), engine.camera.quaternion.toArray(), effectorField.currentRadiusVoxels, true);
+  gameSession?.dispose(); gameSession = null;
 
   pointerController.dispose();
   flightControls.dispose();

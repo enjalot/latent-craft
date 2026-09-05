@@ -16,6 +16,22 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 afterEach(() => { pools.splice(0).forEach(p => p.dispose()); vi.restoreAllMocks(); });
 
 describe("bounded sharp preview pool", () => {
+  it("keeps mining fades in the depth-writing queue, before neighbouring cages", async () => {
+    const p = pool(), a = target("a"), b = target("b");
+    p.update([a,b],false,camera); await settle(); p.update([a,b],false,camera);
+    const version = p.mesh.material.version;
+    for (const opacity of [.9, .5, .1, 1]) {
+      p.update([{...a,opacity},b],false,camera);
+      expect(p.mesh.material.transparent).toBe(false);
+      expect(p.mesh.material.depthWrite).toBe(true);
+      expect(p.mesh.material.alphaToCoverage).toBe(true);
+      expect(p.mesh.renderOrder).toBe(0);
+      expect(p.mesh.material.version).toBe(version);
+    }
+    expect(p.texture.magFilter).toBe(THREE.LinearFilter);
+    p.update([a,b],true,camera);
+    expect(p.mesh.material.alphaToCoverage).toBe(false);
+  });
   it("uses 128px / 128 layers and honors fetch, upload, and slot caps", async () => {
     const load = vi.fn(async () => pixels()), p = pool(load);
     const targets = Array.from({ length: 1000 }, (_,i) => target(String(i)));

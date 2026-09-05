@@ -25,6 +25,9 @@ describe("AtlasCache", () => {
     const texture = new THREE.DataTexture(new Uint8Array(64), 4, 4);
     const cache = cacheWith({ loadAsync: async () => texture, dispose: vi.fn() });
     await cache.acquire('rgba.ktx2');
+    expect(texture.magFilter).toBe(THREE.NearestFilter);
+    expect(texture.minFilter).toBe(THREE.LinearFilter);
+    expect(texture.generateMipmaps).toBe(false);
     expect(cache.byteSize('rgba.ktx2', 8)).toBe(64);
     cache.release('rgba.ktx2');
     cache.dispose();

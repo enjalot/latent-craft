@@ -67,7 +67,7 @@ export class PreviewPool {
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     geometry.setAttribute("previewLayer", this.layers);
     geometry.setAttribute("previewAlpha", this.alphas);
-    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false, alphaToCoverage: true });
     material.onBeforeCompile = shader => {
       shader.uniforms.previewMap = { value: this.texture };
       shader.vertexShader = `attribute float previewLayer, previewAlpha; varying vec3 previewUv; varying float previewOpacity;\n${shader.vertexShader}`
@@ -75,12 +75,12 @@ export class PreviewPool {
       shader.fragmentShader = `uniform highp sampler2DArray previewMap; varying vec3 previewUv; varying float previewOpacity;\n${shader.fragmentShader}`
         .replace("#include <map_fragment>", "diffuseColor *= texture(previewMap, previewUv); diffuseColor.a *= previewOpacity;");
     };
-    material.customProgramCacheKey = () => "sharp-preview-array-v1";
+    material.customProgramCacheKey = () => "sharp-preview-array-v2";
     this.mesh = new THREE.InstancedMesh(geometry, material, PREVIEW_SLOTS);
     this.mesh.name = "sharp-band-128px";
     this.mesh.count = 0;
     this.mesh.frustumCulled = false;
-    this.mesh.renderOrder = 1;
+    this.mesh.renderOrder = 0;
     // No overlay ever participates in interaction raycasts.
     this.mesh.raycast = () => {};
     scene.add(this.mesh);
@@ -141,7 +141,11 @@ export class PreviewPool {
     // Transparent previews have far-to-near instance order; their alpha is
     // the same as the source cube. Never replace glass with opaque overlays.
     const visible = this.desired.filter(t => this.entries.get(t.key)?.state === "ready");
-    const transparent = xray || visible.some(t => t.opacity < 1);
+    // Mining must NOT move the entire pool into the transparent queue: one
+    // fading image would then overpaint neighbouring depth-write-free cages.
+    // Normal mining uses the same MSAA coverage path as the base cubes;
+    // only explicit X-ray switches queues (and X-ray hides cages).
+    const transparent = xray;
     if (transparent) visible.sort((a,b) => distance2(b.matrix, camera.position) - distance2(a.matrix, camera.position));
     let count = 0;
     this.visibleKeys.clear();
@@ -156,6 +160,7 @@ export class PreviewPool {
     this.mesh.instanceMatrix.needsUpdate = true; this.layers.needsUpdate = true; this.alphas.needsUpdate = true;
     if (this.mesh.material.transparent !== transparent) {
       this.mesh.material.transparent = transparent; this.mesh.material.depthWrite = !transparent;
+      this.mesh.material.alphaToCoverage = !transparent;
       this.mesh.material.needsUpdate = true;
     }
   }

@@ -69,6 +69,7 @@ const CONTAINER_VERTEX_SHADER = /* glsl */ `
 #include <fog_pars_vertex>
 varying vec3 vLocal;
 varying vec3 vNormalLocal;
+varying vec3 vViewPosition;
 
 void main() {
 	#include <batching_vertex>
@@ -76,6 +77,7 @@ void main() {
 	vNormalLocal = normal;
 	vec3 transformed = position;
 	#include <project_vertex>
+	vViewPosition = -mvPosition.xyz;
 	#include <fog_vertex>
 }
 `;
@@ -97,12 +99,10 @@ void main() {
  *    is discarded, so the cube's thumbnail shows through untouched and the
  *    cage never occludes a neighbour. All boundaries are `fwidth`-anti-aliased
  *    so a distant hairline fades rather than shimmers.
- * 2. **Rail body.** Frame tint × capacity brightness × a rounded-bar profile
- *    (highlight a third of the way in, shadow at the inner boundary) × the
- *    scene's sun on the face normal.
- * 3. **Texture.** Rails (not brackets) carry `ticks` segments: a dark notch
- *    across the rail at each boundary and a rivet — dark ring, bright head — at
- *    each centre.
+ * 2. **Rail body.** Pale chamfers surround recessed graphite channels;
+ *    view-dependent highlights respond to the shared sun direction.
+ * 3. **Texture.** Derivative-filtered brushed grain, thin expansion seams,
+ *    and rectangular ceramic inlays on the corner shoulders. No extra maps.
  * 4. **Depletion.** Two linear ramps on `fullness` applied to the WHOLE cage,
  *    one after the other (`CONTAINER_DEPLETION_*` in config.ts): from 1 down
  *    to the brightness breakpoint the colour is scaled toward the brightness
@@ -119,6 +119,7 @@ uniform vec3 uFrameColor;
 uniform vec3 uSunDir;
 varying vec3 vLocal;
 varying vec3 vNormalLocal;
+varying vec3 vViewPosition;
 
 void main() {
 	vec3 an = abs( vNormalLocal );
@@ -144,27 +145,33 @@ void main() {
 
 	// --- rail body -----------------------------------------------------------
 	float prof = clamp( e / w, 0.0, 1.0 );
-	float bar = 1.0 - 0.45 * smoothstep( 0.4, 1.0, prof )
-	          + 0.18 * ( 1.0 - smoothstep( 0.0, 0.3, abs( prof - 0.22 ) ) );
+	// Recessed graphite channel, pale chamfer and fine brushed-metal grain.
+	float bevel = 1.0 - smoothstep( 0.12, 0.30, prof );
+	float inset = smoothstep( 0.30, 0.43, prof ) * ( 1.0 - smoothstep( 0.77, 0.9, prof ) );
+	float grainScale = 1600.0;
+	float grain = sin( e * grainScale ) * ( 1.0 - smoothstep( .5, 2.0, fwidth(e) * grainScale ) );
+	float bar = (0.62 + bevel * .65 - inset * .27) * (1.0 + grain * .045);
 	float light = 0.6 + 0.4 * max( dot( vNormalLocal, uSunDir ), 0.0 );
 	float bright = mix( ${f(CONTAINER_FRAME_BRIGHTNESS_MIN)}, ${f(CONTAINER_FRAME_BRIGHTNESS_MAX)}, capacity );
 	vec3 body = uFrameColor * bright * bar * light;
 
-	// --- ticks + rivets (rails only) ----------------------------------------
+	// Fine expansion seams, not oversized screws. Derivatives filter details
+	// away when subpixel, so distant rails don't sparkle while flying.
 	float ticks = floor( mix( ${f(CONTAINER_TICKS_MIN)}, ${f(CONTAINER_TICKS_MAX)}, capacity ) + 0.5 );
 	float seg = fract( ( s + 1.0 ) * 0.5 * ticks );
 	float g = abs( seg - 0.5 ) * 2.0;
 	float aaG = fwidth( g ) * 0.8;
-	float notch = smoothstep( 0.86 - aaG, 0.86 + aaG, g ) * ( 1.0 - bracket );
-	body *= 1.0 - 0.55 * notch;
-
-	vec2 rv = vec2( ( seg - 0.5 ) * 2.0 / ticks, ( prof - 0.5 ) * w );
-	float rr = w * 0.22;
-	float rd = length( rv );
-	float rivet = ( 1.0 - smoothstep( rr - aaE, rr + aaE, rd ) ) * ( 1.0 - bracket );
-	float rivetHead = ( 1.0 - smoothstep( rr * 0.5 - aaE, rr * 0.5 + aaE, rd ) ) * ( 1.0 - bracket );
-	body = mix( body, body * 0.45, rivet );
-	body = mix( body, uFrameColor * bright * light * 1.35, rivetHead );
+	float notch = smoothstep( 0.94 - aaG, 0.94 + aaG, g ) * ( 1.0 - bracket );
+	body *= 1.0 - 0.40 * notch;
+	// Neutral ceramic inlay on each corner shoulder; restrained, rectangular.
+	float shoulder = 1.0 - smoothstep( bracketL * .18, bracketL * .18 + aaC, abs(toCorner - bracketL * .60) );
+	body += uFrameColor * shoulder * inset * .25;
+	vec3 nView = normalize( mat3(viewMatrix) * vNormalLocal );
+	vec3 lView = normalize( mat3(viewMatrix) * uSunDir );
+	vec3 halfView = normalize( lView + normalize(vViewPosition) );
+	float specular = pow( max(dot(nView, halfView), 0.0), 40.0 );
+	float fresnel = pow( 1.0 - abs(dot(nView, normalize(vViewPosition))), 4.0 );
+	body += uFrameColor * bright * (specular * .65 + fresnel * .30) * (1.0 - inset * .7);
 
 	// --- depletion -------------------------------------------------------------
 	// Brightness first (fullness 1 → BRIGHTNESS_END), then opacity
@@ -220,7 +227,7 @@ function createContainerMaterial(): THREE.ShaderMaterial {
     depthWrite: false,
     fog: true,
   });
-  material.customProgramCacheKey = () => "ls-voxel-container-v2";
+  material.customProgramCacheKey = () => "ls-voxel-container-v3";
   return material;
 }
 

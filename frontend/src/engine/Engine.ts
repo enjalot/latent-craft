@@ -16,6 +16,7 @@ import {
 import { createSceneFog } from "./Fog.ts";
 import { NebulaSky } from "./NebulaSky.ts";
 import { Starfield } from "./Starfield.ts";
+import { createStudioEnvironment } from "./StudioEnvironment.ts";
 
 export type TickCallback = (deltaSeconds: number, elapsedSeconds: number) => void;
 
@@ -145,6 +146,7 @@ export class Engine {
    * after the tick callback has moved it and before the render — i.e. inside
    * `loop`, which nothing outside Engine can get between. */
   readonly headlamp: THREE.PointLight | null;
+  private readonly studioEnvironment: THREE.WebGLRenderTarget;
 
   private container: HTMLElement;
   private onUpdate: TickCallback | null = null;
@@ -169,6 +171,8 @@ export class Engine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setClearColor(FOG_COLOR, 1);
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.1;
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
@@ -189,6 +193,8 @@ export class Engine {
     // offscreen target, so the main scene never sees a frame without it.
     this.sky = options.sky === false ? null : new NebulaSky(this.renderer);
     if (this.sky) this.scene.background = this.sky.texture;
+    this.studioEnvironment = createStudioEnvironment(this.renderer);
+    this.scene.environment = this.studioEnvironment.texture;
     this.starfield = new Starfield();
     this.scene.add(this.starfield.points);
 
@@ -400,6 +406,7 @@ export class Engine {
   dispose(): void {
     this.stop();
     this.sky?.dispose();
+    this.studioEnvironment.dispose();
     this.headlamp?.removeFromParent();
     this.starfield.dispose();
     this.timer.dispose();

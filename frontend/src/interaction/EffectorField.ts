@@ -41,9 +41,9 @@ function clamp(value: number, min: number, max: number): number {
  * listener to the canvas lets inventory and telemetry panels retain normal
  * scrolling.
  *
- * Curved rectangular patches mark the exact boundary while resizing, then
- * fade. Three rings follow the mouse direction on the sphere; ring spacing
- * compresses for small fields, but markers retain their voxel-space size.
+ * Solid beveled bars mark the boundary while resizing, then fade. Three
+ * fixed-slot rings follow the mouse direction; spacing and bar size compress
+ * together for small fields so the objects cannot overlap.
  *
  * Suppression is recomputed from scratch every time it's needed (a
  * throttled per-frame `update()`, plus a forced pass from `onChunkResident`)
@@ -173,6 +173,12 @@ export class EffectorFieldController {
     if (!Number.isFinite(deltaSteps) || deltaSteps === 0) return;
     this.lastResizeAt = performance.now();
     this.radius = clamp(this.radius + deltaSteps * this.radiusStep, this.minRadius, this.maxRadius);
+  }
+
+  setRadiusVoxels(radius: number, animate = true): void {
+    if (!Number.isFinite(radius)) return;
+    this.radius = clamp(radius * this.manifest.voxelWorldSize, this.minRadius, this.maxRadius);
+    if (animate) this.lastResizeAt = performance.now();
   }
 
   private recomputeFromCamera(camera: THREE.Camera, force: boolean): void {

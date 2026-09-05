@@ -129,6 +129,14 @@ function wrapAngle(delta: number): number {
  * also rounds off the sprint transition.
  */
 export class FlightControls {
+  private speedMultiplier = 1;
+
+  setSpeed(worldUnitsPerSecond: number): void {
+    if (Number.isFinite(worldUnitsPerSecond) && worldUnitsPerSecond > 0) {
+      this.speedMultiplier = worldUnitsPerSecond / FLIGHT_SPEED;
+      this.velocity.set(0, 0, 0);
+    }
+  }
   private readonly camera: THREE.Camera;
   private readonly keys = new Set<string>();
 
@@ -348,7 +356,7 @@ export class FlightControls {
 
     // Sprint scales every axis (see the class comment) — a strafe or climb
     // mid-sprint keeps pace with the forward motion.
-    const speedScale = this.sprinting ? FLIGHT_SPRINT_MULTIPLIER : 1;
+    const speedScale = this.speedMultiplier * (this.sprinting ? FLIGHT_SPRINT_MULTIPLIER : 1);
     const speed = FLIGHT_SPEED * speedScale;
     const verticalSpeed = FLIGHT_VERTICAL_SPEED * speedScale;
 

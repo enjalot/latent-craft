@@ -1,47 +1,50 @@
 import * as THREE from "three";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { EFFECTOR_DOT_COLOR } from "../config.ts";
 
-/** Geodesic 3/6/9-voxel offsets when they fit; compress spacing for small
- * fields. Marker dimensions stay 1 × .2 voxels along surface geodesics. */
+/** A camera-centred sphere has no visible silhouette: fixed-angle rings look
+ * identical at every radius. Deliberately open the angular aperture as R grows
+ * to make scrolling legible in empty space, while every solid's centre remains
+ * exactly R voxels away. Fixed slots avoid rotation/pop; small bars keep clearance. */
 export function effectorRingLayout(radius: number, angularLimit = .45) {
   if (!Number.isFinite(radius) || radius <= 0 || !Number.isFinite(angularLimit) || angularLimit <= 0 || angularLimit >= Math.PI / 2)
     throw new Error("Invalid effector surface dimensions");
-  const step = Math.min(3, radius * angularLimit / 3);
+  // Logarithmic growth stays perceptible across the full 1–48 voxel range,
+  // rather than saturating early and becoming static again for large fields.
+  const aperture = angularLimit * (.1 + .9 * Math.min(1, Math.log1p(radius) / Math.log(49)));
+  const step = radius * aperture / 3;
   return [1, 2, 3].map(ring => {
     const offset = step * ring, angle = offset / radius;
-    return { offset, angle, count: Math.max(1, Math.floor(2 * Math.PI * radius * Math.sin(angle) / 1.6)) };
+    const count = ring * 12;
+    const chord = 2 * radius * Math.sin(angle) * Math.sin(Math.PI / count);
+    const length = Math.min(1, chord * .6);
+    return { offset, angle, count, length, width: length / 5, depth: length / 5 };
   });
 }
 
 export function buildEffectorSurfaceGeometry(radius = 2, angularLimit = .45): THREE.BufferGeometry {
-  const positions: number[] = [];
+  const bars: THREE.BufferGeometry[] = [];
   const normal = new THREE.Vector3(), along = new THREE.Vector3(), across = new THREE.Vector3();
-  const point = new THREE.Vector3();
-  const vertex = (u: number, v: number) => {
-    const distance = Math.hypot(u, v), angle = distance / radius;
-    point.copy(normal).multiplyScalar(radius * Math.cos(angle));
-    if (distance) {
-      point.addScaledVector(along, radius * Math.sin(angle) * u / distance);
-      point.addScaledVector(across, radius * Math.sin(angle) * v / distance);
-    }
-    positions.push(point.x, point.y, point.z);
-  };
-  effectorRingLayout(radius, angularLimit).forEach((ring, index) => {
+  const transform = new THREE.Matrix4();
+  const tilt = new THREE.Matrix4().makeRotationX(Math.PI / 6);
+  effectorRingLayout(radius, angularLimit).forEach(ring => {
     for (let i = 0; i < ring.count; i++) {
-      const phi = (i + index * .23) * Math.PI * 2 / ring.count;
+      const phi = i * Math.PI * 2 / ring.count;
       normal.set(Math.sin(ring.angle) * Math.cos(phi), Math.sin(ring.angle) * Math.sin(phi), -Math.cos(ring.angle));
       along.set(-Math.sin(phi), Math.cos(phi), 0);
       across.crossVectors(normal, along).normalize();
-      // Four strips follow the sphere instead of floating tangent cards.
-      for (let j = 0; j < 4; j++) {
-        const a = -.5 + j / 4, b = a + .25;
-        vertex(a, -.1); vertex(b, -.1); vertex(b, .1);
-        vertex(a, -.1); vertex(b, .1); vertex(a, .1);
-      }
+      // Actual closed solids with end caps, side faces and lit chamfers. The
+      // object's centre, not a raycast hit, lies on the effector boundary.
+      const bar = new RoundedBoxGeometry(ring.length, ring.width, ring.depth, 1, ring.width * .16);
+      transform.makeBasis(along, across, normal).multiply(tilt).setPosition(normal.clone().multiplyScalar(radius));
+      bar.applyMatrix4(transform);
+      bars.push(bar);
     }
   });
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  // One draw call, no per-marker scene objects or work while the field is idle.
+  const geometry = mergeGeometries(bars, false)!;
+  for (const bar of bars) bar.dispose();
   geometry.computeBoundingSphere();
   return geometry;
 }
@@ -52,8 +55,9 @@ export function effectorSurfaceOpacity(elapsedMs: number): number {
 }
 
 export function createEffectorSurface() {
-  const material = new THREE.MeshBasicMaterial({ color: EFFECTOR_DOT_COLOR, opacity: 0,
-    transparent: true, depthTest: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+  const material = new THREE.MeshStandardMaterial({ color: EFFECTOR_DOT_COLOR, opacity: 0,
+    roughness: .32, metalness: .25, emissive: EFFECTOR_DOT_COLOR, emissiveIntensity: .18,
+    flatShading: true, transparent: true, depthTest: true, depthWrite: false });
   const surface = new THREE.Mesh(buildEffectorSurfaceGeometry(), material);
   surface.name = "effector-surface-rectangle-rings";
   surface.raycast = () => {};

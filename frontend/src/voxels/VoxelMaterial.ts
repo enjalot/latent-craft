@@ -83,15 +83,15 @@ const ATLAS_MAP_FRAGMENT = /* glsl */ `
  * quantization across neighbouring pixels so the average coverage tracks the
  * requested alpha — ordered dithering, the same trick as screen-door
  * transparency but hidden under the MSAA resolve. Guarded by both
- * `ALPHA_TO_COVERAGE` and `a < 1.0`, so X-ray's true blend path gets clean
- * alpha and the common fully-opaque voxel pays nothing.
+ * `ALPHA_TO_COVERAGE` and `0 < a < 1`, so X-ray gets clean alpha and a source
+ * replaced by a sharp preview stays at exactly zero coverage on any MSAA rig.
  */
 const VOXEL_OUTPUT_FRAGMENT = /* glsl */ `
 	vec3 lsUpView = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );
 	float lsDownFacing = 0.5 - 0.5 * clamp( dot( normal, lsUpView ), -1.0, 1.0 );
 	outgoingLight += diffuseColor.rgb * uUnderlight * lsDownFacing;
 	#ifdef ALPHA_TO_COVERAGE
-	if ( diffuseColor.a < 1.0 ) {
+	if ( diffuseColor.a > 0.0 && diffuseColor.a < 1.0 ) {
 		const float lsBayer4[16] = float[16]( 0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0 );
 		ivec2 lsPx = ivec2( gl_FragCoord.xy ) & 3;
 		float lsThreshold = ( lsBayer4[ lsPx.y * 4 + lsPx.x ] + 0.5 ) / 16.0;
@@ -166,8 +166,9 @@ export function createVoxelMaterial(params: VoxelMaterialParams): THREE.MeshStan
 
   const material = new THREE.MeshStandardMaterial({
     map: atlas,
-    roughness: 0.9,
-    metalness: 0.0,
+    roughness: 0.38,
+    metalness: 0.04,
+    envMapIntensity: 0.45,
     alphaToCoverage: true,
   });
 
@@ -197,10 +198,10 @@ export function createVoxelMaterial(params: VoxelMaterialParams): THREE.MeshStan
   // all of them share one GL program instead of one per chunk. The key is what
   // three's program cache dedupes on, so it's bumped whenever the patched
   // source changes (v2: underlight; v3: coverage dither; v4: glass-mode
-  // dither guard) — a stale entry would
+  // dither guard; v5: exact zero coverage for sharp replacements) — a stale entry would
   // otherwise keep serving the previous shader within a session that had
   // already compiled one.
-  material.customProgramCacheKey = () => "ls-voxel-atlas-v4";
+  material.customProgramCacheKey = () => "ls-voxel-atlas-v5";
 
   return material;
 }

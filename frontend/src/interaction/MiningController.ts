@@ -6,6 +6,7 @@ import { combinedVoxelOpacity } from "../voxels/VoxelOpacity.ts";
 import { extractionBatchSize } from "../config.ts";
 import { PagedRecords } from "../streaming/RangeReader.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
+import { validateMiningSave, type MiningSave } from "./MiningSave.ts";
 
 export function voxelStackId(chunkId: number, localVoxelId: number): string {
   return `${chunkId}:${localVoxelId}`;
@@ -142,6 +143,31 @@ export class MiningController {
     private readonly manifest?: Manifest,
   ) {}
 
+  snapshot(dataset: string): MiningSave {
+    if (!this.manifest) throw new Error("No dataset loaded.");
+    return { version: 1, dataset, pack: this.manifest.baseUrl, stacks: this.inventory.stacks.map(s => {
+      const state = this.extractionState(s.chunkId, s.localVoxelId)!;
+      return { id: s.id, chunkId: s.chunkId, localVoxelId: s.localVoxelId, totalPoints: s.totalPoints, reprRowId: s.reprRowId,
+        rowIds: [...s.rowIds], cursor: state.cursor, returned: [...state.returned],
+        firstExtractedAt: s.firstExtractedAt, lastExtractedAt: s.lastExtractedAt };
+    }) };
+  }
+
+  restore(value: unknown, dataset: string): void {
+    if (!this.manifest) throw new Error("No dataset loaded.");
+    const save = validateMiningSave(value, dataset, this.manifest);
+    const old = this.touchedVoxels;
+    this.prepareToken++; this.prepared = null; this.preparing = null; this.retryAt = 0;
+    this.extractionByChunk.clear();
+    for (const s of save.stacks) {
+      const state = this.stateFor(s.chunkId, s.localVoxelId, s.totalPoints);
+      state.cursor = s.cursor; state.extracted.size = s.rowIds.length; state.returned = new Set(s.returned);
+    }
+    this.inventory.replace(save.stacks);
+    for (const s of old) this.applyToResidentVoxel(s.chunkId, s.localVoxelId);
+    for (const id of this.chunkStore.residentChunkIds) this.onChunkResident(id);
+  }
+
   /** Only the hovered voxel's next 100 IDs are retained outside the shared page cache. */
   prepare(chunkId: number, localVoxelId: number): void {
     const chunk = this.chunkStore.chunk(chunkId);
@@ -247,7 +273,7 @@ export class MiningController {
   /** Every voxel this session has touched and not fully returned. */
   get touchedVoxels(): VoxelExtraction[] {
     const all: VoxelExtraction[] = [];
-    for (const byVoxel of this.extractionByChunk.values()) all.push(...byVoxel.values());
+    for (const byVoxel of this.extractionByChunk.values()) for (const state of byVoxel.values()) all.push(state);
     return all;
   }
 
