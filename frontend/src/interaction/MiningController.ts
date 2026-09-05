@@ -221,6 +221,29 @@ export class MiningController {
     return chunk.meta.pointIds[offset + cursor] ?? null;
   }
 
+  /** Independent one-row lookup for the sharp-band cache. Never changes the
+   * single focused mining-page cursor/preparation token. RangeReader shares
+   * and bounds the posting pages underneath both callers. */
+  async previewRowId(chunkId: number, localVoxelId: number): Promise<number | null> {
+    const chunk = this.chunkStore.chunk(chunkId);
+    if (!chunk) return null;
+    const state = this.extractionState(chunkId, localVoxelId);
+    const returned = state?.returned.values().next().value;
+    if (returned !== undefined) return returned;
+    const cursor = state?.cursor ?? 0;
+    if (cursor >= (chunk.meta.count[localVoxelId] ?? 0)) return null;
+    const offset = chunk.meta.pointOffset[localVoxelId] + cursor;
+    let row: number;
+    if (chunk.entry.postings && this.manifest) {
+      const records = new PagedRecords(this.manifest.url(chunk.entry.postings.path), chunk.entry.n_points, 4);
+      row = (await records.record(offset)).getUint32(0, true);
+    } else row = chunk.meta.pointIds[offset];
+    if (this.chunkStore.chunk(chunkId) !== chunk ||
+      (this.extractionState(chunkId, localVoxelId)?.cursor ?? 0) !== cursor ||
+      !Number.isSafeInteger(row) || (this.manifest && row >= this.manifest.totalPoints)) return null;
+    return row;
+  }
+
   /** Every voxel this session has touched and not fully returned. */
   get touchedVoxels(): VoxelExtraction[] {
     const all: VoxelExtraction[] = [];

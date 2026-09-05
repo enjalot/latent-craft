@@ -19,7 +19,7 @@ working.
 
 ## The requested 2M CLIP / SSCD / 0.6dev map is already live
 
-The default `?dataset=monet-sscd-160` selects this complete chain:
+The retained `?dataset=monet-sscd-160` selects this complete chain:
 
 1. Pool CLIP features: `/data2/monet/pool-20m/clip512.f32.npy`.
 2. Fixed draw IDs: `/data2/monet/draws/sscd.idx.npy`.
@@ -34,6 +34,12 @@ The default `?dataset=monet-sscd-160` selects this complete chain:
 The fit metadata records cosine distance, 25 neighbors, `min_dist=0`, seed 42,
 and independent 2D / 3D fits. Recorded runtimes were 644.16 and 668.63 seconds.
 No duplicate fit or pack was launched for the naming change.
+
+The September 5 follow-up makes `monet-sscd-512` the default. It reuses the
+same coordinates, draw, points table, embedding, and 2D fit, with 304,083
+occupied voxels in 1,608 chunks at 512³. The immutable release is
+`/data/latent-scope-3d/chunks/monet-sscd-512-stream-20260905a/`.
+See [512 build and sharp-band measurements](sscd-512-sharp-band.md).
 
 ## Model evidence and version boundary
 

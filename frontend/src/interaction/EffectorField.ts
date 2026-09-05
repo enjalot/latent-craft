@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { createEffectorSurface, effectorSurfaceOpacity } from "./EffectorSurface.ts";
+import { createEffectorSurface, buildEffectorSurfaceGeometry, effectorSurfaceOpacity } from "./EffectorSurface.ts";
 import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
 import {
@@ -41,9 +41,9 @@ function clamp(value: number, min: number, max: number): number {
  * listener to the canvas lets inventory and telemetry panels retain normal
  * scrolling.
  *
- * Surface dots mark the exact suppression boundary while resizing, then fade
- * away. World-space size attenuates with distance; nearby geometry occludes
- * the dots. There are no persistent camera-centered lines.
+ * Curved rectangular patches mark the exact boundary while resizing, then
+ * fade. Three rings follow the mouse direction on the sphere; ring spacing
+ * compresses for small fields, but markers retain their voxel-space size.
  *
  * Suppression is recomputed from scratch every time it's needed (a
  * throttled per-frame `update()`, plus a forced pass from `onChunkResident`)
@@ -59,6 +59,14 @@ export class EffectorFieldController {
   private radius: number;
   private readonly surface: ReturnType<typeof createEffectorSurface>;
   private lastResizeAt = -Infinity;
+  private surfaceRadius = 2;
+  private surfaceAngle = .45;
+  private readonly surfaceRay = new THREE.Raycaster();
+  private readonly surfaceDirection = new THREE.Vector3();
+  private readonly inverseCamera = new THREE.Quaternion();
+  private readonly surfaceAim = new THREE.Quaternion();
+  private readonly forwardAxis = new THREE.Vector3(0, 0, -1);
+  private readonly defaultPointer = new THREE.Vector2();
 
   private readonly minRadius: number;
   private readonly maxRadius: number;
@@ -91,7 +99,7 @@ export class EffectorFieldController {
 
     this.gizmo = new THREE.Group();
     this.gizmo.name = "effector-field-gizmo";
-    this.surface = createEffectorSurface(manifest.voxelWorldSize);
+    this.surface = createEffectorSurface();
     this.gizmo.add(this.surface);
     this.gizmo.visible = false;
     scene.add(this.gizmo);
@@ -121,13 +129,24 @@ export class EffectorFieldController {
 
   /** Per-frame hook, internally throttled so it only does real work when the
    * field's computed center or radius actually changed. */
-  update(camera: THREE.Camera): void {
+  update(camera: THREE.Camera, pointer = this.defaultPointer): void {
     const opacity = effectorSurfaceOpacity(performance.now() - this.lastResizeAt);
-    this.surface.material.uniforms.opacity.value = opacity;
-    this.surface.material.uniforms.viewportHeight.value =
-      this.wheelTarget.clientHeight * Math.min(window.devicePixelRatio, 2);
+    this.surface.material.opacity = opacity;
     this.gizmo.visible = opacity > 0;
     this.recomputeFromCamera(camera, false);
+    if (opacity <= 0) return;
+    const perspective = camera as THREE.PerspectiveCamera;
+    const angle = perspective.isPerspectiveCamera ? THREE.MathUtils.degToRad(perspective.fov) * .4 : .45;
+    if (this.surfaceRadius !== this.currentRadiusVoxels || this.surfaceAngle !== angle) {
+      this.surface.geometry.dispose();
+      this.surface.geometry = buildEffectorSurfaceGeometry(this.currentRadiusVoxels, angle);
+      this.surfaceRadius = this.currentRadiusVoxels; this.surfaceAngle = angle;
+    }
+    this.surfaceRay.setFromCamera(pointer, camera);
+    this.inverseCamera.copy(camera.quaternion).invert();
+    this.surfaceDirection.copy(this.surfaceRay.ray.direction).applyQuaternion(this.inverseCamera);
+    this.surfaceAim.setFromUnitVectors(this.forwardAxis, this.surfaceDirection);
+    this.gizmo.quaternion.copy(camera.quaternion).multiply(this.surfaceAim);
   }
 
   /** `ChunkStore`'s `onResidencyChanged` hook, resident === true branch
@@ -161,7 +180,7 @@ export class EffectorFieldController {
     // therefore never moves the field; only flying does.
     this.center.copy(camera.position);
     this.gizmo.position.copy(this.center);
-    this.gizmo.scale.setScalar(this.radius);
+    this.gizmo.scale.setScalar(this.manifest.voxelWorldSize);
 
     const moved = this.lastCenter.distanceToSquared(this.center) > this.moveEpsilon * this.moveEpsilon;
     const resized = this.radius !== this.lastRadius;

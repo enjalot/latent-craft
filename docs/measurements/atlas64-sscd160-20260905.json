@@ -1,0 +1,159 @@
+{
+  "pack": "monet-sscd-160-stream-20260904b",
+  "rows": 2000000,
+  "voxels": 29030,
+  "chunks": 229,
+  "rgba32": 252559360,
+  "rgba64": 1010237440,
+  "rgb4bit32": 31569920,
+  "rgb4bit64": 126279680,
+  "disk32": 5649285,
+  "estimatedDisk64": 17908151,
+  "method": "Four occupancy strata (<=16, <=64, <=256, >256); up to four quantile samples each; per-stratum byte-ratio extrapolation. Not a full 64px build.",
+  "samples": [
+    {
+      "chunk": 162,
+      "stratum": 0,
+      "occupied": 1,
+      "blank": 0,
+      "bytes32": 693,
+      "bytes64": 1356,
+      "side64": 64
+    },
+    {
+      "chunk": 535,
+      "stratum": 0,
+      "occupied": 3,
+      "blank": 0,
+      "bytes32": 1399,
+      "bytes64": 3438,
+      "side64": 128
+    },
+    {
+      "chunk": 437,
+      "stratum": 0,
+      "occupied": 7,
+      "blank": 0,
+      "bytes32": 2428,
+      "bytes64": 6964,
+      "side64": 256
+    },
+    {
+      "chunk": 572,
+      "stratum": 0,
+      "occupied": 16,
+      "blank": 0,
+      "bytes32": 3980,
+      "bytes64": 13981,
+      "side64": 256
+    },
+    {
+      "chunk": 256,
+      "stratum": 1,
+      "occupied": 17,
+      "blank": 0,
+      "bytes32": 6608,
+      "bytes64": 22388,
+      "side64": 512
+    },
+    {
+      "chunk": 546,
+      "stratum": 1,
+      "occupied": 27,
+      "blank": 0,
+      "bytes32": 8370,
+      "bytes64": 27056,
+      "side64": 512
+    },
+    {
+      "chunk": 147,
+      "stratum": 1,
+      "occupied": 47,
+      "blank": 0,
+      "bytes32": 12501,
+      "bytes64": 39474,
+      "side64": 512
+    },
+    {
+      "chunk": 451,
+      "stratum": 1,
+      "occupied": 63,
+      "blank": 0,
+      "bytes32": 14590,
+      "bytes64": 48575,
+      "side64": 512
+    },
+    {
+      "chunk": 273,
+      "stratum": 2,
+      "occupied": 65,
+      "blank": 0,
+      "bytes32": 22098,
+      "bytes64": 49131,
+      "side64": 1024
+    },
+    {
+      "chunk": 649,
+      "stratum": 2,
+      "occupied": 104,
+      "blank": 0,
+      "bytes32": 25999,
+      "bytes64": 59231,
+      "side64": 1024
+    },
+    {
+      "chunk": 148,
+      "stratum": 2,
+      "occupied": 147,
+      "blank": 0,
+      "bytes32": 35199,
+      "bytes64": 94300,
+      "side64": 1024
+    },
+    {
+      "chunk": 388,
+      "stratum": 2,
+      "occupied": 254,
+      "blank": 0,
+      "bytes32": 50583,
+      "bytes64": 152172,
+      "side64": 1024
+    },
+    {
+      "chunk": 356,
+      "stratum": 3,
+      "occupied": 260,
+      "blank": 0,
+      "bytes32": 51805,
+      "bytes64": 155458,
+      "side64": 2048
+    },
+    {
+      "chunk": 138,
+      "stratum": 3,
+      "occupied": 408,
+      "blank": 2,
+      "bytes32": 73479,
+      "bytes64": 244159,
+      "side64": 2048
+    },
+    {
+      "chunk": 457,
+      "stratum": 3,
+      "occupied": 704,
+      "blank": 1,
+      "bytes32": 111907,
+      "bytes64": 372035,
+      "side64": 2048
+    },
+    {
+      "chunk": 443,
+      "stratum": 3,
+      "occupied": 1624,
+      "blank": 2,
+      "bytes32": 251784,
+      "bytes64": 911781,
+      "side64": 4096
+    }
+  ]
+}

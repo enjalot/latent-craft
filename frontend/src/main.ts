@@ -5,7 +5,7 @@ import { FlightControls } from "./engine/FlightControls.ts";
 import { VoxelRaycaster, type VoxelHit } from "./engine/Raycast.ts";
 import { createSyntheticVoxelField } from "./voxels/VoxelField.ts";
 import { AtlasCache } from "./voxels/AtlasCache.ts";
-import { MiningPreview } from "./voxels/MiningPreview.ts";
+import { SharpBand } from "./interaction/SharpBand.ts";
 import { VoxelProxyCloud } from "./voxels/VoxelProxyCloud.ts";
 import { HierarchicalProxies } from "./voxels/HierarchicalProxies.ts";
 import { loadManifest, type Manifest } from "./streaming/Manifest.ts";
@@ -163,7 +163,7 @@ const hotbar = new Hotbar(app, (tool) => {
 
 // Fly-to-inventory tiles (one per extraction cycle) — see ExtractionFlight.ts.
 const extractionFlights = new ExtractionFlights(app);
-const miningPreview = new MiningPreview(engine.scene, engine.renderer);
+let sharpBand: SharpBand | null = null;
 
 // scratch objects reused every frame to avoid per-frame allocation
 const hitMatrix = new THREE.Matrix4();
@@ -229,14 +229,11 @@ const pointerController = new PointerController(engine.renderer.domElement, flig
   onHoldCancel: () => {
     holdElapsedSeconds = 0;
     holdRing.hide();
-    miningPreview.hide();
   },
 });
 
-// point_index.bin (whole-dataset row_id → thumbnail lookup) is only needed
-// once the inventory contains its first stack. InventoryPanel triggers this
-// loader on demand so the multi-megabyte table does not compete with the
-// initial proxy and R0 atlas requests.
+// Sharp previews and inventory share this row-to-thumbnail lookup. Streaming
+// packs request bounded record pages; only legacy packs load the whole table.
 let pointIndexPromise: Promise<PointIndex> | null = null;
 /** The resolved table, once it lands — for the couple of call sites that are
  * synchronous by nature (the fly-to-inventory tile is created inside a frame
@@ -369,6 +366,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
       engine.scene,
       engine.renderer.domElement,
     );
+    sharpBand = new SharpBand(engine.scene, engine.renderer, chunkStore, manifest, miningController, loadPointIndexOnce);
     // Non-null assertion: `app`'s null-check `throw` above is at module scope,
     // but TS doesn't carry that narrowing into a separate nested function
     // (this one) even though `app` is a never-reassigned `const`.
@@ -608,7 +606,7 @@ engine.start((dt) => {
   if (!engine.isTeleporting) flightControls.update(dt);
   chunkStore?.updateCamera(engine.camera);
   if (voxelProxy instanceof HierarchicalProxies) voxelProxy.update(engine.camera);
-  effectorField?.update(engine.camera);
+  effectorField?.update(engine.camera, pointerController.ndc);
   minimap?.update(engine.camera, dt);
   // Self-corrects a stuck inventory-hover flashlight; a no-op (one null check)
   // whenever no inventory row is hovered. See `InventoryPanel.validateHover`
@@ -668,16 +666,8 @@ engine.start((dt) => {
   }
 
   minimap?.setHoveredRow(hoveredRowId);
-
-  // The focused face is a single high-resolution texture, also while hovering.
-  if (target && pointerOverWorld && !pointerController.isDragging) {
-    void loadPointIndexOnce().catch(() => undefined);
-    const next = miningController?.nextRowId(target.chunkId, target.localVoxelId) ?? null;
-    if (next !== null && pointIndexReady?.ensure) void pointIndexReady.ensure(next).catch(() => undefined);
-    const url = next === null || !pointIndexReady ? null : resolveThumbUrl(pointIndexReady, next);
-    if (next !== null && url) miningPreview.show(next, url, hitMatrix);
-    else miningPreview.hide();
-  } else miningPreview.hide();
+  if (target && pointerOverWorld && !pointerController.isDragging)
+    miningController?.prepare(target.chunkId, target.localVoxelId);
 
   // --- hold-to-extract progress -------------------------------------------
   //
@@ -707,17 +697,6 @@ engine.start((dt) => {
       const durationSeconds = EXTRACTION_CYCLE_MS / 1000;
       holdElapsedSeconds += dt;
 
-      // A single non-instanced overlay replaces this block's 32px atlas tile
-      // with the next point's normal thumbnail while mining. It is the same
-      // row order `MiningController.extract` consumes, so it advances after
-      // every batch rather than staying on the voxel representative forever.
-      const nextRowId = miningController?.nextRowId(holdTarget.chunkId, holdTarget.localVoxelId) ?? null;
-      const nextUrl = nextRowId === null || !pointIndexReady
-        ? null
-        : resolveThumbUrl(pointIndexReady, nextRowId);
-      if (nextRowId !== null && nextUrl) miningPreview.show(nextRowId, nextUrl, hitMatrix);
-      else miningPreview.hide();
-
       // Overall fraction incl. the in-progress cycle — see the comment above.
       // An untouched voxel has no extraction record yet, so its total comes
       // straight from the chunk's per-voxel counts.
@@ -746,13 +725,17 @@ engine.start((dt) => {
           // fresh mousedown is required.
           pointerController.consumeHold();
           holdRing.hide();
-          miningPreview.hide();
         } else if (cycle) {
           holdRing.setProgress(cycle.fraction);
         }
       }
     }
   }
+
+  // Refresh after extraction so the next image replaces the just-mined one
+  // this frame. This never takes over the focused mining-page preparation.
+  sharpBand?.update(engine.camera, effectorField?.currentRadius ?? 0,
+    pointerOverWorld && !pointerController.isDragging ? target : null, xrayController?.isActive ?? false);
 
   // --- cursor position/state feedback -----------------------------------
   const showReticle = pointerOverWorld && !pointerController.isDragging && !!(target || proxyVoxel);
@@ -801,6 +784,7 @@ engine.start((dt) => {
     hoverLabel,
     dragging: pointerController.isDragging,
     streaming: useSynthetic ? undefined : streamingState,
+    sharpPreviews: sharpBand?.pool.stats,
     status,
   });
 });
@@ -874,7 +858,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
       return inventoryPanel?.lightbox ?? null;
     },
     extractionFlights,
-    miningPreview,
+    get sharpBand() { return sharpBand; },
     hotbar,
     get currentHit() {
       return currentHit;
@@ -909,7 +893,8 @@ function disposeApp(): void {
   inventoryPanel = null;
   effectorField?.dispose();
   effectorField = null;
-  miningPreview.dispose();
+  sharpBand?.dispose();
+  sharpBand = null;
   extractionFlights.clear();
   hotbar.dispose();
   holdRing.dispose();

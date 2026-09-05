@@ -96,6 +96,12 @@ export const DATASETS: Record<string, DatasetConfig> = {
     pointsId: "monet-sscd",
     minimapPath: "/minimap/monet-sscd",
   },
+  "monet-sscd-512": {
+    path: "/chunks/monet-sscd-512-stream-20260905a",
+    label: "MONET · CLIP ViT-B/32 · SSCD draw · 2M · 512³",
+    pointsId: "monet-sscd",
+    minimapPath: "/minimap/monet-sscd",
+  },
   "monet-annfaiss-160": {
     path: "/chunks/monet-annfaiss-160",
     label: "MONET · CLIP ViT-B/32 · ANN-FAISS draw · 2M · 160³",
@@ -125,7 +131,7 @@ export const DATASETS: Record<string, DatasetConfig> = {
  * full 2048² texture on every sparsely occupied chunk. Existing packs remain
  * readable through the legacy local-voxel-id atlas layout.
  */
-export const DEFAULT_DATASET = "monet-sscd-160";
+export const DEFAULT_DATASET = "monet-sscd-512";
 
 /**
  * Optional data-server origin. `VITE_DATA_ORIGIN=https://data.example.org`

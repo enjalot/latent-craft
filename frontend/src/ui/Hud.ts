@@ -28,6 +28,7 @@ export interface HudState {
   streaming?: HudStreamingState;
   /** Shown in place of everything else while the manifest/proxy load. */
   status?: string;
+  sharpPreviews?: { visible: number; slots: number; pending: number; gpuBytes: number };
 }
 
 function formatBytes(bytes: number): string {
@@ -168,6 +169,10 @@ export class Hud {
     lines.push(`FPS: ${state.fps.toFixed(0)}`);
     lines.push(`voxels: ${state.residentInstances.toLocaleString()} resident`);
     lines.push(`visible (post-cull): ${state.visibleInstances.toLocaleString()}`);
+    if (state.sharpPreviews) {
+      const p = state.sharpPreviews;
+      lines.push(`sharp 128px: ${p.visible} shown · ${p.slots}/128 cached · ${p.pending} loading · ${(p.gpuBytes / 1048576).toFixed(2)} MiB GPU`);
+    }
     const p = state.cameraPosition;
     lines.push(`pos: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`);
     lines.push(`hover: ${state.hoverLabel}`);

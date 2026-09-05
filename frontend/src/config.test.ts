@@ -7,18 +7,19 @@ describe("dataset identities", () => {
     for (const [id, dataset] of Object.entries(DATASETS)) {
       if (!id.startsWith("monet-")) continue;
       expect(dataset.label).toContain("CLIP ViT-B/32");
-      expect(dataset.label).toContain("draw · 2M · 160³");
-      expect(dataset.pointsId).toBe(id.replace(/-160$/, ""));
+      expect(dataset.label).toContain(`draw · 2M · ${id.split("-").at(-1)}³`);
+      expect(dataset.pointsId).toBe(id.replace(/-(160|512)$/, ""));
     }
     expect(DATASETS["monet-sscd-160"].label).toContain("SSCD draw");
   });
 
-  it("keeps the already-built 2M CLIP SSCD streaming release as the default", () => {
-    expect(DEFAULT_DATASET).toBe("monet-sscd-160");
+  it("uses the verified 512 SSCD release by default while preserving the 160 option", () => {
+    expect(DEFAULT_DATASET).toBe("monet-sscd-512");
     expect(DATASETS[DEFAULT_DATASET]).toMatchObject({
-      path: "/chunks/monet-sscd-160-stream-20260904b",
+      path: "/chunks/monet-sscd-512-stream-20260905a",
       pointsId: "monet-sscd",
       minimapPath: "/minimap/monet-sscd",
     });
+    expect(DATASETS["monet-sscd-160"].path).toBe("/chunks/monet-sscd-160-stream-20260904b");
   });
 });
