@@ -1,0 +1,28 @@
+{
+  "verified_utc": "2026-09-05T22:28:27.917762+00:00",
+  "remaining_pilot_spaces": [],
+  "modal_runs": [
+    {
+      "app_id": "ap-xYE0wDGxQZI2RkGRF5YZUU",
+      "region_request": null,
+      "observed_region": "australiaeast",
+      "observed_cloud": "CLOUD_PROVIDER_AZURE",
+      "state": "stopped",
+      "tasks": 0,
+      "created_utc": "2026-09-05T22:10:53Z",
+      "stopped_utc": "2026-09-05T22:23:29Z"
+    },
+    {
+      "app_id": "ap-NKX7bAZ0SdidCVQpVTUkDg",
+      "region_request": "us",
+      "observed_region": "eastus2",
+      "observed_cloud": "CLOUD_PROVIDER_AZURE",
+      "state": "stopped",
+      "tasks": 0,
+      "created_utc": "2026-09-05T22:22:07Z",
+      "stopped_utc": "2026-09-05T22:27:11Z"
+    }
+  ],
+  "estimated_compute_usd_before_credits": 0.15,
+  "cost_is_reconciled_invoice": false
+}
