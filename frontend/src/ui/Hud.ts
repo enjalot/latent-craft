@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { applyHudPanelChrome, applyHudTitle, HUD_CLASS } from "./hudPanel.ts";
+import { voxelCountThreshold } from "../voxels/VoxelCountFilter.ts";
 
 export interface HudStreamingState {
   /** Dataset label from the config registry. */
@@ -81,7 +82,8 @@ export class Hud {
       lineHeight: "1.65",
       pointerEvents: "auto",
       width: docked ? "100%" : "min(420px, calc(100vw - 28px))",
-      flexShrink: "0",
+      display: "flex", flexDirection: "column", minHeight: "68px",
+      maxHeight: "48vh", flexShrink: "1", overflow: "hidden",
       boxSizing: "border-box",
       zIndex: "10",
     } satisfies Partial<CSSStyleDeclaration>);
@@ -97,6 +99,7 @@ export class Hud {
       cursor: "pointer",
       pointerEvents: "auto",
       userSelect: "none",
+      flexShrink: "0",
     } satisfies Partial<CSSStyleDeclaration>);
     this.header.title = "Expand/collapse settings";
     this.header.tabIndex = 0;
@@ -130,6 +133,7 @@ export class Hud {
       padding: "7px 14px 11px",
       whiteSpace: "normal",
       letterSpacing: "0.02em",
+      minHeight: "0", overflowY: "auto", overscrollBehavior: "contain",
     } satisfies Partial<CSSStyleDeclaration>);
     Object.assign(this.readout.style, { whiteSpace: "pre-wrap", overflowWrap: "anywhere", opacity: ".7" });
     this.body.append(this.controls, this.readout);
@@ -141,7 +145,10 @@ export class Hud {
     this.setCollapsed(this.readPersistedCollapsed());
   }
 
-  configure(options: { speed: number; radius: number; maxRadius: number; onSpeed: (value: number) => void; onRadius: (value: number) => void }): void {
+  configure(options: { speed: number; radius: number; maxRadius: number;
+    filterEnabled: boolean; filterThreshold: number;
+    onFilter: (enabled: boolean, threshold: number) => void;
+    onSpeed: (value: number) => void; onRadius: (value: number) => void }): void {
     this.controls.replaceChildren();
     const slider = (name: string, value: number, min: number, max: number, step: number, unit: string, change: (n: number) => void) => {
       const label = document.createElement("label");
@@ -159,6 +166,23 @@ export class Hud {
     slider("Flying speed", options.speed, 1, 64, 1, "voxels/s", options.onSpeed);
     const radius = slider("Effector radius", options.radius, 1, options.maxRadius, .25, "voxels", options.onRadius);
     this.radiusInput = radius.input; this.radiusOutput = radius.output;
+    const filter = document.createElement("div");
+    Object.assign(filter.style, { display: "flex", alignItems: "center", gap: "7px", marginBottom: "10px", flexWrap: "wrap" });
+    const label = document.createElement("label"), enabled = document.createElement("input"), threshold = document.createElement("input");
+    enabled.type = "checkbox"; enabled.checked = options.filterEnabled;
+    label.append(enabled, " Hide voxels with ≤");
+    threshold.type = "number"; threshold.min = "1"; threshold.max = String(0xffffffff); threshold.step = "1";
+    threshold.value = String(options.filterThreshold); threshold.disabled = !enabled.checked;
+    threshold.setAttribute("aria-label", "Voxel image-count threshold");
+    Object.assign(threshold.style, { width: "76px", font: "inherit", color: "inherit", background: "var(--hud-ground-inset)" });
+    const update = () => {
+      threshold.value = String(voxelCountThreshold(threshold.valueAsNumber));
+      threshold.disabled = !enabled.checked;
+      options.onFilter(enabled.checked, Number(threshold.value));
+    };
+    enabled.addEventListener("change", update); threshold.addEventListener("change", update);
+    filter.title = "Original images per voxel (not remaining after mining). Distant region bounds and the minimap remain as context.";
+    filter.append(label, threshold, "images"); this.controls.append(filter);
   }
 
   updateRadius(radius: number): void {

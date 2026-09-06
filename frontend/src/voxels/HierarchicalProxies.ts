@@ -6,6 +6,7 @@ import type { Manifest } from "../streaming/Manifest.ts";
 import type { ProxyVoxel, VoxelProxyStats } from "./VoxelProxyCloud.ts";
 import { VOXEL_FILL } from "../config.ts";
 import { selectProxyCut, proxyBrickLod, allocateProxyBricks } from "./ProxyCut.ts";
+import { proxyCellMaxCounts } from "./VoxelCountFilter.ts";
 
 const CUT_CAPACITY = 1024;
 
@@ -13,7 +14,8 @@ interface Level { offset: number; count: number; step: number }
 interface Leaf { chunk: number; xyz: number[]; count: number; levels: Level[] }
 interface Node { origin: number[]; span: number; count: number; leaf?: number; children: number[] }
 interface Hierarchy { version: number; file: string; bytes: number; nodes: Leaf[]; tree: Node[] }
-interface Brick { mesh: InstancedMesh2; ids: ProxyVoxel[]; colors: THREE.Color[]; lastUsed: number }
+interface Brick { mesh: InstancedMesh2; ids: ProxyVoxel[]; colors: THREE.Color[]; lastUsed: number;
+  leaf: Leaf; level: Level; source?: DataView; filterCounts?: Uint32Array }
 
 /** Distance-prioritized octree cut + range-loaded 4/2/1 voxel bricks. Resident fine
  * geometry never scales with corpus size. A missing brick keeps its parent visible. */
@@ -42,6 +44,13 @@ export class HierarchicalProxies {
   private readonly lastPosition = new THREE.Vector3(Infinity, 0, 0);
   private lastHeight = -1;
   private lastFov = -1;
+  private countFilter = 0;
+  private retryAt = Infinity;
+
+  setCountFilter(threshold: number): void {
+    if (threshold === this.countFilter) return;
+    this.countFilter = threshold; this.dirty = true;
+  }
 
   private constructor(private readonly manifest: Manifest, private readonly hierarchy: Hierarchy,
     private readonly renderer: THREE.WebGLRenderer) {
@@ -75,6 +84,7 @@ export class HierarchicalProxies {
 
   update(camera: THREE.PerspectiveCamera): void {
     const now = performance.now();
+    if (now >= this.retryAt) { this.dirty = true; this.retryAt = Infinity; }
     const height = this.renderer.domElement.clientHeight;
     if (!this.dirty && this.lastPosition.distanceToSquared(camera.position) < 0.01 &&
       this.lastHeight === height && this.lastFov === camera.fov) return;
@@ -125,6 +135,7 @@ export class HierarchicalProxies {
     this.handles.clear();
     let coarseCount = 0, fineCount = 0;
     for (const node of cut) {
+      if (node.count <= this.countFilter) continue;
       if (node.leaf !== undefined) {
         const leaf = this.hierarchy.nodes[node.leaf];
         if (this.resident.has(leaf.chunk)) continue;
@@ -145,8 +156,14 @@ export class HierarchicalProxies {
         if (brick && selected.has(node.leaf)) {
           brick.mesh.visible = true;
           brick.lastUsed = this.tick;
-          fineCount += brick.ids.length;
+          if (this.countFilter && !brick.filterCounts) this.requestFilterCounts(brick);
           for (let i = 0; i < brick.ids.length; i++) {
+            // Until exact child counts arrive, don't misrepresent a sum as an
+            // individual voxel's occupancy. Regional bounds remain context.
+            const visible = !this.countFilter || (brick.filterCounts?.[i] ?? 0) > this.countFilter;
+            brick.mesh.setVisibilityAt(i, visible);
+            if (!visible) continue;
+            fineCount++;
             const id = brick.ids[i];
             const handle = id.chunkId * 65536 + id.localVoxelId;
             this.handles.set(handle, { brick, instance: i });
@@ -196,14 +213,39 @@ export class HierarchicalProxies {
         const cast = mesh.raycast.bind(mesh);
         mesh.raycast = (ray, hits) => { if (mesh.visible) cast(ray, hits); };
         mesh.visible = false;
-        const brick = { mesh, ids, colors, lastUsed: this.tick };
+        const brick: Brick = { mesh, ids, colors, lastUsed: this.tick, leaf, level,
+          source: level.step === 1 ? undefined : data,
+          filterCounts: level.step === 1 ? Uint32Array.from(ids, id => id.count) : undefined };
         mesh.userData.proxyBrick = brick;
         this.bricks.set(key, brick);
         this.mesh.add(mesh);
         this.dirty = true;
         this.trim();
-      }).catch(() => this.failures.set(key, performance.now() + 5000))
+      }).catch(() => this.recordFailure(key))
       .finally(() => this.pending.delete(key));
+  }
+
+  private requestFilterCounts(brick: Brick): void {
+    const key = `${brick.leaf.chunk}:${brick.level.step}:filter`;
+    if (!brick.source || this.pending.has(key) || this.pending.size >= 4 ||
+      (this.failures.get(key) ?? 0) > performance.now()) return;
+    this.pending.add(key);
+    const fine = brick.leaf.levels.find(level => level.step === 1)!;
+    void rangeReader.read(this.manifest.url(this.hierarchy.file), fine.offset, fine.count * 16, this.hierarchy.bytes)
+      .then(buffer => {
+        if (this.disposed || brick.mesh.parent !== this.mesh) return;
+        brick.filterCounts = proxyCellMaxCounts(new DataView(buffer), brick.source!, brick.level.step, this.manifest.voxelsPerChunk);
+        brick.source = undefined;
+        this.dirty = true;
+      }).catch(() => this.recordFailure(key))
+      .finally(() => this.pending.delete(key));
+  }
+
+  private recordFailure(key: string): void {
+    const retry = performance.now() + 5000;
+    this.failures.set(key, retry);
+    // Retry even if the camera stays still after a failed range request.
+    this.retryAt = Math.min(this.retryAt, retry);
   }
 
   private trim(): void {

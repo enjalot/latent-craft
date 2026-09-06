@@ -101,7 +101,8 @@ export class VoxelProxyCloud {
    * unloaded-look adjustment — what `clearLit` restores. */
   private readonly baseColors: Float32Array;
   private readonly hiddenChunks = new Set<number>();
-  private hiddenInstances = 0;
+  private shown = 0;
+  private countFilter = 0;
   private readonly lit = new Set<number>();
 
   private readonly geometry: THREE.BoxGeometry;
@@ -112,6 +113,7 @@ export class VoxelProxyCloud {
   constructor(manifest: Manifest, data: VoxelProxyData, renderer: THREE.WebGLRenderer) {
     this.data = data;
     const n = data.chunkId.length;
+    this.shown = n;
 
     this.geometry = new THREE.BoxGeometry(1, 1, 1);
     // Fully matte: a proxy is a colour swatch, not a surface, and the textured
@@ -163,7 +165,18 @@ export class VoxelProxyCloud {
 
   /** Proxies currently drawn, i.e. voxels whose chunk is not resident. */
   get shownCount(): number {
-    return this.mesh.instancesCount - this.hiddenInstances;
+    return this.shown;
+  }
+
+  setCountFilter(threshold: number): void {
+    if (threshold === this.countFilter) return;
+    this.countFilter = threshold;
+    this.shown = 0;
+    for (let i = 0; i < this.data.count.length; i++) {
+      const visible = !this.hiddenChunks.has(this.data.chunkId[i]) && this.data.count[i] > threshold;
+      this.mesh.setVisibilityAt(i, visible);
+      if (visible) this.shown++;
+    }
   }
 
   /** Hides a chunk's run when its textured mesh becomes resident and reveals
@@ -174,13 +187,15 @@ export class VoxelProxyCloud {
     if (start === undefined || start < 0) return;
     if (resident === this.hiddenChunks.has(chunkId)) return;
     const end = this.data.runEnd[chunkId];
-    for (let i = start; i < end; i++) this.mesh.setVisibilityAt(i, !resident);
+    for (let i = start; i < end; i++) {
+      const passes = this.data.count[i] > this.countFilter;
+      this.mesh.setVisibilityAt(i, !resident && passes);
+      if (passes) this.shown += resident ? -1 : 1;
+    }
     if (resident) {
       this.hiddenChunks.add(chunkId);
-      this.hiddenInstances += end - start;
     } else {
       this.hiddenChunks.delete(chunkId);
-      this.hiddenInstances -= end - start;
     }
   }
 
@@ -251,7 +266,7 @@ export class VoxelProxyCloud {
     return {
       voxels: this.mesh.instancesCount,
       shown: this.shownCount,
-      hidden: this.hiddenInstances,
+      hidden: this.instanceCount - this.shown,
       hiddenChunks: this.hiddenChunks.size,
       lit: this.lit.size,
       drawn: this.mesh.count,

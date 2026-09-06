@@ -159,12 +159,12 @@ highlightBox.visible = false;
 highlightBox.renderOrder = 2;
 engine.scene.add(highlightBox);
 
-// One scrolling left dock: search results cannot overlap settings or hotbar.
+// Fixed dock; settings and search scroll independently inside their own panels.
 const leftDock = document.createElement("div");
 leftDock.className = "ls-left-dock";
 Object.assign(leftDock.style, { position: "fixed", top: "14px", left: "14px", maxHeight: "calc(100vh - 104px)",
   width: "min(420px, calc(100vw - 28px))", display: "flex", flexDirection: "column",
-  gap: "8px", overflowY: "auto", overflowX: "hidden", zIndex: "11", pointerEvents: "auto" });
+  gap: "8px", zIndex: "11", pointerEvents: "none" });
 app.append(leftDock);
 const datasetPicker = new DatasetPicker(leftDock, datasetKey, DATASETS, useSynthetic, true);
 const hud = new Hud(leftDock, true);
@@ -452,7 +452,16 @@ async function bootstrapStreamedWorld(): Promise<void> {
       const forward = engine.camera.getWorldDirection(new THREE.Vector3());
       flightControls.lookAt(engine.camera.position.clone().add(forward));
     }
+    const applyCountFilter = (enabled: boolean, threshold: number) => {
+      settings.filterEnabled = enabled; settings.filterThreshold = threshold;
+      const cutoff = enabled ? threshold : 0;
+      pointerController.cancelHold();
+      effectorField?.setCountFilter(cutoff);
+      voxelProxy?.setCountFilter(cutoff);
+    };
+    applyCountFilter(settings.filterEnabled, settings.filterThreshold);
     hud.configure({ speed: settings.speed, radius: settings.radius, maxRadius: 48,
+      filterEnabled: settings.filterEnabled, filterThreshold: settings.filterThreshold, onFilter: applyCountFilter,
       onSpeed: value => { settings.speed = value; flightControls.setSpeed(value * manifest!.voxelWorldSize); },
       onRadius: value => effectorField?.setRadiusVoxels(value) });
     // Places the always-on field at the post-frame spawn before the first

@@ -82,11 +82,21 @@ export class EffectorFieldController {
   private readonly voxelScratch = new THREE.Vector3();
   private readonly chunkCenterScratch = new THREE.Vector3();
 
-  /** chunkId -> set of localVoxelIds THIS controller currently has hidden —
+  /** chunkId -> set of localVoxelIds hidden by the bubble OR count filter —
    * the live "what am I suppressing right now" record. Rebuilt fresh on
    * every recompute (see class doc comment above), never carried across an
    * evict/reload the way `MiningController`'s persisted set is. */
   private suppressed = new Map<number, Set<number>>();
+  private countFilter = 0;
+  private bubbleCount = 0;
+
+  /** Compose occupancy filtering with the bubble in the same visibility gate,
+   * so leaving the bubble cannot accidentally restore a filtered voxel. */
+  setCountFilter(threshold: number): void {
+    if (threshold === this.countFilter) return;
+    this.countFilter = threshold;
+    this.recomputeSuppression();
+  }
 
   constructor(
     private readonly chunkStore: ChunkStore,
@@ -123,12 +133,10 @@ export class EffectorFieldController {
     return this.radius / this.manifest.voxelWorldSize;
   }
 
-  /** Total voxels currently suppressed — for HUD/status display and for
-   * scripted verification. */
+  /** Bubble-covered voxels eligible for ghosts (excluding occupancy-filtered
+   * cells); the bounded ghost renderer may draw fewer. */
   get suppressedCount(): number {
-    let total = 0;
-    for (const set of this.suppressed.values()) total += set.size;
-    return total;
+    return this.bubbleCount;
   }
 
   /** Per-frame hook, internally throttled so it only does real work when the
@@ -208,6 +216,7 @@ export class EffectorFieldController {
    * `MiningController`'s durable, persisted mined-set). */
   private recomputeSuppression(): void {
     const next = new Map<number, Set<number>>();
+    this.bubbleCount = 0;
     // Cube half-diagonal (center to corner) = edge * sqrt(3) / 2 — a cheap
     // broad-phase per-chunk reject so this stays roughly O(nearby occupied
     // voxels) rather than O(every resident instance) on every recompute.
@@ -219,14 +228,18 @@ export class EffectorFieldController {
       if (!chunk) continue;
 
       this.manifest.chunkCenterWorld(chunkId, this.chunkCenterScratch);
-      if (this.chunkCenterScratch.distanceTo(this.center) > chunkHalfDiagonal + this.radius) continue;
+      const outside = this.chunkCenterScratch.distanceTo(this.center) > chunkHalfDiagonal + this.radius;
+      if (outside && !this.countFilter) continue;
 
       const { entry, meta } = chunk;
       let chunkSet: Set<number> | undefined;
       for (let instanceId = 0; instanceId < meta.occupied.length; instanceId++) {
         const localVoxelId = meta.occupied[instanceId];
-        this.manifest.voxelCenterWorld(entry.cx, entry.cy, entry.cz, localVoxelId, this.voxelScratch);
-        if (this.voxelScratch.distanceToSquared(this.center) <= radiusSq) {
+        if (!outside) this.manifest.voxelCenterWorld(entry.cx, entry.cy, entry.cz, localVoxelId, this.voxelScratch);
+        const filtered = this.countFilter > 0 && meta.count[localVoxelId] <= this.countFilter;
+        const inBubble = !outside && this.voxelScratch.distanceToSquared(this.center) <= radiusSq;
+        if (inBubble && !filtered) this.bubbleCount++;
+        if (filtered || inBubble) {
           if (!chunkSet) {
             chunkSet = new Set();
             next.set(chunkId, chunkSet);
@@ -244,6 +257,7 @@ export class EffectorFieldController {
       if (!chunk?.mesh.visible) continue;
       for (let instance = 0; instance < chunk.meta.occupied.length && count < this.ghosts.instanceMatrix.count; instance++) {
         if (!suppressed.has(chunk.meta.occupied[instance])) continue;
+        if (this.countFilter > 0 && chunk.meta.count[chunk.meta.occupied[instance]] <= this.countFilter) continue;
         chunk.mesh.getMatrixAt(instance, this.ghostMatrix);
         this.ghosts.setMatrixAt(count++, this.ghostMatrix);
       }

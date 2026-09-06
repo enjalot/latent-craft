@@ -19,6 +19,38 @@ function radiiOf(geometry: ReturnType<typeof buildEffectorSurfaceGeometry>): num
 }
 
 describe("Effector surface rectangles", () => {
+  it("keeps filtered voxels and cages hidden across resizing/reload, with no ghost", () => {
+    let visibility = [true, true];
+    const source = { visible: true,
+      setVisibilityAt: (id: number, visible: boolean) => { visibility[id] = visible; },
+      getMatrixAt: (_i: number, m: THREE.Matrix4) => m.makeTranslation(0, 0, -1.5) };
+    const cages = vi.fn();
+    const chunk = { entry: { cx: 0, cy: 0, cz: 0 },
+      meta: { occupied: new Uint32Array([0, 1]), count: new Uint32Array([1, 2]) }, mesh: source,
+      containers: { setSuppressed: cages } };
+    const store = { residentChunkIds: [0], chunk: () => chunk } as unknown as ChunkStore;
+    const manifest = { voxelWorldSize: 1, chunkWorldSize: 16,
+      chunkCenterWorld: (_id: number, v: THREE.Vector3) => v.set(0, 0, 0),
+      voxelCenterWorld: (_x: number, _y: number, _z: number, _local: number, v: THREE.Vector3) => v.set(0, 0, -1.5) } as Manifest;
+    const wheel = { addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement;
+    const field = new EffectorFieldController(store, manifest, new THREE.Scene(), wheel), camera = new THREE.PerspectiveCamera();
+    field.update(camera); expect(field.ghosts.count).toBe(2);
+    field.setCountFilter(1); expect(field.ghosts.count).toBe(1);
+    field.setRadiusVoxels(1, false); field.update(camera);
+    expect(visibility).toEqual([false, true]); expect(field.ghosts.count).toBe(0);
+    expect(cages).toHaveBeenCalledWith(0, true);
+    expect(cages).not.toHaveBeenCalledWith(0, false);
+    visibility = [true, true]; field.onChunkResident(0);
+    expect(visibility).toEqual([false, true]);
+    camera.position.set(100, 0, 0); field.update(camera);
+    expect(visibility).toEqual([false, true]); // far outside bubble's chunk broad phase
+    field.setCountFilter(2); expect(visibility).toEqual([false, false]);
+    field.setCountFilter(0); expect(visibility).toEqual([true, true]);
+    camera.position.set(0, 0, 0); field.setRadiusVoxels(2, false); field.update(camera);
+    field.setCountFilter(1); field.setCountFilter(0);
+    expect(visibility).toEqual([false, false]); expect(field.ghosts.count).toBe(2);
+    field.dispose();
+  });
   it("replaces suppressed thumbnails with faint untextured, non-pickable geometry", () => {
     const source={visible:true,setVisibilityAt:vi.fn(),getMatrixAt:(_i:number,m:THREE.Matrix4)=>m.makeTranslation(0,0,-1.5)};
     const chunk={entry:{cx:0,cy:0,cz:0},meta:{occupied:new Uint32Array([0])},mesh:source,

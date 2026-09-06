@@ -60,6 +60,7 @@ export class SharpBand {
         this.manifest.chunkCenterWorld(chunkId, this.scratch);
         if (this.scratch.distanceToSquared(this.center) > reach * reach) continue;
         for (let instanceId = 0; instanceId < owner.meta.occupied.length; instanceId++) {
+          if (!owner.mesh.getVisibilityAt(instanceId)) continue;
           const localVoxelId = owner.meta.occupied[instanceId];
           this.manifest.voxelCenterWorld(owner.entry.cx, owner.entry.cy, owner.entry.cz, localVoxelId, this.scratch);
           const d2 = this.scratch.distanceToSquared(this.center);
@@ -82,7 +83,7 @@ export class SharpBand {
     const targets: PreviewTarget[] = [];
     const owners = new Map<string, Voxel>();
     for (const v of voxels) {
-      if (targets.length >= PREVIEW_SLOTS || !v.owner.mesh.visible || this.store.chunk(v.chunkId) !== v.owner ||
+      if (targets.length >= PREVIEW_SLOTS || !v.owner.mesh.visible || !v.owner.mesh.getVisibilityAt(v.instanceId) || this.store.chunk(v.chunkId) !== v.owner ||
         this.mining.isFullyExtracted(v.chunkId, v.localVoxelId)) continue;
       this.manifest.voxelCenterWorld(v.owner.entry.cx, v.owner.entry.cy, v.owner.entry.cz, v.localVoxelId, this.scratch);
       const d2 = this.scratch.distanceToSquared(this.center);
@@ -98,7 +99,7 @@ export class SharpBand {
       // or depth bias is needed. Preserve exact clearance from border cages.
       const matrix = this.matrix.clone();
       targets.push({ key, matrix, focused, opacity: combinedVoxelOpacity(this.mining.extractedFraction(v.chunkId, v.localVoxelId), xray),
-        valid: () => this.store.chunk(v.chunkId) === v.owner && !this.mining.isFullyExtracted(v.chunkId, v.localVoxelId),
+        valid: () => this.store.chunk(v.chunkId) === v.owner && v.owner.mesh.getVisibilityAt(v.instanceId) && !this.mining.isFullyExtracted(v.chunkId, v.localVoxelId),
         resolve: async () => {
           const row = searchRow ?? await this.mining.previewRowId(v.chunkId, v.localVoxelId);
           if (row === null) return null;

@@ -21,7 +21,8 @@ export class SearchCompare {
     this.root.className = "ls-search-compare";
     // Keep Space/number shortcuts on focused controls out of flight/hotbar.
     this.root.addEventListener("keydown", event => event.stopPropagation());
-    Object.assign(this.root.style, { padding: "10px", pointerEvents: "auto", fontSize: "11px", flexShrink: "0" });
+    Object.assign(this.root.style, { padding: "10px", pointerEvents: "auto", fontSize: "11px", flexShrink: "1",
+      minHeight: "42px", overflowY: "auto", overscrollBehavior: "contain", boxSizing: "border-box" });
     applyHudPanelChrome(this.root);
     const details = document.createElement("details"); details.open = true;
     const title = document.createElement("summary"); title.textContent = "Text navigation · local comparison";
