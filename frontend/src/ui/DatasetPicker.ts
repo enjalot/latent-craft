@@ -11,13 +11,14 @@ export class DatasetPicker {
     currentKey: string,
     datasets: Record<string, DatasetConfig>,
     synthetic = false,
+    docked = false,
   ) {
     this.root = document.createElement("div");
     this.root.className = "ls-dataset-picker";
     Object.assign(this.root.style, {
-      position: "fixed",
-      top: "14px",
-      left: "14px",
+      position: docked ? "relative" : "fixed",
+      top: docked ? "auto" : "14px",
+      left: docked ? "auto" : "14px",
       zIndex: "11",
       display: "flex",
       alignItems: "center",
@@ -25,7 +26,8 @@ export class DatasetPicker {
       padding: "6px 9px",
       pointerEvents: "auto",
       fontSize: "11px",
-      width: "min(420px, calc(100vw - 28px))",
+      width: docked ? "100%" : "min(420px, calc(100vw - 28px))",
+      flexShrink: "0",
       boxSizing: "border-box",
     } satisfies Partial<CSSStyleDeclaration>);
     applyHudPanelChrome(this.root, { variant: "inset", corners: false });

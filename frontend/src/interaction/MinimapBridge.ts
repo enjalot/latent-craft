@@ -554,11 +554,11 @@ export class MinimapBridge {
    * The caption says which of those applies, so an unloaded target reads as a
    * state, not as a broken hover.
    */
-  highlightVoxel(chunkId: number, localVoxelId: number, rowIdHint = -1): VoxelHighlightResult {
+  highlightVoxel(chunkId: number, localVoxelId: number, rowIdHint = -1, source: "inventory" | "search" = "inventory"): VoxelHighlightResult {
     const token = ++this.coordinateToken;
     if (rowIdHint >= 0 && this.pack.ensureRow && !this.pack.hasRow(rowIdHint)) {
       void this.pack.ensureRow(rowIdHint).then(() => {
-        if (!this.dead && token === this.coordinateToken) this.highlightVoxel(chunkId, localVoxelId, rowIdHint);
+        if (!this.dead && token === this.coordinateToken) this.highlightVoxel(chunkId, localVoxelId, rowIdHint, source);
       }).catch(() => undefined);
     }
     // A pending 2D hover would otherwise overwrite this highlight on the very
@@ -575,7 +575,7 @@ export class MinimapBridge {
     }
 
     this.manifest.voxelCenterWorldById(chunkId, localVoxelId, this.scratch);
-    this.highlight.begin();
+    this.highlight.begin(source === "search");
     const lit3d = this.highlight.add(this.scratch);
     this.highlight.commit();
     const proxyId = this.voxelProxy.instanceIdOf(chunkId, localVoxelId);
@@ -592,7 +592,7 @@ export class MinimapBridge {
     }
 
     this.panel.setCaption(
-      `inventory → chunk ${chunkId} voxel ${localVoxelId}\n` +
+      `${source} → chunk ${chunkId} voxel ${localVoxelId}\n` +
         (chunk
           ? `loaded · row ${rowId >= 0 ? rowId : "—"}`
           : `chunk not loaded · lit as proxy${rowId >= 0 ? "" : " · no 2D fix"}`),

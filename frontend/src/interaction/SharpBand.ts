@@ -28,6 +28,11 @@ export class SharpBand {
   private scratch = new THREE.Vector3();
   private matrix = new THREE.Matrix4();
   private covered: Voxel[] = [];
+  private searchFocus: { chunkId: number; localVoxelId: number; rowId: number } | null = null;
+
+  setSearchFocus(focus: { chunkId: number; localVoxelId: number; rowId: number } | null): void {
+    this.searchFocus = focus;
+  }
 
   constructor(scene: THREE.Scene, renderer: THREE.WebGLRenderer,
     private readonly store: ChunkStore, private readonly manifest: Manifest,
@@ -37,6 +42,7 @@ export class SharpBand {
   }
 
   update(camera: THREE.Camera, radius: number, hover: { chunkId: number; localVoxelId: number } | null, xray: boolean): void {
+    hover = this.searchFocus ?? hover;
     // Restore only opacity, never visibility: the latter also controls picking
     // and is owned by the effector. Restore old owners only while still resident.
     for (const c of this.covered) if (this.store.chunk(c.chunkId) === c.owner)
@@ -83,7 +89,8 @@ export class SharpBand {
       const focused = hover?.chunkId === v.chunkId && hover.localVoxelId === v.localVoxelId;
       if (d2 <= radius ** 2 || (!focused && !isSharpBandCell(d2, radius, size))) continue;
       const state = this.mining.extractionState(v.chunkId, v.localVoxelId);
-      const key = `${v.chunkId}:${v.localVoxelId}:${state?.cursor ?? 0}:${state?.returned.values().next().value ?? ""}`;
+      const searchRow = focused && this.searchFocus ? this.searchFocus.rowId : null;
+      const key = `${v.chunkId}:${v.localVoxelId}:${state?.cursor ?? 0}:${state?.returned.values().next().value ?? ""}:search:${searchRow ?? ""}`;
       if (owners.has(key)) continue;
       owners.set(key, v);
       v.owner.mesh.getMatrixAt(v.instanceId, this.matrix);
@@ -93,7 +100,7 @@ export class SharpBand {
       targets.push({ key, matrix, focused, opacity: combinedVoxelOpacity(this.mining.extractedFraction(v.chunkId, v.localVoxelId), xray),
         valid: () => this.store.chunk(v.chunkId) === v.owner && !this.mining.isFullyExtracted(v.chunkId, v.localVoxelId),
         resolve: async () => {
-          const row = await this.mining.previewRowId(v.chunkId, v.localVoxelId);
+          const row = searchRow ?? await this.mining.previewRowId(v.chunkId, v.localVoxelId);
           if (row === null) return null;
           const index = await this.getIndex(); await index.ensure?.(row);
           return resolveThumbUrl(index, row);

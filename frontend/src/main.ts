@@ -28,6 +28,8 @@ import { GameSession } from "./interaction/GameSession.ts";
 import { planVoxelFlight } from "./interaction/VoxelFlight.ts";
 import { Hud, type HudStreamingState } from "./ui/Hud.ts";
 import { DatasetPicker } from "./ui/DatasetPicker.ts";
+import { SearchCompare } from "./ui/SearchCompare.ts";
+import { SearchNavigation } from "./interaction/SearchNavigation.ts";
 import { createHoldProgressRing } from "./ui/hud/Crosshair.ts";
 import { InventoryPanel } from "./ui/InventoryPanel.ts";
 import { ExtractionFlights } from "./ui/ExtractionFlight.ts";
@@ -157,8 +159,26 @@ highlightBox.visible = false;
 highlightBox.renderOrder = 2;
 engine.scene.add(highlightBox);
 
-const datasetPicker = new DatasetPicker(app, datasetKey, DATASETS, useSynthetic);
-const hud = new Hud(app);
+// One scrolling left dock: search results cannot overlap settings or hotbar.
+const leftDock = document.createElement("div");
+leftDock.className = "ls-left-dock";
+Object.assign(leftDock.style, { position: "fixed", top: "14px", left: "14px", maxHeight: "calc(100vh - 104px)",
+  width: "min(420px, calc(100vw - 28px))", display: "flex", flexDirection: "column",
+  gap: "8px", overflowY: "auto", overflowX: "hidden", zIndex: "11", pointerEvents: "auto" });
+app.append(leftDock);
+const datasetPicker = new DatasetPicker(leftDock, datasetKey, DATASETS, useSynthetic, true);
+const hud = new Hud(leftDock, true);
+let searchNavigation: SearchNavigation | null = null;
+const searchCompare = new SearchCompare(leftDock, useSynthetic ? "synthetic" : datasetKey, {
+  project: response => {
+    if (!searchNavigation) throw new Error("Map is still loading; try again shortly");
+    searchNavigation.project(response);
+  },
+  hover: result => searchNavigation?.hover(result),
+  select: result => searchNavigation?.select(result),
+  clear: () => searchNavigation?.clear(),
+});
+engine.renderer.domElement.addEventListener("pointerdown", () => searchNavigation?.clear(), { signal: appLifetime.signal });
 const holdRing = createHoldProgressRing(app);
 
 // Hand / bulk extraction / glass view are separate slots; the field is always on.
@@ -376,6 +396,8 @@ async function bootstrapStreamedWorld(): Promise<void> {
       engine.renderer.domElement,
     );
     sharpBand = new SharpBand(engine.scene, engine.renderer, chunkStore, manifest, miningController, loadPointIndexOnce);
+    searchNavigation = new SearchNavigation(manifest, engine, flightControls, chunkStore, sharpBand,
+      () => minimap, () => effectorField?.currentRadius ?? 0, () => pointerController.cancelHold());
     // Non-null assertion: `app`'s null-check `throw` above is at module scope,
     // but TS doesn't carry that narrowing into a separate nested function
     // (this one) even though `app` is a never-reassigned `const`.
@@ -912,6 +934,8 @@ function disposeApp(): void {
   window.removeEventListener("pagehide", disposeApp);
   appLifetime.abort();
   engine.stop();
+  searchCompare.dispose(); searchNavigation?.dispose(); searchNavigation = null;
+  leftDock.remove();
   if (effectorField) gameSession?.saveSettings(engine.camera.position.toArray(), engine.camera.quaternion.toArray(), effectorField.currentRadiusVoxels, true);
   gameSession?.dispose(); gameSession = null;
 

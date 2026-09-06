@@ -68,7 +68,8 @@ export class HighlightCubes {
   }
 
   /** Starts a new batch; call `add()` then `commit()`. */
-  begin(): void {
+  begin(wireframe = false): void {
+    this.material.wireframe = wireframe;
     this.written = 0;
   }
 

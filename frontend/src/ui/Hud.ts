@@ -70,17 +70,18 @@ export class Hud {
   private lastText = "";
   private collapsed = false;
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, docked = false) {
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
-      position: "fixed",
+      position: docked ? "relative" : "fixed",
       // DatasetPicker occupies the first strip in this top-left dock.
-      top: "58px",
-      left: "14px",
+      top: docked ? "auto" : "58px",
+      left: docked ? "auto" : "14px",
       fontSize: "11px",
       lineHeight: "1.65",
       pointerEvents: "auto",
-      width: "min(420px, calc(100vw - 28px))",
+      width: docked ? "100%" : "min(420px, calc(100vw - 28px))",
+      flexShrink: "0",
       boxSizing: "border-box",
       zIndex: "10",
     } satisfies Partial<CSSStyleDeclaration>);

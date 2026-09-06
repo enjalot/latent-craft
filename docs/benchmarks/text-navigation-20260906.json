@@ -1,0 +1,751 @@
+{
+  "description": "12 sequential paired prompts, projection then search; search reuses text embedding cache.",
+  "summary": {
+    "project": {
+      "embed_ms": {
+        "p50": 28.16500997869298,
+        "p95": 67.89677348861
+      },
+      "project_ms": {
+        "p50": 5.678204033756629,
+        "p95": 9.90636139176786
+      },
+      "search_ms": {
+        "p50": 0.0,
+        "p95": 0.0
+      },
+      "total_ms": {
+        "p50": 34.780248475726694,
+        "p95": 73.97723176982248
+      }
+    },
+    "search": {
+      "embed_ms": {
+        "p50": 0.003546039806678891,
+        "p95": 0.007243276922963558
+      },
+      "project_ms": {
+        "p50": 6.024877511663362,
+        "p95": 13.715570216299964
+      },
+      "search_ms": {
+        "p50": 133.31315049435943,
+        "p95": 173.73229777440426
+      },
+      "total_ms": {
+        "p50": 146.20070200180635,
+        "p95": 184.36226919002362
+      }
+    }
+  },
+  "resources": {
+    "dataset": "monet-clip-basemap-training-512",
+    "release": "monet-clip-basemap-training-20260905a",
+    "rows": 2008321,
+    "index_state": "ready",
+    "index_rows": 2008321,
+    "index_error": null,
+    "index_bytes": 4113041408,
+    "encoder_weight_bytes": 253712384,
+    "projection_weight_bytes": 96579604,
+    "projection_check_max_error": 7.62939453125e-06
+  },
+  "records": [
+    {
+      "query": "a red sports car",
+      "mode": "project",
+      "client_ms": 32.21857798052952,
+      "timings": {
+        "embed_ms": 15.377879026345909,
+        "project_ms": 4.056497011333704,
+        "search_ms": 0,
+        "total_ms": 19.543945032637566
+      },
+      "embedding_cached": false,
+      "projection": {
+        "position": [
+          0.33196186842236663,
+          -0.2704523233550663,
+          0.5607801099719807
+        ],
+        "raw2": [
+          15.488058090209961,
+          -6.1572957038879395
+        ],
+        "outside_frame": false
+      },
+      "first_result": []
+    },
+    {
+      "query": "a red sports car",
+      "mode": "search",
+      "client_ms": 136.89782202709466,
+      "timings": {
+        "embed_ms": 0.0048790243454277515,
+        "project_ms": 5.663681018631905,
+        "search_ms": 129.19214100111276,
+        "total_ms": 135.2729650097899
+      },
+      "embedding_cached": true,
+      "projection": {
+        "position": [
+          0.33196186842236663,
+          -0.2704523233550663,
+          0.5607801099719807
+        ],
+        "raw2": [
+          15.488058090209961,
+          -6.1572957038879395
+        ],
+        "outside_frame": false
+      },
+      "first_result": [
+        {
+          "row": 742331,
+          "score": 0.3276497423648834,
+          "chunk": 27893,
+          "local": 1735,
+          "thumb": 5055339
+        }
+      ]
+    },
+    {
+      "query": "an aerial photograph of a forest",
+      "mode": "project",
+      "client_ms": 32.256800041068345,
+      "timings": {
+        "embed_ms": 23.049155017361045,
+        "project_ms": 5.288669024594128,
+        "search_ms": 0,
+        "total_ms": 28.497787017840892
+      },
+      "embedding_cached": false,
+      "projection": {
+        "position": [
+          0.494877087800349,
+          0.19977002841219105,
+          0.3566143606873209
+        ],
+        "raw2": [
+          6.845120906829834,
+          -10.222189903259277
+        ],
+        "outside_frame": false
+      },
+      "first_result": []
+    },
+    {
+      "query": "an aerial photograph of a forest",
+      "mode": "search",
+      "client_ms": 168.15718595171347,
+      "timings": {
+        "embed_ms": 0.008406001143157482,
+        "project_ms": 15.306552988477051,
+        "search_ms": 134.20301099540666,
+        "total_ms": 165.81310203764588
+      },
+      "embedding_cached": true,
+      "projection": {
+        "position": [
+          0.494877087800349,
+          0.19977002841219105,
+          0.3566143606873209
+        ],
+        "raw2": [
+          6.845120906829834,
+          -10.222189903259277
+        ],
+        "outside_frame": false
+      },
+      "first_result": [
+        {
+          "row": 1061959,
+          "score": 0.34418004751205444,
+          "chunk": 22135,
+          "local": 1594,
+          "thumb": 7276639
+        }
+      ]
+    },
+    {
+      "query": "a dog playing in snow",
+      "mode": "project",
+      "client_ms": 42.844515992328525,
+      "timings": {
+        "embed_ms": 35.684391972608864,
+        "project_ms": 5.901502969209105,
+        "search_ms": 0,
+        "total_ms": 41.724457987584174
+      },
+      "embedding_cached": false,
+      "projection": {
+        "position": [
+          0.566561842008021,
+          0.2809066850481683,
+          -0.15630570712894964
+        ],
+        "raw2": [
+          13.941620826721191,
+          -2.310056686401367
+        ],
+        "outside_frame": false
+      },
+      "first_result": []
+    },
+    {
+      "query": "a dog playing in snow",
+      "mode": "search",
+      "client_ms": 136.67082000756636,
+      "timings": {
+        "embed_ms": 0.0031859963200986385,
+        "project_ms": 5.9900410124100745,
+        "search_ms": 126.09711999539286,
+        "total_ms": 135.62746800016612
+      },
+      "embedding_cached": true,
+      "projection": {
+        "position": [
+          0.566561842008021,
+          0.2809066850481683,
+          -0.15630570712894964
+        ],
+        "raw2": [
+          13.941620826721191,
+          -2.310056686401367
+        ],
+        "outside_frame": false
+      },
+      "first_result": [
+        {
+          "row": 1655663,
+          "score": 0.3335046172142029,
+          "chunk": 12985,
+          "local": 2766,
+          "thumb": 11209618
+        }
+      ]
+    },
+    {
+      "query": "a watercolor painting of mountains",
+      "mode": "project",
+      "client_ms": 37.8347480436787,
+      "timings": {
+        "embed_ms": 30.58199700899422,
+        "project_ms": 5.753933044616133,
+        "search_ms": 0,
+        "total_ms": 36.46001499146223
+      },
+      "embedding_cached": false,
+      "projection": {
+        "position": [
+          0.29842008529768216,
+          0.018625749469654673,
+          0.21439486651691841
+        ],
+        "raw2": [
+          0.31490960717201233,
+          -0.23227041959762573
+        ],
+        "outside_frame": false
+      },
+      "first_result": []
+    },
+    {
+      "query": "a watercolor painting of mountains",
+      "mode": "search",
+      "client_ms": 138.8572850264609,
+      "timings": {
+        "embed_ms": 0.002875982318073511,
+        "project_ms": 5.359452974516898,
+        "search_ms": 117.87957599153742,
+        "total_ms": 133.9017190039158
+      },
+      "embedding_cached": true,
+      "projection": {
+        "position": [
+          0.29842008529768216,
+          0.018625749469654673,
+          0.21439486651691841
+        ],
+        "raw2": [
+          0.31490960717201233,
+          -0.23227041959762573
+        ],
+        "outside_frame": false
+      },
+      "first_result": [
+        {
+          "row": 61421,
+          "score": 0.3589518070220947,
+          "chunk": 16883,
+          "local": 4031,
+          "thumb": 394642
+        }
+      ]
+    },
+    {
+      "query": "a plate of pasta",
+      "mode": "project",
+      "client_ms": 33.78320898627862,
+      "timings": {
+        "embed_ms": 23.13993702409789,
+        "project_ms": 9.325738996267319,
+        "search_ms": 0,
+        "total_ms": 32.60376799153164
+      },
+      "embedding_cached": false,
+      "projection": {
+        "position": [
+          -0.16765398586149327,
+          0.5294308466163333,
+          0.0396930595988505
+        ],
+        "raw2": [
+          -20.35419464111328,
+          -11.807475090026855
+        ],
+        "outside_frame": false
+      },
+      "first_result": []
+    },
+    {
+      "query": "a plate of pasta",
+      "mode": "search",
+      "client_ms": 149.04723601648584,
+      "timings": {
+        "embed_ms": 0.0035160337574779987,
+        "project_ms": 8.446188003290445,
+        "search_ms": 132.4232899933122,
+        "total_ms": 147.69814198371023
+      },
+      "embedding_cached": true,
+      "projection": {
+        "position": [
+          -0.16765398586149327,
+          0.5294308466163333,
+          0.0396930595988505
+        ],
+        "raw2": [
+          -20.35419464111328,
+          -11.807475090026855
+        ],
+        "outside_frame": false
+      },
+      "first_result": [
+        {
+          "row": 471638,
+          "score": 0.3392859995365143,
+          "chunk": 17165,
+          "local": 1927,
+          "thumb": 3154826
+        }
+      ]
+    },
+    {
+      "query": "a portrait of a woman",
+      "mode": "project",
+      "client_ms": 43.79961098311469,
+      "timings": {
+        "embed_ms": 33.17837999202311,
+        "project_ms": 8.845527016092092,
+        "search_ms": 0,
+        "total_ms": 42.23031899891794
+      },
+      "embedding_cached": false,
+      "projection": {
+        "position": [
+          0.07955810069080549,
+          -0.15015165229524574,
+          -0.2188990495717773
+        ],
+        "raw2": [
+          8.891849517822266,
+          8.96782398223877
+        ],
+        "outside_frame": false
+      },
+      "first_result": []
+    },
+    {
+      "query": "a portrait of a woman",
+      "mode": "search",
+      "client_ms": 130.3307330235839,
+      "timings": {
+        "embed_ms": 0.006291957106441259,
+        "project_ms": 7.669272017665207,
+        "search_ms": 119.6120569948107,
+        "total_ms": 128.8712800014764
+      },
+      "embedding_cached": true,
+      "projection": {
+        "position": [
+          0.07955810069080549,
+          -0.15015165229524574,
+          -0.2188990495717773
+        ],
+        "raw2": [
+          8.891849517822266,
+          8.96782398223877
+        ],
+        "outside_frame": false
+      },
+      "first_result": [
+        {
+          "row": 1698025,
+          "score": 0.3230971693992615,
+          "chunk": 17877,
+          "local": 3435,
+          "thumb": 11474125
+        }
+      ]
+    },
+    {
+      "query": "a medieval castle",
+      "mode": "project",
+      "client_ms": 27.69893896766007,
+      "timings": {
+        "embed_ms": 20.807325025089085,
+        "project_ms": 5.602475022897124,
+        "search_ms": 0,
+        "total_ms": 26.53928496874869
+      },
+      "embedding_cached": false,
+      "projection": {
+        "position": [
+          0.23723182919567987,
+          0.08575765630673038,
+          0.23509878548909313
+        ],
+        "raw2": [
+          1.3953449726104736,
+          4.627213954925537
+        ],
+        "outside_frame": false
+      },
+      "first_result": []
+    },
+    {
+      "query": "a medieval castle",
+      "mode": "search",
+      "client_ms": 146.3682350004092,
+      "timings": {
+        "embed_ms": 0.0036669662222266197,
+        "project_ms": 4.993017006199807,
+        "search_ms": 134.69355303095654,
+        "total_ms": 144.70326201990247
+      },
+      "embedding_cached": true,
+      "projection": {
+        "position": [
+          0.23723182919567987,
+          0.08575765630673038,
+          0.23509878548909313
+        ],
+        "raw2": [
+          1.3953449726104736,
+          4.627213954925537
+        ],
+        "outside_frame": false
+      },
+      "first_result": [
+        {
+          "row": 340031,
+          "score": 0.3312062621116638,
+          "chunk": 15955,
+          "local": 2366,
+          "thumb": 2297067
+        }
+      ]
+    },
+    {
+      "query": "a black and white street photograph",
+      "mode": "project",
+      "client_ms": 36.83690197067335,
+      "timings": {
+        "embed_ms": 30.396745016332716,
+        "project_ms": 5.067647958640009,
+        "search_ms": 0,
+        "total_ms": 35.573871980886906
+      },
+      "embedding_cached": false,
+      "projection": {
+        "position": [
+          0.3486122976536761,
+          -0.0667198292111294,
+          0.32747319463939717
+        ],
+        "raw2": [
+          3.334268569946289,
+          -1.8435494899749756
+        ],
+        "outside_frame": false
+      },
+      "first_result": []
+    },
+    {
+      "query": "a black and white street photograph",
+      "mode": "search",
+      "client_ms": 178.49577794549987,
+      "timings": {
+        "embed_ms": 0.002835993655025959,
+        "project_ms": 4.141609009820968,
+        "search_ms": 163.2296420284547,
+        "total_ms": 173.39711199747398
+      },
+      "embedding_cached": true,
+      "projection": {
+        "position": [
+          0.3486122976536761,
+          -0.0667198292111294,
+          0.32747319463939717
+        ],
+        "raw2": [
+          3.334268569946289,
+          -1.8435494899749756
+        ],
+        "outside_frame": false
+      },
+      "first_result": [
+        {
+          "row": 1305267,
+          "score": 0.32231953740119934,
+          "chunk": 21973,
+          "local": 1255,
+          "thumb": 8853139
+        }
+      ]
+    },
+    {
+      "query": "a close up of a butterfly",
+      "mode": "project",
+      "client_ms": 35.15845199581236,
+      "timings": {
+        "embed_ms": 29.171627946197987,
+        "project_ms": 4.708305990789086,
+        "search_ms": 0,
+        "total_ms": 33.98662497056648
+      },
+      "embedding_cached": false,
+      "projection": {
+        "position": [
+          0.4064775668401508,
+          0.25404941938642733,
+          0.17341918771347387
+        ],
+        "raw2": [
+          17.324203491210938,
+          -3.079394578933716
+        ],
+        "outside_frame": false
+      },
+      "first_result": []
+    },
+    {
+      "query": "a close up of a butterfly",
+      "mode": "search",
+      "client_ms": 133.47134098876268,
+      "timings": {
+        "embed_ms": 0.003196008037775755,
+        "project_ms": 5.412013037130237,
+        "search_ms": 119.14230498950928,
+        "total_ms": 132.1880629984662
+      },
+      "embedding_cached": true,
+      "projection": {
+        "position": [
+          0.4064775668401508,
+          0.25404941938642733,
+          0.17341918771347387
+        ],
+        "raw2": [
+          17.324203491210938,
+          -3.079394578933716
+        ],
+        "outside_frame": false
+      },
+      "first_result": [
+        {
+          "row": 1016295,
+          "score": 0.33366650342941284,
+          "chunk": 19094,
+          "local": 2585,
+          "thumb": 6888619
+        }
+      ]
+    },
+    {
+      "query": "a blue ceramic bowl",
+      "mode": "project",
+      "client_ms": 35.089551005512476,
+      "timings": {
+        "embed_ms": 27.15839201118797,
+        "project_ms": 6.40366697916761,
+        "search_ms": 0,
+        "total_ms": 33.70443999301642
+      },
+      "embedding_cached": false,
+      "projection": {
+        "position": [
+          -0.03141171762270911,
+          0.13148318844801254,
+          0.06759322738504658
+        ],
+        "raw2": [
+          -8.51358413696289,
+          -4.220402240753174
+        ],
+        "outside_frame": false
+      },
+      "first_result": []
+    },
+    {
+      "query": "a blue ceramic bowl",
+      "mode": "search",
+      "client_ms": 173.65512001561,
+      "timings": {
+        "embed_ms": 0.005170004442334175,
+        "project_ms": 9.362519020214677,
+        "search_ms": 157.23864897154272,
+        "total_ms": 168.58551802579314
+      },
+      "embedding_cached": true,
+      "projection": {
+        "position": [
+          -0.03141171762270911,
+          0.13148318844801254,
+          0.06759322738504658
+        ],
+        "raw2": [
+          -8.51358413696289,
+          -4.220402240753174
+        ],
+        "outside_frame": false
+      },
+      "first_result": [
+        {
+          "row": 1619302,
+          "score": 0.3847542703151703,
+          "chunk": 17967,
+          "local": 760,
+          "thumb": 10949507
+        }
+      ]
+    },
+    {
+      "query": "a science fiction spaceship",
+      "mode": "project",
+      "client_ms": 38.100712990853935,
+      "timings": {
+        "embed_ms": 25.845738011412323,
+        "project_ms": 10.61601098626852,
+        "search_ms": 0,
+        "total_ms": 36.61144303623587
+      },
+      "embedding_cached": false,
+      "projection": {
+        "position": [
+          0.23080285166896775,
+          0.030496045453267895,
+          0.2196114714899089
+        ],
+        "raw2": [
+          -0.15948499739170074,
+          -2.164259195327759
+        ],
+        "outside_frame": false
+      },
+      "first_result": []
+    },
+    {
+      "query": "a science fiction spaceship",
+      "mode": "search",
+      "client_ms": 198.8899569842033,
+      "timings": {
+        "embed_ms": 0.0035760458558797836,
+        "project_ms": 6.05971401091665,
+        "search_ms": 186.5688770194538,
+        "total_ms": 197.7641279809177
+      },
+      "embedding_cached": true,
+      "projection": {
+        "position": [
+          0.23080285166896775,
+          0.030496045453267895,
+          0.2196114714899089
+        ],
+        "raw2": [
+          -0.15948499739170074,
+          -2.164259195327759
+        ],
+        "outside_frame": false
+      },
+      "first_result": [
+        {
+          "row": 1263762,
+          "score": 0.3098224401473999,
+          "chunk": 15955,
+          "local": 2095,
+          "thumb": 8589429
+        }
+      ]
+    },
+    {
+      "query": "a vintage illustrated book cover",
+      "mode": "project",
+      "client_ms": 114.61165599757805,
+      "timings": {
+        "embed_ms": 107.26746200816706,
+        "project_ms": 5.386345030274242,
+        "search_ms": 0,
+        "total_ms": 112.7790140453726
+      },
+      "embedding_cached": false,
+      "projection": {
+        "position": [
+          0.32133296129616085,
+          -0.03623799887549761,
+          0.17055658484905178
+        ],
+        "raw2": [
+          1.2393220663070679,
+          0.6225324273109436
+        ],
+        "outside_frame": false
+      },
+      "first_result": []
+    },
+    {
+      "query": "a vintage illustrated book cover",
+      "mode": "search",
+      "client_ms": 159.7802970209159,
+      "timings": {
+        "embed_ms": 0.0030559604056179523,
+        "project_ms": 12.413857039064169,
+        "search_ms": 142.8325659944676,
+        "total_ms": 158.4438889985904
+      },
+      "embedding_cached": true,
+      "projection": {
+        "position": [
+          0.32133296129616085,
+          -0.03623799887549761,
+          0.17055658484905178
+        ],
+        "raw2": [
+          1.2393220663070679,
+          0.6225324273109436
+        ],
+        "outside_frame": false
+      },
+      "first_result": [
+        {
+          "row": 947636,
+          "score": 0.33170032501220703,
+          "chunk": 18901,
+          "local": 906,
+          "thumb": 6431095
+        }
+      ]
+    }
+  ]
+}
