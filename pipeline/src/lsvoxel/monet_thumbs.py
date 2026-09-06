@@ -13,9 +13,11 @@ Two things live here:
 
        packed = shard_idx * 65536 + local_row        (== shard_idx << 16 | local_row)
 
-   Both halves fit: the pool has 2,015 shards (max index 2014) and at most 10,000 rows
-   per shard (max local row 9,999), so the packed value maxes out around 1.32e8 — well
-   inside u32. `pack_thumb_ref` validates both halves rather than silently wrapping.
+   Both halves fit: the original pool has 2,015 shards and the full corpus extends
+   that order to 10,880 shards, with at most 10,000 rows per shard. Even the full
+   corpus's packed references stay below 7.14e8, safely inside u32. Existing pool
+   references are unchanged. `pack_thumb_ref` validates both halves rather than
+   silently wrapping.
 
    This packing is decoded in exactly two places, both of which import from here:
    `datasets/monet.py` (build-time round-trip assertion) and
@@ -38,8 +40,8 @@ Two things live here:
 (see its systemd unit), which has no numpy — so this module reads spans with
 `os.pread` + `struct` instead of `np.memmap`. That also makes reads positional and
 therefore thread-safe by construction, which the server's `ThreadingHTTPServer` needs,
-and keeps memory flat (no per-shard offsets array resident: 2,015 shards x 80 KB would
-be 160 MB of offsets alone).
+and keeps memory flat (no per-shard offsets array resident: the full corpus's
+offset files total about 792 MiB).
 """
 from __future__ import annotations
 

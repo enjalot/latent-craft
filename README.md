@@ -6,9 +6,12 @@ while a compact proxy layer keeps the full shape visible at distance. A linked
 2D UMAP minimap, extraction inventory, lightbox, and inspection tools provide
 ways to move between overview and individual source images.
 
-The default is now `monet-sscd-160`, using hierarchical proxy bricks and paged
+The default is `monet-sscd-512`, using hierarchical proxy bricks and paged
 byte-range data. See [streaming architecture and 100M limits](docs/streaming-architecture.md)
 for formats, working-set budgets, build commands, and measured verification scope.
+
+The [103.8M MONET release](docs/monet-104m-4m-release.md) uses the random
+4M-trained CLIP basemap heads for both 2D and 3D, with 512³ voxel resolution.
 
 ## Run locally
 
@@ -32,7 +35,7 @@ npm ci
 npm run dev
 ```
 
-Open `http://localhost:5300`. The dataset picker above Telemetry changes packs;
+Open `http://localhost:5300`. The dataset picker above Settings changes packs;
 `?dataset=bl-160` selects one directly and `?synthetic=1` runs the procedural
 fallback without a data server.
 
@@ -52,7 +55,7 @@ During development, `LSV_DATA_PROXY_TARGET` can override Vite's default
 - `1` equips the empty hand (one point per mining cycle); `2` equips the Pickaxe
   (up to 100 points per cycle); `3` equips X-ray (glass view).
 - The Effector Field is always active; scroll over the 3D world to resize its
-  radius (default: two voxels). Surface dots mark the boundary while scrolling,
+  radius (default: two voxels). Physical rectangular markers show the boundary while scrolling,
   then fade out. Hovering a block turns the cursor into a count/depletion dial.
 - Hover or click the minimap to relate the independent 2D and 3D UMAP fits.
 

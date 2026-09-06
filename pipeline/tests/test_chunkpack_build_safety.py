@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+import time
 
 from lsvoxel.chunkpack import build
 
@@ -50,6 +51,27 @@ def test_failed_staged_build_preserves_the_current_pack(tmp_path, monkeypatch):
             points_table_path=tmp_path / "points.parquet",
         )
 
+    assert (target / "manifest.json").read_text() == "known-good"
+    assert not list(tmp_path.glob(".pack.building-*"))
+
+
+def test_failed_parallel_encoder_finishes_workers_before_staging_cleanup(tmp_path, monkeypatch):
+    target = tmp_path / "pack"; target.mkdir()
+    (target / "manifest.json").write_text("known-good")
+    points = pd.DataFrame(dict(row_id=np.arange(2, dtype=np.uint32), subset="test", global_idx=np.arange(2, dtype=np.uint32)))
+    finished = []
+    def encode(png, output, **kwargs):
+        if png.stem == "000000":
+            raise RuntimeError("encoder failed")
+        time.sleep(.02)
+        output.write_bytes(b"finished-before-cleanup")
+        finished.append(png.stem)
+    monkeypatch.setattr(build.atlas_mod, "encode_ktx2", encode)
+    monkeypatch.setattr(build.frame_mod, "compute_frame_3d", lambda coords: {"extent": [-1, 1]*3})
+    with pytest.raises(RuntimeError, match="encoder failed"):
+        build.assign_and_build("test", points, np.array([[-.9]*3, [.9]*3]), 32, NoThumbnailSource(),
+            target, {"test": 0}, "{local_idx}", "test", tmp_path / "points.parquet", atlas_workers=2)
+    assert finished == ["000007"]
     assert (target / "manifest.json").read_text() == "known-good"
     assert not list(tmp_path.glob(".pack.building-*"))
 

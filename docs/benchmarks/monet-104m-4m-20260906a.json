@@ -1,0 +1,20 @@
+{
+  "dataset": "monet-clip-basemap-full-4m-20260906a",
+  "points": 103816750,
+  "occupied_voxels": 2318931,
+  "chunks": 5448,
+  "max_voxel_count": 61136,
+  "atlas_bytes": 366023889,
+  "pack_bytes": 4966260469,
+  "density_bytes": 253852,
+  "full_row_joins_verified": true,
+  "postings_exactly_once": true,
+  "spatial_rows_exactly_once": true,
+  "proxy_counts_conserved": true,
+  "head_checks": {
+    "2d_pool-20m_max_error": 8.493661880493164e-06,
+    "2d_pool-complement-88m_max_error": 9.775161743164062e-06,
+    "3d_pool-20m_max_error": 3.814697265625e-06,
+    "3d_pool-complement-88m_max_error": 3.814697265625e-06
+  }
+}

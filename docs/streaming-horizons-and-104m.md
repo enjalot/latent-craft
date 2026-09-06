@@ -1,5 +1,9 @@
 # Streaming transitions and 103.8M readiness — September 5, 2026
 
+The publication prerequisites below are historical. The full corpus now has a
+[published, audited 4M-trained 2D/3D release](monet-104m-4m-release.md), with all
+thumbnail shards complete. Original-URL coverage remains limited to the pool.
+
 The streaming limits and global horizon behavior below have been superseded by
 [distance-stable rendering](distance-stable-rendering.md). The 103.8M measurements
 and readiness notes remain unchanged.

@@ -141,7 +141,7 @@ def mean_tile_color(atlas: Image.Image, tile_index: int, tile_px: int, tiles_per
     return tuple(int(round(v)) for v in mean)
 
 
-def encode_ktx2(png_path: Path, out_path: Path, basisu_bin: str = "basisu") -> None:
+def encode_ktx2(png_path: Path, out_path: Path, basisu_bin: str = "basisu", max_threads: int | None = None) -> None:
     """Encode one opaque, level-0 ETC1S texture. Atlas mips cross tile boundaries,
     are never sampled by the frontend, and used to add 33% to decoded storage."""
     resolved = shutil.which(basisu_bin) or (basisu_bin if Path(basisu_bin).exists() else None)
@@ -151,8 +151,11 @@ def encode_ktx2(png_path: Path, out_path: Path, basisu_bin: str = "basisu") -> N
             "gate (github.com/BinomialLLC/basis_universal) before running atlas encoding"
         )
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    if max_threads is not None and max_threads < 1:
+        raise ValueError("Encoder thread limit must be positive")
     result = subprocess.run(
-        [resolved, "-ktx2", str(png_path), "-output_file", str(out_path)],
+        [resolved, "-ktx2", str(png_path), "-output_file", str(out_path)] +
+        (["-max_threads", str(max_threads)] if max_threads is not None else []),
         capture_output=True,
         text=True,
     )

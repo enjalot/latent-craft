@@ -8,6 +8,7 @@ packs.
 from __future__ import annotations
 
 import ctypes
+from contextlib import closing
 import errno
 import json
 import os
@@ -23,6 +24,7 @@ from .. import frame as frame_mod
 from ..datasets.base import ThumbnailSource
 from . import assign as assign_mod
 from . import atlas as atlas_mod
+from .atlas_jobs import ordered_atlases
 from . import manifest as manifest_mod
 from . import metablob
 from . import pointindex as pointindex_mod
@@ -48,6 +50,8 @@ def assign_and_build(
     basisu_bin: str = "basisu",
     tmp_dir: Path | None = None,
     wide_counts: bool = False,
+    atlas_workers: int = 1,
+    reuse_atlases: Path | None = None,
 ) -> dict:
     """Build and validate in a sibling staging directory, then publish as one pack.
 
@@ -85,6 +89,8 @@ def assign_and_build(
             basisu_bin=basisu_bin,
             tmp_dir=build_tmp_dir,
             wide_counts=wide_counts,
+            atlas_workers=atlas_workers,
+            reuse_atlases=reuse_atlases,
         )
         manifest_mod.validate_manifest(staging)
         _publish_staged_pack(staging, out_dir)
@@ -167,6 +173,8 @@ def _assign_and_build_into(
     basisu_bin: str = "basisu",
     tmp_dir: Path | None = None,
     wide_counts: bool = False,
+    atlas_workers: int = 1,
+    reuse_atlases: Path | None = None,
 ) -> dict:
     n = len(points_df)
     if coords3d.shape != (n, 3):
@@ -182,12 +190,19 @@ def _assign_and_build_into(
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     print("[build] computing frame ...", flush=True)
-    frame = frame_mod.compute_frame_3d(coords3d)
-    coords_norm = frame_mod.normalize_to_cube(coords3d, frame["extent"])
-
-    print("[build] assigning points to voxels/chunks ...", flush=True)
-    assign = assign_mod.assign_points_to_chunks(coords_norm, num_voxels, voxels_per_chunk)
-    reps = assign_mod.select_representatives(coords_norm, assign, num_voxels)
+    if n > 25_000_000:
+        from .bounded import prepare_assignment
+        frame = frame_mod.compute_frame_3d(coords3d[np.linspace(0, n - 1, 1_000_000, dtype=np.int64)])
+        frame["extent_sample_rows"] = 1_000_000
+        print("[build] disk-backed assignment (all rows; sampled frame only) ...", flush=True)
+        assign, reps = prepare_assignment(coords3d, frame["extent"], num_voxels, voxels_per_chunk, tmp_dir / "assignment")
+    else:
+        frame = frame_mod.compute_frame_3d(coords3d)
+        coords_norm = frame_mod.normalize_to_cube(coords3d, frame["extent"])
+        print("[build] assigning points to voxels/chunks ...", flush=True)
+        assign = assign_mod.assign_points_to_chunks(coords_norm, num_voxels, voxels_per_chunk)
+        reps = assign_mod.select_representatives(coords_norm, assign, num_voxels)
+        del coords_norm
 
     max_voxel_count = int(reps["n_points"].max()) if len(reps) else 0
     if not wide_counts and max_voxel_count > np.iinfo(np.uint16).max:
@@ -234,106 +249,96 @@ def _assign_and_build_into(
     voxel_proxy_runs: list[np.ndarray] = []
 
     n_chunks_total = len(chunk_ids_present)
-    for ci, chunk_id in enumerate(chunk_ids_present.tolist()):
-        s, e = int(chunk_starts[ci]), int(chunk_ends[ci])
-        c_local_ids = local_id_sorted[s:e]
-        c_row_ids = row_id_sorted[s:e]
-        n_points_chunk = e - s
+    with closing(ordered_atlases(chunk_ids_present.tolist(), reps_by_chunk, thumb_source, out_dir, tmp_dir,
+            tile_px, atlas_px, basisu_bin, atlas_workers, reuse_atlases)) as atlases:
+        for ci, chunk_id in enumerate(chunk_ids_present.tolist()):
+            s, e = int(chunk_starts[ci]), int(chunk_ends[ci])
+            c_local_ids = local_id_sorted[s:e]
+            c_row_ids = row_id_sorted[s:e]
+            n_points_chunk = e - s
 
-        g = reps_by_chunk[int(chunk_id)].sort_values("local_voxel_id")
-        occ_local_ids = g["local_voxel_id"].to_numpy()
-        occ_repr_row_ids = g["repr_row_id"].to_numpy()
-        occ_counts = g["n_points"].to_numpy()
+            g = reps_by_chunk[int(chunk_id)].sort_values("local_voxel_id")
+            occ_local_ids = g["local_voxel_id"].to_numpy()
+            occ_repr_row_ids = g["repr_row_id"].to_numpy()
+            occ_counts = g["n_points"].to_numpy()
 
-        # point_offset per occupied voxel = position within THIS chunk's point_ids
-        # array where its points begin; c_local_ids is ascending (part of the lexsort
-        # above), so a diff/boundary pass gives exactly that, no per-voxel search needed
-        local_bounds = np.flatnonzero(np.diff(c_local_ids)) + 1
-        local_starts = np.concatenate(([0], local_bounds))
-        offset_by_local_id = dict(zip(c_local_ids[local_starts].tolist(), local_starts.tolist()))
+            # point_offset per occupied voxel = position within THIS chunk's point_ids
+            # array where its points begin; c_local_ids is ascending (part of the lexsort
+            # above), so a diff/boundary pass gives exactly that, no per-voxel search needed
+            local_bounds = np.flatnonzero(np.diff(c_local_ids)) + 1
+            local_starts = np.concatenate(([0], local_bounds))
+            offset_by_local_id = dict(zip(c_local_ids[local_starts].tolist(), local_starts.tolist()))
 
-        voxel_records = metablob.new_voxel_records(voxels_per_chunk3, wide=wide_counts)
-        for lid, repr_row, cnt in zip(
-            occ_local_ids.tolist(), occ_repr_row_ids.tolist(), occ_counts.tolist()
-        ):
-            voxel_records[lid]["count"] = cnt
-            voxel_records[lid]["point_offset"] = offset_by_local_id[lid]
-            voxel_records[lid]["repr_row_id"] = repr_row
-            voxel_records[lid]["flags"] = metablob.FLAG_HAS_ATLAS_TILE
+            voxel_records = metablob.new_voxel_records(voxels_per_chunk3, wide=wide_counts)
+            for lid, repr_row, cnt in zip(
+                occ_local_ids.tolist(), occ_repr_row_ids.tolist(), occ_counts.tolist()
+            ):
+                voxel_records[lid]["count"] = cnt
+                voxel_records[lid]["point_offset"] = offset_by_local_id[lid]
+                voxel_records[lid]["repr_row_id"] = repr_row
+                voxel_records[lid]["flags"] = metablob.FLAG_HAS_ATLAS_TILE
 
-        atlas_img, n_blank, chunk_tiles_per_side = atlas_mod.build_compact_chunk_atlas_png(
-            occ_local_ids,
-            occ_repr_row_ids,
-            thumb_source,
-            tile_px=tile_px,
-            max_atlas_px=atlas_px,
-        )
-        n_blank_tiles += n_blank
-        for tile_index, lid in enumerate(occ_local_ids.tolist()):
-            voxel_records[lid]["color_rgb"] = atlas_mod.mean_tile_color(
-                atlas_img, tile_index, tile_px, chunk_tiles_per_side
+            prepared = next(atlases)
+            chunk_tiles_per_side = prepared["side"]
+            n_blank_tiles += prepared["blank"]
+            voxel_records["color_rgb"][occ_local_ids] = prepared["colors"]
+            voxel_proxy_runs.append(voxel_proxy_mod.records_for_chunk(int(chunk_id), voxel_records))
+
+            chunk_dir = out_dir / "c" / f"{chunk_id:06d}"
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+            atlas_path = prepared["path"]
+
+            meta_path = chunk_dir / "meta.bin"
+            metablob.write_chunk_meta(
+                meta_path,
+                metablob.ChunkMeta(
+                    chunk_id=int(chunk_id),
+                    voxel_grid_n=voxels_per_chunk,
+                    atlas_tile_px=tile_px,
+                    voxel_records=voxel_records,
+                    point_ids=c_row_ids.astype(np.uint32),
+                ),
             )
-        voxel_proxy_runs.append(voxel_proxy_mod.records_for_chunk(int(chunk_id), voxel_records))
 
-        chunk_dir = out_dir / "c" / f"{chunk_id:06d}"
-        chunk_dir.mkdir(parents=True, exist_ok=True)
-        png_path = tmp_dir / f"{chunk_id:06d}.png"
-        atlas_img.save(png_path)
-        atlas_path = chunk_dir / "atlas.ktx2"
-        atlas_mod.encode_ktx2(png_path, atlas_path, basisu_bin=basisu_bin)
-        png_path.unlink(missing_ok=True)
+            cx = int(chunk_id) % chunks_per_axis
+            cy = (int(chunk_id) // chunks_per_axis) % chunks_per_axis
+            cz = int(chunk_id) // (chunks_per_axis * chunks_per_axis)
+            cell = 2.0 / chunks_per_axis
+            bbox = [
+                -1.0 + cx * cell, -1.0 + (cx + 1) * cell,
+                -1.0 + cy * cell, -1.0 + (cy + 1) * cell,
+                -1.0 + cz * cell, -1.0 + (cz + 1) * cell,
+            ]
+            atlas_fe = manifest_mod.file_entry(atlas_path, out_dir)
+            meta_fe = manifest_mod.file_entry(meta_path, out_dir)
+            chunk_entries.append(
+                {
+                    "chunk_id": int(chunk_id), "cx": cx, "cy": cy, "cz": cz, "bbox": bbox,
+                    "n_occupied_voxels": len(occ_local_ids), "n_points": n_points_chunk,
+                    "atlas_size_px": prepared["width"],
+                    "atlas_tiles_per_side": chunk_tiles_per_side,
+                    "atlas_path": atlas_fe["path"], "atlas_bytes": atlas_fe["bytes"],
+                    "atlas_sha256": atlas_fe["sha256"],
+                    "meta_path": meta_fe["path"], "meta_bytes": meta_fe["bytes"],
+                    "meta_sha256": meta_fe["sha256"],
+                }
+            )
+            if wide_counts:
+                chunk_entries[-1]['postings'] = manifest_mod.file_entry(meta_path.with_name('postings.bin'), out_dir)
 
-        meta_path = chunk_dir / "meta.bin"
-        metablob.write_chunk_meta(
-            meta_path,
-            metablob.ChunkMeta(
-                chunk_id=int(chunk_id),
-                voxel_grid_n=voxels_per_chunk,
-                atlas_tile_px=tile_px,
-                voxel_records=voxel_records,
-                point_ids=c_row_ids.astype(np.uint32),
-            ),
-        )
+            colors = np.array(
+                [voxel_records[lid]["color_rgb"] for lid in occ_local_ids.tolist()], dtype=np.float64
+            )
+            weights = occ_counts.astype(np.float64)
+            chunk_color = (colors * weights[:, None]).sum(axis=0) / weights.sum()
+            proxy_chunk_ids.append(int(chunk_id))
+            proxy_colors.append(chunk_color.round().astype(np.uint8))
+            proxy_n_points.append(n_points_chunk)
+            proxy_n_occ.append(len(occ_local_ids))
 
-        cx = int(chunk_id) % chunks_per_axis
-        cy = (int(chunk_id) // chunks_per_axis) % chunks_per_axis
-        cz = int(chunk_id) // (chunks_per_axis * chunks_per_axis)
-        cell = 2.0 / chunks_per_axis
-        bbox = [
-            -1.0 + cx * cell, -1.0 + (cx + 1) * cell,
-            -1.0 + cy * cell, -1.0 + (cy + 1) * cell,
-            -1.0 + cz * cell, -1.0 + (cz + 1) * cell,
-        ]
-        atlas_fe = manifest_mod.file_entry(atlas_path, out_dir)
-        meta_fe = manifest_mod.file_entry(meta_path, out_dir)
-        chunk_entries.append(
-            {
-                "chunk_id": int(chunk_id), "cx": cx, "cy": cy, "cz": cz, "bbox": bbox,
-                "n_occupied_voxels": len(occ_local_ids), "n_points": n_points_chunk,
-                "atlas_size_px": atlas_img.width,
-                "atlas_tiles_per_side": chunk_tiles_per_side,
-                "atlas_path": atlas_fe["path"], "atlas_bytes": atlas_fe["bytes"],
-                "atlas_sha256": atlas_fe["sha256"],
-                "meta_path": meta_fe["path"], "meta_bytes": meta_fe["bytes"],
-                "meta_sha256": meta_fe["sha256"],
-            }
-        )
-        if wide_counts:
-            chunk_entries[-1]['postings'] = manifest_mod.file_entry(meta_path.with_name('postings.bin'), out_dir)
-
-        colors = np.array(
-            [voxel_records[lid]["color_rgb"] for lid in occ_local_ids.tolist()], dtype=np.float64
-        )
-        weights = occ_counts.astype(np.float64)
-        chunk_color = (colors * weights[:, None]).sum(axis=0) / weights.sum()
-        proxy_chunk_ids.append(int(chunk_id))
-        proxy_colors.append(chunk_color.round().astype(np.uint8))
-        proxy_n_points.append(n_points_chunk)
-        proxy_n_occ.append(len(occ_local_ids))
-
-        if (ci + 1) % 25 == 0 or ci + 1 == n_chunks_total:
-            blank_note = f", {n_blank_tiles:,} blank tiles so far" if n_blank_tiles else ""
-            print(f"[build] chunk {ci + 1}/{n_chunks_total} done{blank_note}", flush=True)
+            if (ci + 1) % 25 == 0 or ci + 1 == n_chunks_total:
+                blank_note = f", {n_blank_tiles:,} blank tiles so far" if n_blank_tiles else ""
+                print(f"[build] chunk {ci + 1}/{n_chunks_total} done{blank_note}", flush=True)
 
     if n_blank_tiles:
         print(
@@ -359,6 +364,11 @@ def _assign_and_build_into(
 
     row_to_voxel_path = out_dir / "row_to_voxel.bin"
     row_to_voxel_mod.build_row_to_voxel(n, assign, row_to_voxel_path)
+    if n > 25_000_000:
+        del assign
+        for name in ("chunk.u32", "local.u16"):
+            (tmp_dir / "assignment" / name).unlink()
+        (tmp_dir / "assignment").rmdir()
 
     voxel_proxy_path = out_dir / "voxel_proxy.bin"
     voxel_proxy_mod.write_voxel_proxy(
