@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "base_url": "https://huggingface.co/datasets/enjalot/latent-craft-bl-search/resolve/20b8c1a38c78e4b5bd8c88581172a1280b188e25/bl-search-20260907b",
+  "files": [
+    {
+      "path": "faiss-sq8.index",
+      "bytes": 1258480424,
+      "sha256": "df282f96c1b3cce636732f09d69b6ee04f45af7a044bf781e5244dc01e4f61ff"
+    },
+    {
+      "path": "lance/lance-f16-sq8.lance/_indices/93aefcfd-1603-42aa-81c1-46de268b254b/auxiliary.idx",
+      "bytes": 1248670875,
+      "sha256": "aaeddd13fa6cad298bbcda5dc0b6bc11760a00bf02b29c4ba1d7c06d1bd77112"
+    },
+    {
+      "path": "lance/lance-f16-sq8.lance/_indices/93aefcfd-1603-42aa-81c1-46de268b254b/index.idx",
+      "bytes": 2364746,
+      "sha256": "6abb636e93c75d9c6f734d7dffcdd79273245ba578f28adcbd304b104f2a350a"
+    },
+    {
+      "path": "lance/lance-f16-sq8.lance/_transactions/0-c1b1381d-dad9-4e22-aaa3-648165ee3426.txn",
+      "bytes": 301,
+      "sha256": "9ee83ff4078f333d555bf20a6f6e0c44af114173e95060bbfabfb24ac366224f"
+    },
+    {
+      "path": "lance/lance-f16-sq8.lance/_transactions/1-83a2a79e-50d4-4485-94b0-55f1416e38ce.txn",
+      "bytes": 411,
+      "sha256": "8393b66fd5d97d25fc90c034f18c510ba1f8d6b76f574ea16a2088a4e3d38e01"
+    },
+    {
+      "path": "lance/lance-f16-sq8.lance/_versions/18446744073709551613.manifest",
+      "bytes": 1166,
+      "sha256": "4e1e1baffa473f0a3acfd3d70962e3a212e2f5888004a7af6c397b08de60ffd8"
+    },
+    {
+      "path": "lance/lance-f16-sq8.lance/_versions/18446744073709551614.manifest",
+      "bytes": 682,
+      "sha256": "75d3c3dfa1fe6bc6b44eadad6aaa8e043c08a468d6183c6717547cd9ac8f00c2"
+    },
+    {
+      "path": "lance/lance-f16-sq8.lance/_versions/latest_version_hint.json",
+      "bytes": 13,
+      "sha256": "732322c128ed67841ef5aa42c7cd04ffcd74a61b2d17d710cd502b713d62930d"
+    },
+    {
+      "path": "lance/lance-f16-sq8.lance/data/100001111001001100000111faebf64c3ba9c5770041eec08d.lance",
+      "bytes": 2418439755,
+      "sha256": "2571dbeac10df14db1afd2362f5c6000d417f75048fe99580a37a1538ebc95a4"
+    },
+    {
+      "path": "lance/lance-f16-sq8.lance/data/110101101110011100000001cd375046ccafe1700c0fa729a5.lance",
+      "bytes": 74363638,
+      "sha256": "02211106c8d9417c19717f3824349e0e5ceb9db94ada1d8e9ae5823583fd65dc"
+    },
+    {
+      "path": "point_index.bin",
+      "bytes": 8646512,
+      "sha256": "4cf960d00e632b8fd1d7417403e2f41665a544f2aaefd0503f85f31b0a687d7e"
+    },
+    {
+      "path": "row_to_voxel.bin",
+      "bytes": 8646512,
+      "sha256": "98b17e9b3f72c7c60f43cb1550b88a482ab48e581a94562bd2639594e493e145"
+    },
+    {
+      "path": "service.json",
+      "bytes": 236,
+      "sha256": "dad27e47c80c81cdbb1424dc2e532d84bf76020605eb49effd1e2524553f9ba7"
+    },
+    {
+      "path": "text-check.npy",
+      "bytes": 4736,
+      "sha256": "b9eea412982f65ec8950792ba824244346e7d3910934cd1224a9e413a3aaefef"
+    },
+    {
+      "path": "text-model/chat_template.jinja",
+      "bytes": 591,
+      "sha256": "ecd6ae513fe103f0eb62e8ab5bfa8d0fe45c1074fa398b089c93a7e70c15cfd6"
+    },
+    {
+      "path": "text-model/config.json",
+      "bytes": 503,
+      "sha256": "d48977fd2b20204009a063d416f4982422bcffe7c1df51f9b936480409aa731d"
+    },
+    {
+      "path": "text-model/model.safetensors",
+      "bytes": 2831185080,
+      "sha256": "376839849eefc123580518a5575406623515dcd9c8f0971f9e169fa5309938c2"
+    },
+    {
+      "path": "text-model/tokenizer.json",
+      "bytes": 34363135,
+      "sha256": "5b6335655383213b50aa2469afaefecd3e17a342c85b57b7af52b5e270a4b745"
+    },
+    {
+      "path": "text-model/tokenizer_config.json",
+      "bytes": 654,
+      "sha256": "24deed257f6e8fadd965e189456694754877e04fe02caee80162961a5a4f2071"
+    }
+  ]
+}

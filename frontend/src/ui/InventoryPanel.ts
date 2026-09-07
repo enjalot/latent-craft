@@ -1,5 +1,6 @@
 import type { Inventory, InventoryStack } from "../interaction/Inventory.ts";
 import { resolveSubsetName, resolveThumbUrl, type PointIndex } from "../streaming/PointIndex.ts";
+import { setThumbnailSource } from "../streaming/ThumbnailSource.ts";
 import { INVENTORY_THUMBS_PAGE_SIZE } from "../config.ts";
 import { Lightbox } from "./Lightbox.ts";
 import { applyHudPanelChrome, applyHudTitle, HUD_CLASS } from "./hudPanel.ts";
@@ -439,7 +440,7 @@ export class InventoryPanel {
       .then(async (index) => {
         await index.ensure?.(stack.reprRowId);
         const url = resolveThumbUrl(index, stack.reprRowId);
-        if (url) thumb.src = url;
+        if (url) setThumbnailSource(thumb, url);
       })
       .catch((error) => console.error("[InventoryPanel] point_index load failed", error));
 
@@ -600,7 +601,10 @@ export class InventoryPanel {
           await index.ensure?.(rowId);
           if (token !== latestLoadToken || latestRowId !== rowId) return;
           const url = resolveThumbUrl(index, rowId);
-          if (url) { latestImg.src = url; thumb.src = url; }
+          if (url) {
+            const valid = () => token === latestLoadToken && latestRowId === rowId;
+            setThumbnailSource(latestImg, url, valid); setThumbnailSource(thumb, url, valid);
+          }
         })
         .catch((error) => console.error("[InventoryPanel] point_index load failed", error));
     };
@@ -627,7 +631,7 @@ export class InventoryPanel {
       } satisfies Partial<CSSStyleDeclaration>);
 
       const img = document.createElement("img");
-      img.src = url;
+      setThumbnailSource(img, url);
       img.width = 28;
       img.height = 28;
       img.loading = "lazy";

@@ -1,7 +1,7 @@
 export const COMPARE_DATASET = "monet-clip-basemap-training-512";
 export const COMPARE_RELEASE = "monet-clip-basemap-training-20260905a";
 export type CompareMode = "project" | "search";
-export interface SearchResult { row: number; chunk: number; local: number; thumb: number; score: number }
+export interface SearchResult { row: number; chunk: number; local: number; thumb: number; score: number; thumbUrl?: string; model?: string }
 export interface CompareResponse {
   dataset: string; release: string; query: string; mode: CompareMode;
   projection: { position: [number, number, number]; raw2: [number, number]; outside_frame: boolean };

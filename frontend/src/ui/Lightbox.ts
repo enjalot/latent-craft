@@ -1,3 +1,4 @@
+import { setThumbnailSource } from "../streaming/ThumbnailSource.ts";
 import {
   LIGHTBOX_ORIGINAL_CACHE_MAX_BYTES,
   LIGHTBOX_ORIGINAL_CACHE_MAX_ROWS,
@@ -407,7 +408,7 @@ export class Lightbox {
     const rowId = source.rowIds.at(source.index)!;
     this.img.removeAttribute("src");
     void Promise.resolve(source.resolveUrl(rowId)).then(url => {
-      if (token === this.showToken && url) this.img.src = url;
+      if (token === this.showToken && url) setThumbnailSource(this.img, url, () => token === this.showToken);
     }).catch(() => { if (token === this.showToken) this.img.alt = "Thumbnail lookup failed; navigate to retry"; });
     const caption = `row ${rowId} — ${source.contextLabel}`;
     this.img.alt = caption;

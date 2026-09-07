@@ -60,9 +60,11 @@ export interface DatasetConfig {
    * its own `monet/` segment, so it takes the default.
    */
   thumbsBasePath?: string;
+  pointMetaFile?: { path: string; bytes: number; rows: number };
+  searchProfile?: "bl-siglip2-20260907a";
 }
 
-export const DATASETS: Record<string, DatasetConfig> = {
+const ALL_DATASETS: Record<string, DatasetConfig> = {
   "monet-clip-basemap-full-4m-512": {
     path: "/chunks/monet-clip-basemap-full-4m-20260906a-512-stream",
     label: "MONET · CLIP ViT-B/32 · 4M head · 103.82M · 512³",
@@ -149,7 +151,12 @@ export const DATASETS: Record<string, DatasetConfig> = {
  * full 2048² texture on every sparsely occupied chunk. Existing packs remain
  * readable through the legacy local-voxel-id atlas layout.
  */
-export const DEFAULT_DATASET = "monet-sscd-512";
+export const DEFAULT_DATASET = import.meta.env.VITE_DEMO_DATASET || "monet-sscd-512";
+export const DATASETS: Record<string, DatasetConfig> = import.meta.env.VITE_DEMO_DATASET === "bl-160"
+  ? { "bl-160": { ...ALL_DATASETS["bl-160"], path: "/chunks/bl-siglip2-160-stream-20260907a",
+      searchProfile: "bl-siglip2-20260907a",
+      pointMetaFile: { path: "/points/bl/point_meta.bin", bytes: 77049305, rows: 1080814 } } }
+  : ALL_DATASETS;
 
 /**
  * Optional data-server origin. `VITE_DATA_ORIGIN=https://data.example.org`
@@ -1506,7 +1513,8 @@ export function resolveMinimapBaseUrl(datasetKey: string): string | null {
  */
 export function resolveThumbsBaseUrl(datasetKey: string): string {
   const dataset = DATASETS[datasetKey];
-  const origin = CHUNK_SERVER_ORIGIN ?? "";
+  const origin = import.meta.env.VITE_THUMBS_ORIGIN !== undefined
+    ? import.meta.env.VITE_THUMBS_ORIGIN.replace(/\/$/, "") : CHUNK_SERVER_ORIGIN ?? "";
   return `${origin}${dataset?.thumbsBasePath ?? THUMBS_BASE_PATH}`;
 }
 

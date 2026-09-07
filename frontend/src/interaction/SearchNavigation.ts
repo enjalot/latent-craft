@@ -66,7 +66,7 @@ export class SearchNavigation {
     if (!plan) return;
     this.minimap()?.cancelHoverLook();
     this.minimap()?.highlightVoxel(focus.chunk, focus.local, focus.row, "search");
-    this.minimap()?.panel.setCaption(`Search result · row ${focus.row}\nCLIP cosine ${focus.score.toFixed(3)}`);
+    this.minimap()?.panel.setCaption(`Search result · row ${focus.row}\n${focus.model ?? "CLIP"} cosine ${focus.score.toFixed(3)}`);
     if (result) this.controls.lookTransitionTo(plan.target, 280);
   }
 

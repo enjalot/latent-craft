@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 search = ["torch>=2.6", "transformers>=5.14,<6", "faiss-cpu>=1.13,<2"]
+bl-search = ["torch>=2.8", "transformers==5.14.0", "faiss-cpu==1.13.2", "lancedb==0.37.1", "fastapi==0.135.1", "uvicorn==0.41.0"]
 
 [project.scripts]
 lsvoxel = "lsvoxel.cli:main"

@@ -29,6 +29,8 @@ import { planVoxelFlight } from "./interaction/VoxelFlight.ts";
 import { Hud, type HudStreamingState } from "./ui/Hud.ts";
 import { DatasetPicker } from "./ui/DatasetPicker.ts";
 import { SearchCompare } from "./ui/SearchCompare.ts";
+import { BLSearch } from "./ui/BLSearch.ts";
+import { addBLDemoAbout } from "./ui/DemoAbout.ts";
 import { SearchNavigation } from "./interaction/SearchNavigation.ts";
 import { createHoldProgressRing } from "./ui/hud/Crosshair.ts";
 import { InventoryPanel } from "./ui/InventoryPanel.ts";
@@ -166,10 +168,15 @@ Object.assign(leftDock.style, { position: "fixed", top: "14px", left: "14px", ma
   width: "min(420px, calc(100vw - 28px))", display: "flex", flexDirection: "column",
   gap: "8px", zIndex: "11", pointerEvents: "none" });
 app.append(leftDock);
+if (import.meta.env.VITE_DEMO_DATASET === "bl-160") addBLDemoAbout(app);
 const datasetPicker = new DatasetPicker(leftDock, datasetKey, DATASETS, useSynthetic, true);
 const hud = new Hud(leftDock, true);
 let searchNavigation: SearchNavigation | null = null;
-const searchCompare = new SearchCompare(leftDock, useSynthetic ? "synthetic" : datasetKey, {
+const searchCompare = !useSynthetic && DATASETS[datasetKey]?.searchProfile === "bl-siglip2-20260907a" ? new BLSearch(leftDock, {
+  hover: result => searchNavigation?.hover(result),
+  select: result => searchNavigation?.select(result),
+  clear: () => searchNavigation?.clear(),
+}) : new SearchCompare(leftDock, useSynthetic ? "synthetic" : datasetKey, {
   project: response => {
     if (!searchNavigation) throw new Error("Map is still loading; try again shortly");
     searchNavigation.project(response);

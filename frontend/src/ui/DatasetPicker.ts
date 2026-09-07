@@ -61,7 +61,7 @@ export class DatasetPicker {
     syntheticOption.value = SYNTHETIC_VALUE;
     syntheticOption.textContent = "Synthetic · procedural field";
     playground.appendChild(syntheticOption);
-    select.appendChild(playground);
+    if (!import.meta.env.VITE_DEMO_DATASET) select.appendChild(playground);
 
     if (!synthetic && !datasets[currentKey]) {
       const unknown = document.createElement("option");

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { fetchThumbnailBlob } from "../streaming/ThumbnailSource.ts";
 
 export const PREVIEW_EDGE = 128;
 export const PREVIEW_SLOTS = 128;
@@ -21,9 +22,7 @@ export async function previewPixels(target: PreviewTarget, signal: AbortSignal):
   const url = await target.resolve();
   signal.throwIfAborted();
   if (!url) throw new Error("Preview row not available");
-  const response = await fetch(url, { signal });
-  if (!response.ok) throw new Error(`Preview HTTP ${response.status}`);
-  const blob = await response.blob();
+  const blob = await fetchThumbnailBlob(url, signal);
   signal.throwIfAborted();
   const bitmap = await createImageBitmap(blob);
   try {

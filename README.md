@@ -1,10 +1,22 @@
-# latent-scope-3d
+# latent-craft
 
 A browser-based, game-like explorer for large 3D UMAP embeddings. Points are
 binned into voxel chunks; nearby chunks stream textured representative images
 while a compact proxy layer keeps the full shape visible at distance. A linked
 2D UMAP minimap, extraction inventory, lightbox, and inspection tools provide
 ways to move between overview and individual source images.
+
+The British Library demo is an independent project using public-domain book
+images, not an official British Library product. Dataset credits and historical
+content context accompany the [live HF demo](https://huggingface.co/spaces/enjalot/latent-craft-bl). Dataset-specific visual
+themes are a planned follow-up; the current skin remains the sci-fi prototype.
+
+See the [full BL SigLIP / LanceDB / int8 experiment](docs/bl-search-experiment.md)
+and [deployment, costs and publication notes](docs/bl-demo-publication.md).
+
+The repository now lives at `latent-craft`. The old local directory name is a
+compatibility symlink for existing development processes and environments;
+immutable data releases and saved-game keys keep their existing identifiers.
 
 The default is `monet-sscd-512`, using hierarchical proxy bricks and paged
 byte-range data. See [streaming architecture and 100M limits](docs/streaming-architecture.md)

@@ -1,5 +1,6 @@
 import { EXTRACTION_FLIGHT_MS } from "../config.ts";
 import { HUD_CLASS } from "./hudPanel.ts";
+import { setThumbnailSource } from "../streaming/ThumbnailSource.ts";
 
 export interface ExtractionFlightRequest {
   /** Launch point, viewport CSS pixels — the extracted voxel's screen
@@ -78,7 +79,11 @@ export class ExtractionFlights {
       transition: `transform ${this.durationMs}ms cubic-bezier(0.34, 0.05, 0.4, 1), opacity ${this.durationMs}ms ease-in`,
     } satisfies Partial<CSSStyleDeclaration>);
     tile.classList.add(HUD_CLASS.thumb);
-    if (request.url) tile.style.backgroundImage = `url("${request.url}")`;
+    if (request.url) {
+      const image = document.createElement("img"); image.alt = "";
+      Object.assign(image.style, { position: "absolute", inset: "0", width: "100%", height: "100%", objectFit: "cover" });
+      tile.append(image); setThumbnailSource(image, request.url);
+    }
 
     if (request.count > 1) {
       const badge = document.createElement("div");

@@ -1,5 +1,6 @@
-import { POINT_META_CACHE_MAX_ROWS, resolvePointMetaUrl } from "../config.ts";
+import { CHUNK_SERVER_ORIGIN, DATASETS, POINT_META_CACHE_MAX_ROWS, resolvePointMetaUrl } from "../config.ts";
 import { WeightedLruCache } from "../utils/WeightedLruCache.ts";
+import { rangeReader } from "./RangeReader.ts";
 
 /**
  * One row of a points table's `point_meta.bin`, as served by the data
@@ -119,6 +120,21 @@ async function fetchPointMetaUncached(
   rowId: number,
   signal?: AbortSignal,
 ): Promise<PointMetaLookup> {
+  const file = Object.values(DATASETS).find(dataset => dataset.pointsId === pointsId && dataset.pointMetaFile)?.pointMetaFile;
+  if (file) {
+    if (!Number.isSafeInteger(rowId) || rowId < 0 || rowId >= file.rows) return null;
+    const url = `${CHUNK_SERVER_ORIGIN ?? ""}${file.path}`;
+    const head = new DataView(await rangeReader.read(url, 0, 32, file.bytes));
+    if (head.getUint32(0, true) !== 0x4d56534c || head.getUint16(4, true) !== 1 || head.getUint16(6, true) !== 0 ||
+      head.getUint32(8, true) !== file.rows || head.getUint32(12, true) !== 32 ||
+      Number(head.getBigUint64(16, true)) !== 32 + 12 * file.rows ||
+      Number(head.getBigUint64(16, true) + head.getBigUint64(24, true)) !== file.bytes) throw new Error("Invalid static point metadata");
+    const record = new DataView(await rangeReader.read(url, 32 + rowId * 12, 12, file.bytes));
+    const length = record.getUint16(4, true), offset = Number(head.getBigUint64(16, true)) + record.getUint32(0, true);
+    const original = length ? new TextDecoder().decode(await rangeReader.read(url, offset, length, file.bytes)) : null;
+    signal?.throwIfAborted();
+    return { rowId, url: original ? upgradeToHttps(original) : null, width: record.getUint16(6, true), height: record.getUint16(8, true) };
+  }
   const response = await fetch(resolvePointMetaUrl(pointsId, rowId), { signal });
   // 404 is the server's "no such row / no such table" — silent, final. Any
   // other failure status is the proxy or the server being unwell, not an

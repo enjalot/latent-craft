@@ -1,0 +1,1330 @@
+{
+  "url": "https://enjalot-latent-craft-bl.hf.space",
+  "before": {
+    "state": "ready",
+    "detail": "SigLIP search is ready.",
+    "memory_bytes": {
+      "VmHWM": 4181864448,
+      "VmRSS": 4181864448
+    },
+    "search_threads": 2,
+    "index_cache_bytes": 536870912
+  },
+  "after": {
+    "state": "ready",
+    "detail": "SigLIP search is ready.",
+    "memory_bytes": {
+      "VmHWM": 5249806336,
+      "VmRSS": 5224210432
+    },
+    "search_threads": 2,
+    "index_cache_bytes": 536870912
+  },
+  "summary": {
+    "faiss": {
+      "recall24": 0.95703125,
+      "search_ms_50": 31.765707506565377,
+      "search_ms_95": 49.34761868789792,
+      "end_to_end_ms_50": 79.4651199830696,
+      "end_to_end_ms_95": 536.1570511653554,
+      "uncached_queries": 28,
+      "uncached_end_to_end_ms_50": 424.97720947721973,
+      "uncached_end_to_end_ms_95": 581.8924739025533
+    },
+    "sq8": {
+      "recall24": 0.9368489583333334,
+      "search_ms_50": 266.56249799998477,
+      "search_ms_95": 379.7676103306002,
+      "end_to_end_ms_50": 397.6155190030113,
+      "end_to_end_ms_95": 752.3923637694679,
+      "uncached_queries": 28,
+      "uncached_end_to_end_ms_50": 647.9049419867806,
+      "uncached_end_to_end_ms_95": 788.7027511256747
+    }
+  },
+  "embed_uncached_p50_ms": 379.5938784896862,
+  "embed_uncached_p95_ms": 495.7459847355494,
+  "note": "Sequential two-backend comparison on 64 fixed public prompts; not a concurrency, sleep-resume or cold-disk benchmark. Alternating backends share cached text embeddings.",
+  "records": [
+    {
+      "prompt": "a map of London",
+      "backend": "faiss",
+      "end_to_end_ms": 73.88407608959824,
+      "transport_retries": [],
+      "embed_ms": 0.004076980985701084,
+      "search_ms": 40.508556994609535,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a map of London",
+      "backend": "sq8",
+      "end_to_end_ms": 384.1818510554731,
+      "transport_retries": [],
+      "embed_ms": 0.005596026312559843,
+      "search_ms": 358.97027695318684,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a map of India",
+      "backend": "sq8",
+      "end_to_end_ms": 410.19243199843913,
+      "transport_retries": [],
+      "embed_ms": 0.0043199979700148106,
+      "search_ms": 383.43772798543796,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a map of India",
+      "backend": "faiss",
+      "end_to_end_ms": 71.81135390419513,
+      "transport_retries": [],
+      "embed_ms": 0.006017973646521568,
+      "search_ms": 44.07810402335599,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a map of the world",
+      "backend": "faiss",
+      "end_to_end_ms": 81.32270304486156,
+      "transport_retries": [],
+      "embed_ms": 0.0029919901862740517,
+      "search_ms": 56.15290702553466,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a map of the world",
+      "backend": "sq8",
+      "end_to_end_ms": 438.3915429934859,
+      "transport_retries": [],
+      "embed_ms": 0.004093977622687817,
+      "search_ms": 413.33650500746444,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a nautical chart",
+      "backend": "sq8",
+      "end_to_end_ms": 377.41679104510695,
+      "transport_retries": [],
+      "embed_ms": 0.006043992470949888,
+      "search_ms": 352.5744730141014,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a nautical chart",
+      "backend": "faiss",
+      "end_to_end_ms": 74.20351100154221,
+      "transport_retries": [],
+      "embed_ms": 0.007872004061937332,
+      "search_ms": 47.97495104139671,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a map of Africa",
+      "backend": "faiss",
+      "end_to_end_ms": 71.62147399503738,
+      "transport_retries": [],
+      "embed_ms": 0.004438974428921938,
+      "search_ms": 44.07632595393807,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a map of Africa",
+      "backend": "sq8",
+      "end_to_end_ms": 371.1271029897034,
+      "transport_retries": [],
+      "embed_ms": 0.006626010872423649,
+      "search_ms": 347.24868804914877,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a plan of a city",
+      "backend": "sq8",
+      "end_to_end_ms": 330.9440639568493,
+      "transport_retries": [],
+      "embed_ms": 0.0038520083762705326,
+      "search_ms": 306.06171098770574,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a plan of a city",
+      "backend": "faiss",
+      "end_to_end_ms": 58.389739017002285,
+      "transport_retries": [],
+      "embed_ms": 0.004950969014316797,
+      "search_ms": 35.47015303047374,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a compass rose",
+      "backend": "faiss",
+      "end_to_end_ms": 77.60753692127764,
+      "transport_retries": [],
+      "embed_ms": 0.005631009116768837,
+      "search_ms": 48.88504702830687,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a compass rose",
+      "backend": "sq8",
+      "end_to_end_ms": 412.3262600041926,
+      "transport_retries": [],
+      "embed_ms": 0.005407026037573814,
+      "search_ms": 387.41135405143723,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a mountain landscape",
+      "backend": "sq8",
+      "end_to_end_ms": 469.892647000961,
+      "transport_retries": [],
+      "embed_ms": 0.005298992618918419,
+      "search_ms": 403.2678759540431,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a mountain landscape",
+      "backend": "faiss",
+      "end_to_end_ms": 58.205729932524264,
+      "transport_retries": [],
+      "embed_ms": 0.0036860001273453236,
+      "search_ms": 34.64913700008765,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a sailing ship at sea",
+      "backend": "faiss",
+      "end_to_end_ms": 537.5292330281809,
+      "transport_retries": [],
+      "embed_ms": 457.37827999982983,
+      "search_ms": 49.15432701818645,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a sailing ship at sea",
+      "backend": "sq8",
+      "end_to_end_ms": 349.18902697972953,
+      "transport_retries": [],
+      "embed_ms": 0.0036470009945333004,
+      "search_ms": 325.89326496236026,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a steam locomotive",
+      "backend": "sq8",
+      "end_to_end_ms": 875.6128479726613,
+      "transport_retries": [],
+      "embed_ms": 504.4983549742028,
+      "search_ms": 343.56308297719806,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a steam locomotive",
+      "backend": "faiss",
+      "end_to_end_ms": 64.32301097083837,
+      "transport_retries": [],
+      "embed_ms": 0.0036800047382712364,
+      "search_ms": 41.135984007269144,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a bridge over a river",
+      "backend": "faiss",
+      "end_to_end_ms": 500.8470140164718,
+      "transport_retries": [],
+      "embed_ms": 437.3457779875025,
+      "search_ms": 40.595475991722196,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a bridge over a river",
+      "backend": "sq8",
+      "end_to_end_ms": 385.03860600758344,
+      "transport_retries": [],
+      "embed_ms": 0.005088048055768013,
+      "search_ms": 320.34897000994533,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a lighthouse",
+      "backend": "sq8",
+      "end_to_end_ms": 667.1128959860653,
+      "transport_retries": [],
+      "embed_ms": 379.6700339880772,
+      "search_ms": 263.6458500055596,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a lighthouse",
+      "backend": "faiss",
+      "end_to_end_ms": 74.53258603345603,
+      "transport_retries": [],
+      "embed_ms": 0.005664012860506773,
+      "search_ms": 50.39436504011974,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a cathedral",
+      "backend": "faiss",
+      "end_to_end_ms": 522.9149359511212,
+      "transport_retries": [],
+      "embed_ms": 469.95673899073154,
+      "search_ms": 28.81237299880013,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a cathedral",
+      "backend": "sq8",
+      "end_to_end_ms": 322.4877059692517,
+      "transport_retries": [],
+      "embed_ms": 0.005877984222024679,
+      "search_ms": 290.5635380302556,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a medieval castle",
+      "backend": "sq8",
+      "end_to_end_ms": 753.5197510151193,
+      "transport_retries": [],
+      "embed_ms": 440.3499489999376,
+      "search_ms": 288.2033390342258,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a medieval castle",
+      "backend": "faiss",
+      "end_to_end_ms": 104.06787099782377,
+      "transport_retries": [],
+      "embed_ms": 0.009391049388796091,
+      "search_ms": 38.28513901680708,
+      "embedding_cached": true,
+      "recall24": 0.9166666666666666
+    },
+    {
+      "prompt": "a library interior",
+      "backend": "faiss",
+      "end_to_end_ms": 566.4462060667574,
+      "transport_retries": [],
+      "embed_ms": 492.82852798933163,
+      "search_ms": 49.381728982552886,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a library interior",
+      "backend": "sq8",
+      "end_to_end_ms": 303.79506398458034,
+      "transport_retries": [],
+      "embed_ms": 0.004277972038835287,
+      "search_ms": 281.0383220203221,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "an Egyptian pyramid",
+      "backend": "sq8",
+      "end_to_end_ms": 712.3314359923825,
+      "transport_retries": [],
+      "embed_ms": 399.973482999485,
+      "search_ms": 286.57947602914646,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "an Egyptian pyramid",
+      "backend": "faiss",
+      "end_to_end_ms": 54.56912296358496,
+      "transport_retries": [],
+      "embed_ms": 0.004342000465840101,
+      "search_ms": 30.376271053683013,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a portrait of a woman",
+      "backend": "faiss",
+      "end_to_end_ms": 418.97346591576934,
+      "transport_retries": [],
+      "embed_ms": 361.38267401838675,
+      "search_ms": 34.11263303132728,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a portrait of a woman",
+      "backend": "sq8",
+      "end_to_end_ms": 327.1291279233992,
+      "transport_retries": [],
+      "embed_ms": 0.004314992111176252,
+      "search_ms": 304.4350689742714,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a portrait of a man",
+      "backend": "sq8",
+      "end_to_end_ms": 694.0256380476058,
+      "transport_retries": [],
+      "embed_ms": 403.1397220096551,
+      "search_ms": 267.9892600281164,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a portrait of a man",
+      "backend": "faiss",
+      "end_to_end_ms": 49.203366972506046,
+      "transport_retries": [],
+      "embed_ms": 0.005341018550097942,
+      "search_ms": 25.73351695900783,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "children playing",
+      "backend": "faiss",
+      "end_to_end_ms": 468.0885160341859,
+      "transport_retries": [],
+      "embed_ms": 409.40937399864197,
+      "search_ms": 34.291525022126734,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "children playing",
+      "backend": "sq8",
+      "end_to_end_ms": 290.9681668970734,
+      "transport_retries": [],
+      "embed_ms": 0.003604975063353777,
+      "search_ms": 268.03328801179305,
+      "embedding_cached": true,
+      "recall24": 0.875
+    },
+    {
+      "prompt": "a soldier on horseback",
+      "backend": "sq8",
+      "end_to_end_ms": 746.0038360441104,
+      "transport_retries": [],
+      "embed_ms": 418.19353599566966,
+      "search_ms": 304.5812990167178,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a soldier on horseback",
+      "backend": "faiss",
+      "end_to_end_ms": 55.00260600820184,
+      "transport_retries": [],
+      "embed_ms": 0.0036229612305760384,
+      "search_ms": 31.40003001317382,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a royal crown",
+      "backend": "faiss",
+      "end_to_end_ms": 592.3559850780293,
+      "transport_retries": [],
+      "embed_ms": 508.36937001440674,
+      "search_ms": 60.86355703882873,
+      "embedding_cached": false,
+      "recall24": 0.8333333333333334
+    },
+    {
+      "prompt": "a royal crown",
+      "backend": "sq8",
+      "end_to_end_ms": 290.91236100066453,
+      "transport_retries": [],
+      "embed_ms": 0.004859990440309048,
+      "search_ms": 268.57569499406964,
+      "embedding_cached": true,
+      "recall24": 0.4166666666666667
+    },
+    {
+      "prompt": "a suit of armour",
+      "backend": "sq8",
+      "end_to_end_ms": 701.0133099975064,
+      "transport_retries": [],
+      "embed_ms": 405.51741496892646,
+      "search_ms": 272.6058150292374,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a suit of armour",
+      "backend": "faiss",
+      "end_to_end_ms": 57.093882001936436,
+      "transport_retries": [],
+      "embed_ms": 0.0032030511647462845,
+      "search_ms": 31.998204009141773,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "people dancing",
+      "backend": "faiss",
+      "end_to_end_ms": 475.31544195953757,
+      "transport_retries": [],
+      "embed_ms": 415.5305289896205,
+      "search_ms": 27.62605802854523,
+      "embedding_cached": false,
+      "recall24": 0.9166666666666666
+    },
+    {
+      "prompt": "people dancing",
+      "backend": "sq8",
+      "end_to_end_ms": 282.4756399495527,
+      "transport_retries": [],
+      "embed_ms": 0.014104996807873249,
+      "search_ms": 257.8159800032154,
+      "embedding_cached": true,
+      "recall24": 0.875
+    },
+    {
+      "prompt": "a crowded market",
+      "backend": "sq8",
+      "end_to_end_ms": 740.060476004146,
+      "transport_retries": [],
+      "embed_ms": 420.4151289886795,
+      "search_ms": 295.71173299336806,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a crowded market",
+      "backend": "faiss",
+      "end_to_end_ms": 59.23487199470401,
+      "transport_retries": [],
+      "embed_ms": 0.004279951099306345,
+      "search_ms": 34.034361015073955,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a botanical illustration of flowers",
+      "backend": "faiss",
+      "end_to_end_ms": 590.209695044905,
+      "transport_retries": [],
+      "embed_ms": 520.2005400205962,
+      "search_ms": 45.735699008218944,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a botanical illustration of flowers",
+      "backend": "sq8",
+      "end_to_end_ms": 326.82722492609173,
+      "transport_retries": [],
+      "embed_ms": 0.0033529940992593765,
+      "search_ms": 303.2368860440329,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "an oak tree",
+      "backend": "sq8",
+      "end_to_end_ms": 795.6544420449063,
+      "transport_retries": [],
+      "embed_ms": 465.19173705019057,
+      "search_ms": 306.88142898725346,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "an oak tree",
+      "backend": "faiss",
+      "end_to_end_ms": 66.04887498542666,
+      "transport_retries": [],
+      "embed_ms": 0.004731991793960333,
+      "search_ms": 42.40513301920146,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a fern",
+      "backend": "faiss",
+      "end_to_end_ms": 528.3813539426774,
+      "transport_retries": [],
+      "embed_ms": 470.88875802000985,
+      "search_ms": 34.393229987472296,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a fern",
+      "backend": "sq8",
+      "end_to_end_ms": 336.6523500299081,
+      "transport_retries": [],
+      "embed_ms": 0.005257956217974424,
+      "search_ms": 312.4379289802164,
+      "embedding_cached": true,
+      "recall24": 0.9166666666666666
+    },
+    {
+      "prompt": "a mushroom",
+      "backend": "sq8",
+      "end_to_end_ms": 740.6286119949073,
+      "transport_retries": [],
+      "embed_ms": 391.84976200340316,
+      "search_ms": 281.58737998455763,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a mushroom",
+      "backend": "faiss",
+      "end_to_end_ms": 57.77854099869728,
+      "transport_retries": [],
+      "embed_ms": 0.004106026608496904,
+      "search_ms": 32.98523899866268,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "an illustration of a butterfly",
+      "backend": "faiss",
+      "end_to_end_ms": 466.3562700152397,
+      "transport_retries": [],
+      "embed_ms": 415.45654204674065,
+      "search_ms": 27.148226974532008,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "an illustration of a butterfly",
+      "backend": "sq8",
+      "end_to_end_ms": 280.68169800098985,
+      "transport_retries": [],
+      "embed_ms": 0.004051020368933678,
+      "search_ms": 258.6446430068463,
+      "embedding_cached": true,
+      "recall24": 0.875
+    },
+    {
+      "prompt": "a bird perched on a branch",
+      "backend": "sq8",
+      "end_to_end_ms": 625.5353320157155,
+      "transport_retries": [],
+      "embed_ms": 355.499223980587,
+      "search_ms": 247.01819999609143,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a bird perched on a branch",
+      "backend": "faiss",
+      "end_to_end_ms": 57.357651996426284,
+      "transport_retries": [],
+      "embed_ms": 0.0055460259318351746,
+      "search_ms": 34.26081797806546,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a lion",
+      "backend": "faiss",
+      "end_to_end_ms": 407.23919100128114,
+      "transport_retries": [],
+      "embed_ms": 341.9176869792864,
+      "search_ms": 41.40437801834196,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a lion",
+      "backend": "sq8",
+      "end_to_end_ms": 295.40343792177737,
+      "transport_retries": [],
+      "embed_ms": 0.0035139964893460274,
+      "search_ms": 271.9734570127912,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "an elephant",
+      "backend": "sq8",
+      "end_to_end_ms": 672.2388269845396,
+      "transport_retries": [],
+      "embed_ms": 390.82122599938884,
+      "search_ms": 257.5118279783055,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "an elephant",
+      "backend": "faiss",
+      "end_to_end_ms": 54.65180997271091,
+      "transport_retries": [],
+      "embed_ms": 0.0058309524320065975,
+      "search_ms": 31.49602300254628,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a whale",
+      "backend": "faiss",
+      "end_to_end_ms": 472.43487800005823,
+      "transport_retries": [],
+      "embed_ms": 413.1237579858862,
+      "search_ms": 36.0316940350458,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a whale",
+      "backend": "sq8",
+      "end_to_end_ms": 279.5310749206692,
+      "transport_retries": [],
+      "embed_ms": 0.0035499688237905502,
+      "search_ms": 256.66563300183043,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a fish",
+      "backend": "sq8",
+      "end_to_end_ms": 775.7924679899588,
+      "transport_retries": [],
+      "embed_ms": 480.4874630062841,
+      "search_ms": 267.4735020264052,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a fish",
+      "backend": "faiss",
+      "end_to_end_ms": 58.454717975109816,
+      "transport_retries": [],
+      "embed_ms": 0.0060820020735263824,
+      "search_ms": 31.159871025010943,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a snake",
+      "backend": "faiss",
+      "end_to_end_ms": 411.98093397542834,
+      "transport_retries": [],
+      "embed_ms": 357.66449896618724,
+      "search_ms": 31.336229003500193,
+      "embedding_cached": false,
+      "recall24": 0.9166666666666666
+    },
+    {
+      "prompt": "a snake",
+      "backend": "sq8",
+      "end_to_end_ms": 263.3875639876351,
+      "transport_retries": [],
+      "embed_ms": 0.0028859940357506275,
+      "search_ms": 240.55573501391336,
+      "embedding_cached": true,
+      "recall24": 0.9166666666666666
+    },
+    {
+      "prompt": "a dog",
+      "backend": "sq8",
+      "end_to_end_ms": 597.2561489325017,
+      "transport_retries": [],
+      "embed_ms": 338.05159403709695,
+      "search_ms": 236.40507500385866,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a dog",
+      "backend": "faiss",
+      "end_to_end_ms": 94.08704203087837,
+      "transport_retries": [],
+      "embed_ms": 0.005183974280953407,
+      "search_ms": 28.249274007976055,
+      "embedding_cached": true,
+      "recall24": 0.9166666666666666
+    },
+    {
+      "prompt": "an anatomical diagram of a skeleton",
+      "backend": "faiss",
+      "end_to_end_ms": 390.2225879719481,
+      "transport_retries": [],
+      "embed_ms": 338.5060849832371,
+      "search_ms": 26.948426966555417,
+      "embedding_cached": false,
+      "recall24": 0.9166666666666666
+    },
+    {
+      "prompt": "an anatomical diagram of a skeleton",
+      "backend": "sq8",
+      "end_to_end_ms": 259.40368603914976,
+      "transport_retries": [],
+      "embed_ms": 0.004009983967989683,
+      "search_ms": 236.33621603948995,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a human skull",
+      "backend": "sq8",
+      "end_to_end_ms": 605.5863810470328,
+      "transport_retries": [],
+      "embed_ms": 342.54100400721654,
+      "search_ms": 239.09594799624756,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a human skull",
+      "backend": "faiss",
+      "end_to_end_ms": 58.90082404948771,
+      "transport_retries": [],
+      "embed_ms": 0.004603003617376089,
+      "search_ms": 35.59213498374447,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a diagram of the heart",
+      "backend": "faiss",
+      "end_to_end_ms": 419.17722404468805,
+      "transport_retries": [],
+      "embed_ms": 365.6511810258962,
+      "search_ms": 29.918778978753835,
+      "embedding_cached": false,
+      "recall24": 0.875
+    },
+    {
+      "prompt": "a diagram of the heart",
+      "backend": "sq8",
+      "end_to_end_ms": 270.28707205317914,
+      "transport_retries": [],
+      "embed_ms": 0.0033889664337038994,
+      "search_ms": 247.2242950461805,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a microscope",
+      "backend": "sq8",
+      "end_to_end_ms": 703.2271740026772,
+      "transport_retries": [],
+      "embed_ms": 403.1752120354213,
+      "search_ms": 234.8890730063431,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a microscope",
+      "backend": "faiss",
+      "end_to_end_ms": 51.724781980738044,
+      "transport_retries": [],
+      "embed_ms": 0.0032199895940721035,
+      "search_ms": 26.623146957717836,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "an astronomical diagram",
+      "backend": "faiss",
+      "end_to_end_ms": 392.80470507219434,
+      "transport_retries": [],
+      "embed_ms": 340.8798779710196,
+      "search_ms": 26.854247029405087,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "an astronomical diagram",
+      "backend": "sq8",
+      "end_to_end_ms": 289.89517700392753,
+      "transport_retries": [],
+      "embed_ms": 0.005081994459033012,
+      "search_ms": 264.579548034817,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "the moon",
+      "backend": "sq8",
+      "end_to_end_ms": 640.1936890324578,
+      "transport_retries": [],
+      "embed_ms": 349.86027103150263,
+      "search_ms": 262.141746992711,
+      "embedding_cached": false,
+      "recall24": 0.9166666666666666
+    },
+    {
+      "prompt": "the moon",
+      "backend": "faiss",
+      "end_to_end_ms": 51.36754410341382,
+      "transport_retries": [],
+      "embed_ms": 0.0039460137486457825,
+      "search_ms": 27.47106400784105,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a telescope",
+      "backend": "faiss",
+      "end_to_end_ms": 382.23784998990595,
+      "transport_retries": [],
+      "embed_ms": 332.96552998945117,
+      "search_ms": 26.468219002708793,
+      "embedding_cached": false,
+      "recall24": 0.7916666666666666
+    },
+    {
+      "prompt": "a telescope",
+      "backend": "sq8",
+      "end_to_end_ms": 283.02836092188954,
+      "transport_retries": [],
+      "embed_ms": 0.0036819837987422943,
+      "search_ms": 259.1878090170212,
+      "embedding_cached": true,
+      "recall24": 0.875
+    },
+    {
+      "prompt": "a geological cross section",
+      "backend": "sq8",
+      "end_to_end_ms": 629.2211229447275,
+      "transport_retries": [],
+      "embed_ms": 379.51772299129516,
+      "search_ms": 226.02360701421276,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a geological cross section",
+      "backend": "faiss",
+      "end_to_end_ms": 52.91355692315847,
+      "transport_retries": [],
+      "embed_ms": 0.0032249954529106617,
+      "search_ms": 30.332594993524253,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a decorative floral border",
+      "backend": "faiss",
+      "end_to_end_ms": 412.4381690053269,
+      "transport_retries": [],
+      "embed_ms": 356.96843097684905,
+      "search_ms": 31.456544005777687,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a decorative floral border",
+      "backend": "sq8",
+      "end_to_end_ms": 203.99621699471027,
+      "transport_retries": [],
+      "embed_ms": 0.003795023076236248,
+      "search_ms": 179.5792810153216,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "an ornate initial letter",
+      "backend": "sq8",
+      "end_to_end_ms": 503.3496869727969,
+      "transport_retries": [],
+      "embed_ms": 317.60769698303193,
+      "search_ms": 162.65950701199472,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "an ornate initial letter",
+      "backend": "faiss",
+      "end_to_end_ms": 51.07755400240421,
+      "transport_retries": [],
+      "embed_ms": 0.003675988409668207,
+      "search_ms": 28.025329986121505,
+      "embedding_cached": true,
+      "recall24": 0.9166666666666666
+    },
+    {
+      "prompt": "a coat of arms",
+      "backend": "faiss",
+      "end_to_end_ms": 396.999251912348,
+      "transport_retries": [],
+      "embed_ms": 345.08670296054333,
+      "search_ms": 28.366511047352105,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a coat of arms",
+      "backend": "sq8",
+      "end_to_end_ms": 207.0364849641919,
+      "transport_retries": [],
+      "embed_ms": 0.005833047907799482,
+      "search_ms": 171.27074801828712,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a decorative scroll",
+      "backend": "sq8",
+      "end_to_end_ms": 559.5192390028387,
+      "transport_retries": [],
+      "embed_ms": 364.27566199563444,
+      "search_ms": 172.16674803057685,
+      "embedding_cached": false,
+      "recall24": 0.3333333333333333
+    },
+    {
+      "prompt": "a decorative scroll",
+      "backend": "faiss",
+      "end_to_end_ms": 56.29039206542075,
+      "transport_retries": [],
+      "embed_ms": 0.0039460137486457825,
+      "search_ms": 31.367865041829646,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a book cover with gold lettering",
+      "backend": "faiss",
+      "end_to_end_ms": 444.0643520792946,
+      "transport_retries": [],
+      "embed_ms": 389.6080980193801,
+      "search_ms": 28.004219988361,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a book cover with gold lettering",
+      "backend": "sq8",
+      "end_to_end_ms": 288.132281973958,
+      "transport_retries": [],
+      "embed_ms": 0.003708992153406143,
+      "search_ms": 265.65149397356436,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a leather book binding",
+      "backend": "sq8",
+      "end_to_end_ms": 654.9188999924809,
+      "transport_retries": [],
+      "embed_ms": 392.3630790086463,
+      "search_ms": 238.73353196540847,
+      "embedding_cached": false,
+      "recall24": 0.3333333333333333
+    },
+    {
+      "prompt": "a leather book binding",
+      "backend": "faiss",
+      "end_to_end_ms": 55.21563393995166,
+      "transport_retries": [],
+      "embed_ms": 0.005581998266279697,
+      "search_ms": 32.04361494863406,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a title page",
+      "backend": "faiss",
+      "end_to_end_ms": 390.17928298562765,
+      "transport_retries": [],
+      "embed_ms": 341.0167050315067,
+      "search_ms": 26.34143695468083,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a title page",
+      "backend": "sq8",
+      "end_to_end_ms": 290.65436602104455,
+      "transport_retries": [],
+      "embed_ms": 0.0038959551602602005,
+      "search_ms": 267.975763999857,
+      "embedding_cached": true,
+      "recall24": 0.625
+    },
+    {
+      "prompt": "a printed music score",
+      "backend": "sq8",
+      "end_to_end_ms": 625.3334060311317,
+      "transport_retries": [],
+      "embed_ms": 369.8826929903589,
+      "search_ms": 231.99824197217822,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a printed music score",
+      "backend": "faiss",
+      "end_to_end_ms": 49.52293401584029,
+      "transport_retries": [],
+      "embed_ms": 0.004121044185012579,
+      "search_ms": 26.970519043970853,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a church altar",
+      "backend": "faiss",
+      "end_to_end_ms": 389.61265806574374,
+      "transport_retries": [],
+      "embed_ms": 336.71487600076944,
+      "search_ms": 28.248597984202206,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a church altar",
+      "backend": "sq8",
+      "end_to_end_ms": 250.80295896623284,
+      "transport_retries": [],
+      "embed_ms": 0.003868015483021736,
+      "search_ms": 228.14247995847836,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "an angel",
+      "backend": "sq8",
+      "end_to_end_ms": 634.8496979335323,
+      "transport_retries": [],
+      "embed_ms": 382.0089530199766,
+      "search_ms": 229.95756601449102,
+      "embedding_cached": false,
+      "recall24": 0.875
+    },
+    {
+      "prompt": "an angel",
+      "backend": "faiss",
+      "end_to_end_ms": 95.11152503546327,
+      "transport_retries": [],
+      "embed_ms": 0.004742003511637449,
+      "search_ms": 29.909501026850194,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a classical statue",
+      "backend": "faiss",
+      "end_to_end_ms": 410.50949797499925,
+      "transport_retries": [],
+      "embed_ms": 362.0425629778765,
+      "search_ms": 24.289875000249594,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a classical statue",
+      "backend": "sq8",
+      "end_to_end_ms": 251.61154195666313,
+      "transport_retries": [],
+      "embed_ms": 0.005619018338620663,
+      "search_ms": 228.34861499723047,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a ruined abbey",
+      "backend": "sq8",
+      "end_to_end_ms": 584.7035309998319,
+      "transport_retries": [],
+      "embed_ms": 348.4739570412785,
+      "search_ms": 213.0693049984984,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a ruined abbey",
+      "backend": "faiss",
+      "end_to_end_ms": 60.119725996628404,
+      "transport_retries": [],
+      "embed_ms": 0.003824010491371155,
+      "search_ms": 33.98602205561474,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a waterfall",
+      "backend": "faiss",
+      "end_to_end_ms": 415.21918203216046,
+      "transport_retries": [],
+      "embed_ms": 354.83199800364673,
+      "search_ms": 33.54938904521987,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a waterfall",
+      "backend": "sq8",
+      "end_to_end_ms": 297.5683209951967,
+      "transport_retries": [],
+      "embed_ms": 0.020531006157398224,
+      "search_ms": 271.65322500513867,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a volcano",
+      "backend": "sq8",
+      "end_to_end_ms": 609.8281410522759,
+      "transport_retries": [],
+      "embed_ms": 336.03577100438997,
+      "search_ms": 250.52400899585336,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "a volcano",
+      "backend": "faiss",
+      "end_to_end_ms": 56.21748301200569,
+      "transport_retries": [],
+      "embed_ms": 0.005775014869868755,
+      "search_ms": 31.29462100332603,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a desert caravan",
+      "backend": "faiss",
+      "end_to_end_ms": 406.00182593334466,
+      "transport_retries": [],
+      "embed_ms": 348.64360198844224,
+      "search_ms": 33.371115976478904,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a desert caravan",
+      "backend": "sq8",
+      "end_to_end_ms": 299.1908179828897,
+      "transport_retries": [],
+      "embed_ms": 0.004311965312808752,
+      "search_ms": 274.0384219796397,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "an arctic expedition",
+      "backend": "sq8",
+      "end_to_end_ms": 621.1807259824127,
+      "transport_retries": [],
+      "embed_ms": 345.7075009937398,
+      "search_ms": 251.18063297122717,
+      "embedding_cached": false,
+      "recall24": 1
+    },
+    {
+      "prompt": "an arctic expedition",
+      "backend": "faiss",
+      "end_to_end_ms": 52.53387591801584,
+      "transport_retries": [],
+      "embed_ms": 0.003909983206540346,
+      "search_ms": 29.10802501719445,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a spinning wheel",
+      "backend": "faiss",
+      "end_to_end_ms": 434.59690001327544,
+      "transport_retries": [],
+      "embed_ms": 384.563019964844,
+      "search_ms": 27.109129005111754,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a spinning wheel",
+      "backend": "sq8",
+      "end_to_end_ms": 261.71950600109994,
+      "transport_retries": [],
+      "embed_ms": 0.005304988007992506,
+      "search_ms": 236.39264999656007,
+      "embedding_cached": true,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a windmill",
+      "backend": "sq8",
+      "end_to_end_ms": 617.9335460765287,
+      "transport_retries": [],
+      "embed_ms": 367.129473015666,
+      "search_ms": 226.77281504729763,
+      "embedding_cached": false,
+      "recall24": 0.7916666666666666
+    },
+    {
+      "prompt": "a windmill",
+      "backend": "faiss",
+      "end_to_end_ms": 53.53373207617551,
+      "transport_retries": [],
+      "embed_ms": 0.004199042450636625,
+      "search_ms": 30.624497041571885,
+      "embedding_cached": true,
+      "recall24": 0.9166666666666666
+    },
+    {
+      "prompt": "a mechanical diagram of an engine",
+      "backend": "faiss",
+      "end_to_end_ms": 430.7771949097514,
+      "transport_retries": [],
+      "embed_ms": 376.20234000496566,
+      "search_ms": 31.53321100398898,
+      "embedding_cached": false,
+      "recall24": 0.9583333333333334
+    },
+    {
+      "prompt": "a mechanical diagram of an engine",
+      "backend": "sq8",
+      "end_to_end_ms": 347.34296100214124,
+      "transport_retries": [],
+      "embed_ms": 0.005409005098044872,
+      "search_ms": 280.8173419907689,
+      "embedding_cached": true,
+      "recall24": 1
+    },
+    {
+      "prompt": "a hot air balloon",
+      "backend": "sq8",
+      "end_to_end_ms": 640.8909839810804,
+      "transport_retries": [],
+      "embed_ms": 363.6342870304361,
+      "search_ms": 254.07837895909324,
+      "embedding_cached": false,
+      "recall24": 0.75
+    },
+    {
+      "prompt": "a hot air balloon",
+      "backend": "faiss",
+      "end_to_end_ms": 68.86139803100377,
+      "transport_retries": [],
+      "embed_ms": 0.004189962055534124,
+      "search_ms": 45.306259009521455,
+      "embedding_cached": true,
+      "recall24": 0.375
+    }
+  ]
+}
