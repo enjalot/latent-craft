@@ -5,15 +5,15 @@ import { verifyMiningPostings } from "./VerifyMiningSave.ts";
 import { resolveThumbUrl, type PointIndex } from "../streaming/PointIndex.ts";
 import type { InventoryPanel } from "../ui/InventoryPanel.ts";
 import { HUD_CLASS } from "../ui/hudPanel.ts";
-import { voxelCountThreshold } from "../voxels/VoxelCountFilter.ts";
+import { restoreFilterSettings } from "./FilterSettings.ts";
 
-export interface PlaySettings { speed: number; radius: number; filterEnabled: boolean; filterThreshold: number; position?: number[]; quaternion?: number[] }
+export interface PlaySettings { speed: number; radius: number; filterEnabled: boolean; filterThreshold: number; filterDefaultsVersion?: number; position?: number[]; quaternion?: number[] }
 
 /** Dataset/revision-scoped saves. Inventory writes only after mutations, never
  * per frame; tiny flight settings save independently. Quota errors stay visible
  * and do not erase the last successful save. CSV is the portable backup. */
 export class GameSession {
-  readonly settings: PlaySettings = { speed: 8, radius: 2, filterEnabled: false, filterThreshold: 1 };
+  readonly settings: PlaySettings = { speed: 8, radius: 2, ...restoreFilterSettings() };
   private readonly key: string;
   private readonly message = document.createElement("div");
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -90,8 +90,7 @@ export class GameSession {
       if (settings) {
         if (Number.isFinite(settings.speed)) this.settings.speed = Math.max(1, Math.min(64, settings.speed));
         if (Number.isFinite(settings.radius)) this.settings.radius = Math.max(1, Math.min(48, settings.radius));
-        this.settings.filterEnabled = settings.filterEnabled === true;
-        this.settings.filterThreshold = voxelCountThreshold(settings.filterThreshold);
+        Object.assign(this.settings, restoreFilterSettings(settings));
         const finite = (v: unknown, length: number): v is number[] => Array.isArray(v) && v.length === length && v.every(n => Number.isFinite(n));
         if (finite(settings.position, 3) && settings.position.every(n => Math.abs(n) < this.manifest.worldScale * 10)) this.settings.position = settings.position;
         if (finite(settings.quaternion, 4) && Math.abs(Math.hypot(...settings.quaternion) - 1) < .01) this.settings.quaternion = settings.quaternion;

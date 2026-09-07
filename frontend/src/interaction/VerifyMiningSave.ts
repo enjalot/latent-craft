@@ -22,6 +22,8 @@ export async function verifyMiningPostings(save: MiningSave, manifest: Manifest,
     if (count !== stack.totalPoints || repr !== stack.reprRowId || pointOffset + count > entry.n_points)
       throw new Error("Block metadata does not match this map.");
     const rows = new Set([...stack.rowIds, ...stack.returned]);
+    const selected = new Set(stack.selected ?? []);
+    for (const row of selected) rows.delete(row);
     const start = pointOffset + (version === 1 ? summaryBytes / 4 : 0);
     if (version === 2 && !entry.postings) throw new Error("Missing posting reference.");
     const records = version === 1
@@ -32,6 +34,14 @@ export async function verifyMiningPostings(save: MiningSave, manifest: Manifest,
       const batch = await Promise.all(Array.from({length: Math.min(256, stack.cursor-i)}, async (_, j) =>
         (await records.record(start+i+j)).getUint32(0,true)));
       for (const row of batch) if (!rows.delete(row)) throw new Error("Image rows do not match the mined posting prefix.");
+    }
+    if (rows.size) throw new Error("Unverified images in posting prefix");
+    for (const row of selected) {
+      if (cancelled()) throw new Error("Map closed.");
+      const lookup = manifest.raw.row_to_voxel;
+      const identity = new DataView(await reader.read(manifest.url(lookup.path), row * 8, 8, lookup.bytes));
+      if (identity.getUint32(0, true) !== stack.chunkId || identity.getUint16(4, true) !== stack.localVoxelId)
+        throw new Error("Selected image does not belong to this voxel");
     }
   }
 }

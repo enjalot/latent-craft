@@ -51,7 +51,7 @@ export class SharpBand {
     this.opaqueHover.mesh.visible = false;
     this.center.copy(camera.position); camera.getWorldDirection(this.forward);
     const now = performance.now(), size = this.manifest.voxelWorldSize;
-    if (now - this.lastScan >= 100 || radius !== this.lastRadius) {
+    if (!xray && (now - this.lastScan >= 100 || radius !== this.lastRadius)) {
       this.lastScan = now; this.lastRadius = radius;
       const candidates: (Voxel & { priority: number })[] = [];
       const reach = radius + size + this.manifest.chunkWorldSize * Math.sqrt(3) / 2;
@@ -72,7 +72,8 @@ export class SharpBand {
       candidates.sort((a,b) => a.priority - b.priority);
       this.candidates = candidates.slice(0, PREVIEW_SLOTS);
     }
-    const voxels = [...this.candidates];
+    // X-ray is a count heatmap; only the focused voxel may show an image.
+    const voxels = xray ? [] : [...this.candidates];
     if (hover) {
       const owner = this.store.chunk(hover.chunkId);
       if (owner) {
@@ -91,7 +92,7 @@ export class SharpBand {
       if (d2 <= radius ** 2 || (!focused && !isSharpBandCell(d2, radius, size))) continue;
       const state = this.mining.extractionState(v.chunkId, v.localVoxelId);
       const searchRow = focused && this.searchFocus ? this.searchFocus.rowId : null;
-      const key = `${v.chunkId}:${v.localVoxelId}:${state?.cursor ?? 0}:${state?.returned.values().next().value ?? ""}:search:${searchRow ?? ""}`;
+      const key = `${v.chunkId}:${v.localVoxelId}:${state?.cursor ?? 0}:${state?.extracted.size ?? 0}:${state?.returned.values().next().value ?? ""}:search:${searchRow ?? ""}`;
       if (owners.has(key)) continue;
       owners.set(key, v);
       v.owner.mesh.getMatrixAt(v.instanceId, this.matrix);

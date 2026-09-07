@@ -28,7 +28,7 @@ describe("independent sharp-band row lookup", () => {
     let complete!: (v:DataView)=>void;
     vi.spyOn(PagedRecords.prototype,"record").mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
     const { mining,lookup }=setup();
-    vi.spyOn(mining,"extractionState").mockReturnValue({cursor:1,returned:new Set()} as never);
+    vi.spyOn(mining,"extractionState").mockReturnValue({cursor:1,returned:new Set(),selected:new Set()} as never);
     const pending=mining.previewRowId(0,0);
     lookup.mockReturnValue(undefined as never); complete(record(100));
     expect(await pending).toBeNull();
@@ -36,14 +36,14 @@ describe("independent sharp-band row lookup", () => {
   it("does not let an invalid posting address a different point table", async () => {
     vi.spyOn(PagedRecords.prototype,"record").mockResolvedValue(record(1000));
     const {mining}=setup();
-    vi.spyOn(mining,"extractionState").mockReturnValue({cursor:1,returned:new Set()} as never);
+    vi.spyOn(mining,"extractionState").mockReturnValue({cursor:1,returned:new Set(),selected:new Set()} as never);
     expect(await mining.previewRowId(0,0)).toBeNull();
   });
   it("sharpens the atlas representative without fetching postings until mining begins", async () => {
     const fetch=vi.spyOn(PagedRecords.prototype,"record").mockResolvedValue(record(102));
     const {mining}=setup();
     expect(await mining.previewRowId(0,0)).toBe(101); expect(fetch).not.toHaveBeenCalled();
-    vi.spyOn(mining,"extractionState").mockReturnValue({cursor:1,returned:new Set()} as never);
+    vi.spyOn(mining,"extractionState").mockReturnValue({cursor:1,returned:new Set(),selected:new Set()} as never);
     expect(await mining.previewRowId(0,0)).toBe(102); expect(fetch).toHaveBeenCalledOnce();
   });
 });

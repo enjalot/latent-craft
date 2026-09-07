@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { densityLevel } from "../voxels/DensityView.ts";
 import { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import { fetchArrayBuffer } from "../net/fetchTyped.ts";
 import { createVoxelMaterial, initVoxelUniforms } from "../voxels/VoxelMaterial.ts";
@@ -202,6 +203,7 @@ export class ChunkLoader {
         // Legacy atlases use local_voxel_id directly. Compact atlases pack
         // occupied voxels in this same ascending instance order.
         instance.setUniform("tileIndex", this.manifest.compactAtlases ? index : localVoxelId);
+        instance.setUniform("densityLevel", densityLevel(meta.count[localVoxelId]));
       });
 
       // Instances are static for the life of the chunk, so one BVH build at load

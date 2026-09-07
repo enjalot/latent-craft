@@ -24,24 +24,34 @@ export class BLSearch {
   private generation = 0;
   private statusController = new AbortController();
   private statusTimer: ReturnType<typeof setTimeout> | undefined;
-  constructor(container: HTMLElement, actions: { hover: (r: SearchResult | null) => void; select: (r: SearchResult) => void; clear: () => void }) {
+  constructor(container: HTMLElement, actions: { hover: (r: SearchResult | null) => void; select: (r: SearchResult) => void | Promise<void>; clear: () => void }) {
     this.root.className = "ls-bl-search";
-    Object.assign(this.root.style, { padding: "10px", pointerEvents: "auto", fontSize: "11px", flexShrink: "1", minHeight: "42px", overflowY: "auto", boxSizing: "border-box", overscrollBehavior: "contain" });
+    Object.assign(this.root.style, { padding: "10px", pointerEvents: "auto", fontSize: "11px", flexShrink: "1", minHeight: "42px", minWidth: "0", overflow: "clip", boxSizing: "border-box", display: "flex", flexDirection: "column" });
     applyHudPanelChrome(this.root);
     this.root.addEventListener("keydown", event => event.stopPropagation());
-    const details = document.createElement("details"); details.open = true;
-    const heading = document.createElement("summary"); heading.textContent = "Search the collection · SigLIP 2"; applyHudTitle(heading);
-    const form = document.createElement("form"), input = document.createElement("input"), button = document.createElement("button"), select = document.createElement("select");
+    const bodyPanel = document.createElement("div");
+    Object.assign(bodyPanel.style, { display: "flex", flexDirection: "column", minHeight: "0", overflow: "clip" });
+    const heading = document.createElement("button"); heading.type = "button";
+    heading.textContent = "▾ Search the collection · SigLIP 2"; applyHudTitle(heading);
+    Object.assign(heading.style, { background: "none", border: "0", padding: "0", textAlign: "left", cursor: "pointer", flexShrink: "0" });
+    heading.setAttribute("aria-expanded", "true");
+    heading.addEventListener("click", () => {
+      const open = heading.getAttribute("aria-expanded") !== "true";
+      heading.setAttribute("aria-expanded", String(open)); bodyPanel.style.display = open ? "flex" : "none";
+      heading.textContent = `${open ? "▾" : "▸"} Search the collection · SigLIP 2`;
+    });
+    const form = document.createElement("form"), input = document.createElement("input"), button = document.createElement("button");
+    form.style.flexShrink = "0";
     input.type = "search"; input.maxLength = 400; input.placeholder = "a sailing ship, a botanical illustration…";
     input.setAttribute("aria-label", "Search British Library images");
     Object.assign(input.style, { width: "100%", boxSizing: "border-box", margin: "10px 0 8px", padding: "8px", background: "var(--hud-ground-inset)", color: "var(--hud-text)", border: "1px solid var(--hud-line)" });
     button.type = "submit"; button.textContent = "Search"; button.className = "hud-button";
-    select.className = "hud-select"; select.setAttribute("aria-label", "Search index experiment");
-    for (const [value, label] of [["faiss", "FAISS · SQ8"], ["sq8", "LanceDB · SQ8 + refine"]]) {
-      const option = document.createElement("option"); option.value = value; option.textContent = label; select.append(option);
-    }
-    const bar = document.createElement("div"); Object.assign(bar.style, { display: "flex", gap: "8px", flexWrap: "wrap" }); bar.append(button, select);
-    const status = document.createElement("p"); status.setAttribute("role", "status"); status.textContent = "1,080,814 images. Hover to aim; click to fly to an image.";
+    const backend = document.createElement("span"); backend.textContent = "FAISS SQ8"; backend.style.opacity = ".65";
+    const bar = document.createElement("div"); Object.assign(bar.style, { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }); bar.append(button, backend);
+    const help = "Hover to aim; click to collect the image and fly to its block.";
+    const status = document.createElement("p"); status.setAttribute("role", "status"); status.textContent = help;
+    status.style.overflowWrap = "anywhere";
+    status.style.flexShrink = "0";
     const checkStatus = async () => {
       try {
         const response = await fetch("/api/bl/status", { signal: this.statusController.signal, cache: "no-store" });
@@ -50,7 +60,7 @@ export class BLSearch {
         if (this.statusController.signal.aborted) return;
         button.disabled = state.state !== "ready";
         if (state.state === "ready") {
-          status.textContent = "1,080,814 images. Hover to aim; click to fly to an image.";
+          if (this.generation === 0) status.textContent = help;
           return;
         }
         status.textContent = typeof state.detail === "string" ? state.detail : "Search is warming; explore the map meanwhile.";
@@ -58,9 +68,11 @@ export class BLSearch {
       } catch { /* A local map may not have its optional search service running. */ }
     };
     void checkStatus();
-    const results = document.createElement("div"); Object.assign(results.style, { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "5px" });
-    const clear = () => { this.generation++; this.controller?.abort(); results.replaceChildren(); actions.clear(); };
-    input.addEventListener("input", clear); select.addEventListener("change", clear);
+    const results = document.createElement("div"); Object.assign(results.style, { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gridTemplateRows: "repeat(2, minmax(0, 1fr))", gap: "5px", flex: "0 1 0px", minHeight: "0" });
+    const pager = document.createElement("div");
+    Object.assign(pager.style, { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginTop: "8px", flexShrink: "0" });
+    const clear = () => { this.generation++; this.controller?.abort(); results.replaceChildren(); results.style.flexBasis = "0px"; pager.replaceChildren(); actions.clear(); };
+    input.addEventListener("input", clear);
     form.addEventListener("submit", async event => {
       event.preventDefault(); clear();
       const generation = this.generation, query = input.value.trim();
@@ -69,30 +81,55 @@ export class BLSearch {
       const started = performance.now();
       try {
         const response = await fetch("/api/bl/search", { method: "POST", signal: this.controller.signal,
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query, backend: select.value }) });
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query, backend: "faiss" }) });
         const body = await response.json();
         if (generation !== this.generation) return;
         if (!response.ok) throw new Error(body.detail || body.error || `Search HTTP ${response.status}`);
         const hits = parseBLResults(body);
+        results.style.flexBasis = hits.length ? "230px" : "0px";
         if (body.query !== query || ![body.embed_ms, body.search_ms].every(v => Number.isFinite(v) && v >= 0)) throw new Error("Invalid search response");
         status.textContent = `${hits.length} matches · ${(performance.now()-started).toFixed(0)} ms · encode ${body.embed_ms.toFixed(0)} / search ${body.search_ms.toFixed(0)} ms`;
-        for (const [i, hit] of hits.entries()) {
-          const card = document.createElement("button"); card.type = "button"; card.className = "hud-button";
-          Object.assign(card.style, { minWidth: "0", padding: "3px", display: "grid", gap: "3px" });
-          card.setAttribute("aria-label", `Result ${i+1}: fly to image`);
-          const image = document.createElement("img"); image.alt = `Result ${i+1}`; image.decoding = "async";
-          Object.assign(image.style, { width: "100%", aspectRatio: "1", objectFit: "contain" });
-          card.append(image, document.createTextNode(hit.score.toFixed(3))); results.append(card);
-          setThumbnailSource(image, hit.thumbUrl!);
-          card.addEventListener("pointerenter", () => actions.hover(hit)); card.addEventListener("pointerleave", () => actions.hover(null));
-          card.addEventListener("focus", () => actions.hover(hit)); card.addEventListener("blur", () => actions.hover(null));
-          card.addEventListener("click", () => actions.select(hit));
-        }
+        let page = 0;
+        const renderPage = () => {
+          results.replaceChildren(); pager.replaceChildren(); actions.hover(null);
+          for (const [offset, hit] of hits.slice(page * 8, (page + 1) * 8).entries()) {
+            const i = page * 8 + offset;
+            const card = document.createElement("button"); card.type = "button"; card.className = "hud-button";
+            Object.assign(card.style, { minWidth: "0", minHeight: "0", padding: "3px", display: "grid", gridTemplateRows: "minmax(0, 1fr) auto", gap: "3px", overflow: "clip" });
+            card.setAttribute("aria-label", `Result ${i+1}: collect image and fly to block`);
+            const image = document.createElement("img"); image.alt = `Result ${i+1}`; image.decoding = "async";
+            Object.assign(image.style, { width: "100%", height: "100%", minHeight: "0", objectFit: "contain" });
+            card.append(image, document.createTextNode(hit.score.toFixed(3))); results.append(card);
+            setThumbnailSource(image, hit.thumbUrl!);
+            card.addEventListener("pointerenter", () => actions.hover(hit)); card.addEventListener("pointerleave", () => actions.hover(null));
+            card.addEventListener("focus", () => actions.hover(hit)); card.addEventListener("blur", () => actions.hover(null));
+            card.addEventListener("click", async () => {
+              card.disabled = true;
+              try {
+                await actions.select(hit);
+                if (generation === this.generation) status.textContent = `Image ${hit.row.toLocaleString()} collected · ${help}`;
+              } catch (error) {
+                if (generation === this.generation) status.textContent = `Could not collect image: ${error instanceof Error ? error.message : String(error)}`;
+              } finally { card.disabled = false; }
+            });
+          }
+          if (hits.length > 8) {
+            const previous = document.createElement("button"), next = document.createElement("button"), label = document.createElement("span");
+            previous.type = next.type = "button"; previous.className = next.className = "hud-button";
+            previous.textContent = "← Previous"; next.textContent = "Next →";
+            previous.disabled = page === 0; next.disabled = (page + 1) * 8 >= hits.length;
+            label.textContent = `${page * 8 + 1}–${Math.min((page + 1) * 8, hits.length)} of ${hits.length}`;
+            previous.addEventListener("click", () => { page--; renderPage(); });
+            next.addEventListener("click", () => { page++; renderPage(); });
+            pager.append(previous, label, next);
+          }
+        };
+        renderPage();
       } catch (error) {
         if (generation === this.generation) status.textContent = error instanceof Error ? error.message : String(error);
       }
     });
-    form.append(input, bar); details.append(heading, form, status, results); this.root.append(details); container.append(this.root);
+    form.append(input, bar); bodyPanel.append(form, status, results, pager); this.root.append(heading, bodyPanel); container.append(this.root);
   }
   dispose(): void {
     this.generation++; this.controller?.abort(); this.statusController.abort();

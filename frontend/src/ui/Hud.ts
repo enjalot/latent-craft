@@ -57,8 +57,6 @@ function formatBytes(bytes: number): string {
  * Phase 6: frame/ground/CRT texture all come from `applyHudPanelChrome`; the
  * only styling left inline here is layout (position, padding, flex).
  */
-const COLLAPSE_STORAGE_KEY = "lsv-hud-collapsed";
-
 export class Hud {
   private readonly root: HTMLElement;
   private readonly header: HTMLElement;
@@ -142,7 +140,7 @@ export class Hud {
     this.root.appendChild(this.body);
     container.appendChild(this.root);
 
-    this.setCollapsed(this.readPersistedCollapsed());
+    this.setCollapsed(true);
   }
 
   configure(options: { speed: number; radius: number; maxRadius: number;
@@ -192,16 +190,6 @@ export class Hud {
     if (this.radiusOutput.value !== `${value} voxels`) this.radiusOutput.value = `${value} voxels`;
   }
 
-  private readPersistedCollapsed(): boolean {
-    try {
-      return localStorage.getItem(COLLAPSE_STORAGE_KEY) === "1";
-    } catch {
-      // Storage can throw in private-browsing/locked-down contexts; just
-      // fall back to the "start expanded" default in that case.
-      return false;
-    }
-  }
-
   private setCollapsed(collapsed: boolean): void {
     this.collapsed = collapsed;
     this.body.style.display = collapsed ? "none" : "block";
@@ -211,11 +199,6 @@ export class Hud {
     this.header.style.padding = collapsed ? "5px 10px" : "5px 10px 4px";
     this.toggleGlyph.textContent = collapsed ? "[+]" : "[-]";
     this.header.setAttribute("aria-expanded", String(!collapsed));
-    try {
-      localStorage.setItem(COLLAPSE_STORAGE_KEY, collapsed ? "1" : "0");
-    } catch {
-      // Non-fatal — collapse state just won't survive a reload.
-    }
   }
 
   update(state: HudState): void {

@@ -1,7 +1,6 @@
-import * as THREE from "three";
-import { createRadixSort, type InstancedMesh2 } from "@three.ez/instanced-mesh";
 import type { ChunkStore } from "../streaming/ChunkStore.ts";
 import { combinedVoxelOpacity } from "../voxels/VoxelOpacity.ts";
+import { setDensityRendering } from "../voxels/DensityView.ts";
 
 /**
  * X-ray glass view: a global, chunk-wide true-transparency toggle.
@@ -82,7 +81,7 @@ export class XRayController {
   private applyChunk(chunkId: number): void {
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk) return;
-    this.setGlassRendering(chunk.mesh, this.active);
+    setDensityRendering(chunk.mesh, this.active);
     // The container cages vanish under glass view — a per-chunk mesh visibility
     // flip, not an opacity, so a
     // hidden chunk's worth of cages costs nothing to not draw. Re-applied on
@@ -97,24 +96,4 @@ export class XRayController {
     }
   }
 
-  private setGlassRendering(mesh: InstancedMesh2, active: boolean): void {
-    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    for (const material of materials) {
-      const changed =
-        material.transparent !== active ||
-        material.depthWrite === active ||
-        material.alphaToCoverage === active;
-      material.transparent = active;
-      material.depthWrite = !active;
-      material.alphaToCoverage = !active;
-      material.blending = THREE.NormalBlending;
-      if (changed) material.needsUpdate = true;
-    }
-
-    // Sorting is only paid while glass is active. The radix sorter avoids an
-    // O(n log n) comparison sort for dense chunks and keys off material
-    // transparency to choose the required far-to-near order.
-    if (active && !mesh.customSort) mesh.customSort = createRadixSort(mesh);
-    mesh.sortObjects = active;
-  }
 }

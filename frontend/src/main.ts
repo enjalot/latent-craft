@@ -23,6 +23,7 @@ import type { ProxyVoxel } from "./voxels/VoxelProxyCloud.ts";
 import { MiningController, type ExtractionCycle } from "./interaction/MiningController.ts";
 import { PointerController, type VoxelTarget } from "./interaction/PointerController.ts";
 import { XRayController } from "./interaction/XRayController.ts";
+import { createDensityLegend } from "./ui/DensityLegend.ts";
 import { EffectorFieldController } from "./interaction/EffectorField.ts";
 import { GameSession } from "./interaction/GameSession.ts";
 import { planVoxelFlight } from "./interaction/VoxelFlight.ts";
@@ -174,7 +175,14 @@ const hud = new Hud(leftDock, true);
 let searchNavigation: SearchNavigation | null = null;
 const searchCompare = !useSynthetic && DATASETS[datasetKey]?.searchProfile === "bl-siglip2-20260907a" ? new BLSearch(leftDock, {
   hover: result => searchNavigation?.hover(result),
-  select: result => searchNavigation?.select(result),
+  select: async result => {
+    const mining = miningController, panel = inventoryPanel;
+    if (!mining || !panel) throw new Error("Map is still loading");
+    searchNavigation?.select(result);
+    const stackId = await mining.collectSearchResult(result.chunk, result.local, result.row,
+      () => appDisposed || miningController !== mining);
+    panel.focusMined(stackId, result.row);
+  },
   clear: () => searchNavigation?.clear(),
 }) : new SearchCompare(leftDock, useSynthetic ? "synthetic" : datasetKey, {
   project: response => {
@@ -187,10 +195,13 @@ const searchCompare = !useSynthetic && DATASETS[datasetKey]?.searchProfile === "
 });
 engine.renderer.domElement.addEventListener("pointerdown", () => searchNavigation?.clear(), { signal: appLifetime.signal });
 const holdRing = createHoldProgressRing(app);
+const densityLegend = createDensityLegend(app);
 
 // Hand / bulk extraction / glass view are separate slots; the field is always on.
 const hotbar = new Hotbar(app, (tool) => {
   xrayController?.setActive(tool === "xray");
+  voxelProxy?.setXrayActive(tool === "xray");
+  densityLegend.setActive(tool === "xray");
 });
 
 // Fly-to-inventory tiles (one per extraction cycle) — see ExtractionFlight.ts.
@@ -396,6 +407,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
     );
     // Respect a keypress made while the world was still loading.
     xrayController.setActive(hotbar.equippedTool === "xray");
+    voxelProxy?.setXrayActive(hotbar.equippedTool === "xray");
     effectorField = new EffectorFieldController(
       chunkStore,
       manifest,
@@ -649,7 +661,7 @@ function computeHotbarStatus(): string {
       ? ""
       : "Effector loading…";
   if (tool === "pickaxe") return `Pickaxe · up to 100 points/cycle\n${fieldStatus}`;
-  if (tool === "xray") return `X-ray · glass opacity ${XRAY_OPACITY} · 1 point/cycle\n${fieldStatus}`;
+  if (tool === "xray") return `X-ray · image-count heatmap · glass opacity ${XRAY_OPACITY}\n${fieldStatus}`;
   return fieldStatus;
 }
 

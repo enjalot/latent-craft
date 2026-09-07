@@ -4,7 +4,8 @@ import { fetchJson } from "../net/fetchTyped.ts";
 import { rangeReader } from "../streaming/RangeReader.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
 import type { ProxyVoxel, VoxelProxyStats } from "./VoxelProxyCloud.ts";
-import { VOXEL_FILL } from "../config.ts";
+import { VOXEL_FILL, XRAY_OPACITY } from "../config.ts";
+import { densityLevel, installDensityView, setDensityRendering } from "./DensityView.ts";
 import { selectProxyCut, proxyBrickLod, allocateProxyBricks } from "./ProxyCut.ts";
 import { proxyCellMaxCounts } from "./VoxelCountFilter.ts";
 
@@ -46,6 +47,14 @@ export class HierarchicalProxies {
   private lastFov = -1;
   private countFilter = 0;
   private retryAt = Infinity;
+  private xrayActive = false;
+
+  setXrayActive(active: boolean): void {
+    this.xrayActive = active;
+    for (const brick of this.bricks.values()) setDensityRendering(brick.mesh, active);
+    this.material.opacity = active ? XRAY_OPACITY : 1;
+    this.dirty = true;
+  }
 
   setCountFilter(threshold: number): void {
     if (threshold === this.countFilter) return;
@@ -54,6 +63,7 @@ export class HierarchicalProxies {
 
   private constructor(private readonly manifest: Manifest, private readonly hierarchy: Hierarchy,
     private readonly renderer: THREE.WebGLRenderer) {
+    installDensityView(this.material);
     this.coarse = new InstancedMesh2(new THREE.BoxGeometry(1, 1, 1), this.coarseMaterial, { capacity: CUT_CAPACITY, renderer });
     this.coarse.addInstances(CUT_CAPACITY);
     for (let i = 0; i < CUT_CAPACITY; i++) this.coarse.setVisibilityAt(i, false);
@@ -195,6 +205,9 @@ export class HierarchicalProxies {
         if (this.disposed) return;
         const data = new DataView(buffer);
         const mesh = new InstancedMesh2(new THREE.BoxGeometry(1, 1, 1), this.material, { capacity: level.count, renderer: this.renderer });
+        mesh.initUniformsPerInstance({ fragment: { densityLevel: "float" } });
+        setDensityRendering(mesh, this.xrayActive);
+        this.material.opacity = this.xrayActive ? XRAY_OPACITY : 1;
         const ids: ProxyVoxel[] = [], colors: THREE.Color[] = [];
         const vpc = this.manifest.voxelsPerChunk;
         mesh.addInstances(level.count, (instance, i) => {
@@ -206,6 +219,9 @@ export class HierarchicalProxies {
           const color = new THREE.Color().setRGB(data.getUint8(offset + 12) / 255, data.getUint8(offset + 13) / 255, data.getUint8(offset + 14) / 255, THREE.SRGBColorSpace)
             .lerp(new THREE.Color(0x82949a), .65).multiplyScalar(.8);
           instance.color = color;
+          // Coarse cells initially show the mean per unit voxel, never their
+          // larger aggregate as though it were one densely occupied voxel.
+          instance.setUniform("densityLevel", densityLevel(data.getUint32(offset + 8, true) / level.step ** 3));
           colors.push(color);
           ids.push({ chunkId: leaf.chunk, localVoxelId: data.getUint16(offset + 6, true), count: data.getUint32(offset + 8, true) });
         });
@@ -235,6 +251,10 @@ export class HierarchicalProxies {
       .then(buffer => {
         if (this.disposed || brick.mesh.parent !== this.mesh) return;
         brick.filterCounts = proxyCellMaxCounts(new DataView(buffer), brick.source!, brick.level.step, this.manifest.voxelsPerChunk);
+        // If exact child counts were fetched for filtering, show the peak
+        // child density. No additional request is made just for X-ray.
+        for (let i = 0; i < brick.ids.length; i++)
+          brick.mesh.setUniformAt(i, "densityLevel", densityLevel(brick.filterCounts[i]));
         brick.source = undefined;
         this.dirty = true;
       }).catch(() => this.recordFailure(key))

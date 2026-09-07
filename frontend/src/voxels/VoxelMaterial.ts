@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import { ATLAS_TILE_INSET_TEXELS, VOXEL_COVERAGE_DITHER, VOXEL_UNDERLIGHT } from "../config.ts";
+import { installDensityView } from "./DensityView.ts";
 
 /**
  * Per-instance uniform schema every voxel chunk mesh declares. `tileIndex` is
@@ -16,7 +17,7 @@ import { ATLAS_TILE_INSET_TEXELS, VOXEL_COVERAGE_DITHER, VOXEL_UNDERLIGHT } from
  * Declaring the uniform under `fragment` (not `vertex`) makes the library fetch
  * it in the fragment shader — exactly where the atlas UV is computed.
  */
-export const VOXEL_UNIFORM_SCHEMA = { fragment: { tileIndex: "float" } } as const;
+export const VOXEL_UNIFORM_SCHEMA = { fragment: { tileIndex: "float", densityLevel: "float" } } as const;
 
 /**
  * Replacement for three's `<map_fragment>`. `tileIndex` is in scope here
@@ -25,6 +26,7 @@ export const VOXEL_UNIFORM_SCHEMA = { fragment: { tileIndex: "float" } } as cons
  */
 const ATLAS_MAP_FRAGMENT = /* glsl */ `
 #ifdef USE_MAP
+	if (uDensityView < 0.5) {
 	float lsTilesPerSide = uTilesPerSide;
 	float lsTileX = mod( tileIndex, lsTilesPerSide );
 	float lsTileY = floor( tileIndex / lsTilesPerSide );
@@ -38,6 +40,7 @@ const ATLAS_MAP_FRAGMENT = /* glsl */ `
 	vec2 lsAtlasUv = vec2( lsTileX + lsUv.x, lsTileY + 1.0 - lsUv.y ) / lsTilesPerSide;
 	vec4 sampledDiffuseColor = texture2D( map, lsAtlasUv );
 	diffuseColor *= sampledDiffuseColor;
+	}
 #endif
 `;
 
@@ -225,6 +228,7 @@ export function createVoxelMaterial(params: VoxelMaterialParams): THREE.MeshStan
   // otherwise keep serving the previous shader within a session that had
   // already compiled one.
   material.customProgramCacheKey = () => "ls-voxel-atlas-v6-bevel";
+  installDensityView(material);
 
   return material;
 }

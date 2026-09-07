@@ -7,6 +7,7 @@ import { extractionBatchSize } from "../config.ts";
 import { PagedRecords } from "../streaming/RangeReader.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
 import { validateMiningSave, type MiningSave } from "./MiningSave.ts";
+import { searchCollectionDescriptor } from "./SearchCollection.ts";
 
 export function voxelStackId(chunkId: number, localVoxelId: number): string {
   return `${chunkId}:${localVoxelId}`;
@@ -29,6 +30,8 @@ export interface VoxelExtraction {
   extracted: { size: number };
   cursor: number;
   returned: Set<number>;
+  /** Collected out of order, still ahead of the posting cursor. */
+  selected: Set<number>;
 }
 
 /** What one completed extraction cycle produced — enough for the caller to
@@ -135,6 +138,7 @@ export class MiningController {
   private prepareToken = 0;
   private retryAt = 0;
   pagingError: string | null = null;
+  private restoreEpoch = 0;
 
   constructor(
     private readonly chunkStore: ChunkStore,
@@ -149,6 +153,7 @@ export class MiningController {
       const state = this.extractionState(s.chunkId, s.localVoxelId)!;
       return { id: s.id, chunkId: s.chunkId, localVoxelId: s.localVoxelId, totalPoints: s.totalPoints, reprRowId: s.reprRowId,
         rowIds: [...s.rowIds], cursor: state.cursor, returned: [...state.returned],
+        ...(state.selected.size ? { selected: [...state.selected] } : {}),
         firstExtractedAt: s.firstExtractedAt, lastExtractedAt: s.lastExtractedAt };
     }) };
   }
@@ -156,12 +161,14 @@ export class MiningController {
   restore(value: unknown, dataset: string): void {
     if (!this.manifest) throw new Error("No dataset loaded.");
     const save = validateMiningSave(value, dataset, this.manifest);
+    this.restoreEpoch++;
     const old = this.touchedVoxels;
     this.prepareToken++; this.prepared = null; this.preparing = null; this.retryAt = 0;
     this.extractionByChunk.clear();
     for (const s of save.stacks) {
       const state = this.stateFor(s.chunkId, s.localVoxelId, s.totalPoints);
       state.cursor = s.cursor; state.extracted.size = s.rowIds.length; state.returned = new Set(s.returned);
+      state.selected = new Set(s.selected ?? []);
     }
     this.inventory.replace(save.stacks);
     for (const s of old) this.applyToResidentVoxel(s.chunkId, s.localVoxelId);
@@ -241,10 +248,12 @@ export class MiningController {
     if (cursor >= total) return null;
     if (chunk.entry.postings) {
       this.prepare(chunkId, localVoxelId);
-      return this.prepared?.key === `${chunkId}:${localVoxelId}:${cursor}` ? this.prepared.rows[0] ?? null : null;
+      return this.prepared?.key === `${chunkId}:${localVoxelId}:${cursor}`
+        ? this.prepared.rows.find(row => !state?.selected.has(row)) ?? null : null;
     }
     const offset = chunk.meta.pointOffset[localVoxelId];
-    return chunk.meta.pointIds[offset + cursor] ?? null;
+    for (let i = cursor; i < total; i++) if (!state?.selected.has(chunk.meta.pointIds[offset + i])) return chunk.meta.pointIds[offset + i];
+    return null;
   }
 
   /** Independent one-row lookup for the sharp-band cache. Never changes the
@@ -261,20 +270,24 @@ export class MiningController {
     // Atlases use the point nearest the voxel centre, not the first row in
     // the sorted postings list. Hover/sharp-band must sharpen THAT image
     // until mining starts; after mining, preview the next remaining row.
-    if (cursor === 0) {
+    if (cursor === 0 && !state?.selected.has(chunk.meta.reprRowId[localVoxelId])) {
       const representative = chunk.meta.reprRowId[localVoxelId];
       return Number.isSafeInteger(representative) && (!this.manifest || representative < this.manifest.totalPoints)
         ? representative : null;
     }
-    const offset = chunk.meta.pointOffset[localVoxelId] + cursor;
+    let offset = chunk.meta.pointOffset[localVoxelId] + cursor;
     let row: number;
     if (chunk.entry.postings && this.manifest) {
       const records = new PagedRecords(this.manifest.url(chunk.entry.postings.path), chunk.entry.n_points, 4);
-      row = (await records.record(offset)).getUint32(0, true);
-    } else row = chunk.meta.pointIds[offset];
+      const end = chunk.meta.pointOffset[localVoxelId] + chunk.meta.count[localVoxelId];
+      do { row = (await records.record(offset++)).getUint32(0, true); }
+      while (state?.selected.has(row) && offset < end);
+    } else {
+      do { row = chunk.meta.pointIds[offset++]; } while (state?.selected.has(row));
+    }
     if (this.chunkStore.chunk(chunkId) !== chunk ||
       (this.extractionState(chunkId, localVoxelId)?.cursor ?? 0) !== cursor ||
-      !Number.isSafeInteger(row) || (this.manifest && row >= this.manifest.totalPoints)) return null;
+      !Number.isSafeInteger(row) || state?.selected.has(row) || (this.manifest && row >= this.manifest.totalPoints)) return null;
     return row;
   }
 
@@ -283,6 +296,23 @@ export class MiningController {
     const all: VoxelExtraction[] = [];
     for (const byVoxel of this.extractionByChunk.values()) for (const state of byVoxel.values()) all.push(state);
     return all;
+  }
+
+  async collectSearchResult(chunkId: number, localVoxelId: number, rowId: number, cancelled = () => false): Promise<string> {
+    if (!this.manifest || cancelled()) throw new Error("Map is not available");
+    const epoch = this.restoreEpoch;
+    const descriptor = await searchCollectionDescriptor(this.manifest, chunkId, localVoxelId, rowId);
+    if (cancelled() || epoch !== this.restoreEpoch) throw new Error("Collection cancelled because the map or inventory changed");
+    // Resolve current state AFTER awaiting: concurrent clicks and mining may
+    // have collected this row while the small identity reads were in flight.
+    const stack = this.inventory.stack(descriptor.id);
+    if (stack && stack.rowIds.indexOf(rowId) >= 0) return descriptor.id;
+    const state = this.stateFor(chunkId, localVoxelId, descriptor.totalPoints);
+    if (!state.returned.delete(rowId)) state.selected.add(rowId);
+    state.extracted.size++;
+    this.inventory.extractInto(descriptor, [rowId]);
+    this.applyToResidentVoxel(chunkId, localVoxelId);
+    return descriptor.id;
   }
 
   /**
@@ -338,6 +368,7 @@ export class MiningController {
         : chunk.meta.pointIds[offset + state.cursor];
       if (rowId === undefined) break;
       state.cursor++;
+      if (state.selected.delete(rowId)) continue;
       state.extracted.size++;
       taken.push(rowId);
     }
@@ -396,7 +427,7 @@ export class MiningController {
     const state = this.extractionByChunk.get(chunkId)?.get(localVoxelId);
     if (!state || !this.inventory.returnRow(stackId, rowId)) return false;
     state.extracted.size--;
-    state.returned.add(rowId);
+    if (!state.selected.delete(rowId)) state.returned.add(rowId);
     if (state.extracted.size === 0) this.clearState(chunkId, localVoxelId);
     this.applyToResidentVoxel(chunkId, localVoxelId);
     return true;
@@ -472,7 +503,7 @@ export class MiningController {
     }
     let state = byVoxel.get(localVoxelId);
     if (!state) {
-      state = { chunkId, localVoxelId, total, extracted: { size: 0 }, cursor: 0, returned: new Set() };
+      state = { chunkId, localVoxelId, total, extracted: { size: 0 }, cursor: 0, returned: new Set(), selected: new Set() };
       byVoxel.set(localVoxelId, state);
     }
     return state;

@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import type { Manifest } from "../streaming/Manifest.ts";
 import type { VoxelProxyData } from "../types.ts";
+import { densityLevel, installDensityView, setDensityRendering } from "./DensityView.ts";
+import { XRAY_OPACITY } from "../config.ts";
 import {
   MINIMAP_FLASHLIGHT_COLOR_3D,
   VOXEL_FILL,
@@ -120,12 +122,14 @@ export class VoxelProxyCloud {
     // cubes' 0.9 roughness already reads as paper — the last step flatter is
     // one more cue that this block is a stand-in.
     this.material = new THREE.MeshStandardMaterial({ roughness: 1.0, metalness: 0.0 });
+    installDensityView(this.material);
 
     this.mesh = new InstancedMesh2(this.geometry, this.material, {
       capacity: Math.max(1, n),
       renderer,
     });
     this.mesh.name = "voxel-proxies";
+    this.mesh.initUniformsPerInstance({ fragment: { densityLevel: "float" } });
 
     this.baseColors = new Float32Array(n * 3);
     const edge = manifest.voxelWorldSize * VOXEL_FILL;
@@ -151,6 +155,7 @@ export class VoxelProxyCloud {
       color.lerp(grey, 1 - VOXEL_PROXY_SATURATION).multiplyScalar(VOXEL_PROXY_BRIGHTNESS);
       color.toArray(this.baseColors, index * 3);
       instance.color = color;
+      instance.setUniform("densityLevel", densityLevel(data.count[index]));
     });
 
     // Instances never move for the life of the dataset, so one BVH build is the
@@ -161,6 +166,11 @@ export class VoxelProxyCloud {
 
   get instanceCount(): number {
     return this.mesh.instancesCount;
+  }
+
+  setXrayActive(active: boolean): void {
+    setDensityRendering(this.mesh, active);
+    this.material.opacity = active ? XRAY_OPACITY : 1;
   }
 
   /** Proxies currently drawn, i.e. voxels whose chunk is not resident. */

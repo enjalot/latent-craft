@@ -14,6 +14,13 @@ themes are a planned follow-up; the current skin remains the sci-fi prototype.
 See the [full BL SigLIP / LanceDB / int8 experiment](docs/bl-search-experiment.md)
 and [deployment, costs and publication notes](docs/bl-demo-publication.md).
 
+For local review over Wi-Fi, the [Moonshine series](http://gsv.local:5196/)
+contains all review Markdown, including the BL decisions and full measurements.
+Try the [local BL iteration](http://gsv.local:5303/) before the next HF deployment.
+Its changes are documented in [local BL UX notes](docs/local-bl-ux.md).
+The Moonshine source lives at `/home/enjalot/.agent/moonshine/latent-craft-notes`;
+start it with `MOONSHINE_PORT=5196 npm run dev:lan` from that directory.
+
 The repository now lives at `latent-craft`. The old local directory name is a
 compatibility symlink for existing development processes and environments;
 immutable data releases and saved-game keys keep their existing identifiers.

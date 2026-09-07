@@ -27,6 +27,12 @@ describe("portable mining saves", () => {
     expect(peak).toBe(32);
   });
 
+  it("still imports the original 13-column CSV", async () => {
+    const csv = await miningSaveCsv(save(), async row => `/${row}`);
+    const legacy = parseCsv(csv).map(row => row.slice(0, 13).map(value => JSON.stringify(value)).join(",")).join("\r\n");
+    expect(miningSaveFromCsv(legacy)).toEqual(save());
+  });
+
   it("rejects wrong maps, duplicate rows, corrupt counts and malformed CSV", async () => {
     expect(validateMiningSave(save(), "test", manifest)).toEqual(save());
     for (const mutate of [
