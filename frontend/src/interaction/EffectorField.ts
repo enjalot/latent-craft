@@ -88,6 +88,10 @@ export class EffectorFieldController {
    * evict/reload the way `MiningController`'s persisted set is. */
   private suppressed = new Map<number, Set<number>>();
   private countFilter = 0;
+  private viewCount: ((chunk: number, local: number) => number) | null = null;
+  setViewCount(count: ((chunk: number, local: number) => number) | null): void {
+    this.viewCount = count; this.lastRadius = -1;
+  }
   private bubbleCount = 0;
 
   /** Compose occupancy filtering with the bubble in the same visibility gate,
@@ -229,14 +233,15 @@ export class EffectorFieldController {
 
       this.manifest.chunkCenterWorld(chunkId, this.chunkCenterScratch);
       const outside = this.chunkCenterScratch.distanceTo(this.center) > chunkHalfDiagonal + this.radius;
-      if (outside && !this.countFilter) continue;
+      if (outside && !this.countFilter && !this.viewCount) continue;
 
       const { entry, meta } = chunk;
       let chunkSet: Set<number> | undefined;
       for (let instanceId = 0; instanceId < meta.occupied.length; instanceId++) {
         const localVoxelId = meta.occupied[instanceId];
         if (!outside) this.manifest.voxelCenterWorld(entry.cx, entry.cy, entry.cz, localVoxelId, this.voxelScratch);
-        const filtered = this.countFilter > 0 && meta.count[localVoxelId] <= this.countFilter;
+        const count = this.viewCount ? this.viewCount(chunkId, localVoxelId) : meta.count[localVoxelId];
+        const filtered = count <= this.countFilter;
         const inBubble = !outside && this.voxelScratch.distanceToSquared(this.center) <= radiusSq;
         if (inBubble && !filtered) this.bubbleCount++;
         if (filtered || inBubble) {
@@ -257,7 +262,8 @@ export class EffectorFieldController {
       if (!chunk?.mesh.visible) continue;
       for (let instance = 0; instance < chunk.meta.occupied.length && count < this.ghosts.instanceMatrix.count; instance++) {
         if (!suppressed.has(chunk.meta.occupied[instance])) continue;
-        if (this.countFilter > 0 && chunk.meta.count[chunk.meta.occupied[instance]] <= this.countFilter) continue;
+        const local = chunk.meta.occupied[instance];
+        if ((this.viewCount ? this.viewCount(id, local) : chunk.meta.count[local]) <= this.countFilter) continue;
         chunk.mesh.getMatrixAt(instance, this.ghostMatrix);
         this.ghosts.setMatrixAt(count++, this.ghostMatrix);
       }

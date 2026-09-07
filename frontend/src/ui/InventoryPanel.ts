@@ -5,6 +5,8 @@ import { INVENTORY_THUMBS_PAGE_SIZE } from "../config.ts";
 import { Lightbox } from "./Lightbox.ts";
 import { applyHudPanelChrome, applyHudTitle, HUD_CLASS } from "./hudPanel.ts";
 import type { Unsubscribe } from "./store.ts";
+import { ImageMetadata } from "./ImageMetadata.ts";
+import type { MetadataClient, FilterQuery } from "../metadata/MetadataClient.ts";
 
 const COLLAPSE_STORAGE_KEY = "lsv-inventory-collapsed";
 
@@ -44,6 +46,8 @@ export interface InventoryPanelOptions {
   /** Points-table id for the lightbox's original-image lookup
    * (`DatasetConfig.pointsId`); `null` leaves the lightbox thumbnail-only. */
   pointsId: string | null;
+  metadataClient?: MetadataClient;
+  onMetadataFilter?: (query: FilterQuery) => void;
 }
 
 interface StackRowView {
@@ -57,6 +61,7 @@ interface StackRowView {
   update(): void;
   setExpanded(expanded: boolean): void;
   setLatestRow(rowId: number): void;
+  dispose(): void;
 }
 
 /**
@@ -238,7 +243,7 @@ export class InventoryPanel {
     this.root.addEventListener("pointerleave", () => this.setHovered(null));
 
     container.appendChild(this.root);
-    this.lightbox = new Lightbox(container, { pointsId: options.pointsId });
+    this.lightbox = new Lightbox(container, { pointsId: options.pointsId, metadataClient: options.metadataClient, onMetadataFilter: options.onMetadataFilter });
 
     this.render(inventory.stacks);
     this.unsubscribe = inventory.store.subscribe((stacks) => this.render(stacks));
@@ -362,6 +367,7 @@ export class InventoryPanel {
       // then re-extracted is a NEW object under the same id, and every closure
       // in the cached row still points at the dead one.
       if (!existing || existing.stack !== stack) {
+        existing?.dispose();
         existing?.el.remove();
         this.rows.set(stack.id, this.buildRow(stack));
       }
@@ -371,7 +377,7 @@ export class InventoryPanel {
     for (const [id, view] of this.rows) {
       if (live.has(id)) continue;
       view.el.remove();
-      this.rows.delete(id);
+      this.rows.get(id)?.dispose(); this.rows.delete(id);
       if (this.focusedStackId === id) this.focusedStackId = null;
       if (this.hoveredStackId === id) this.setHovered(null);
     }
@@ -489,6 +495,7 @@ export class InventoryPanel {
     row.appendChild(grid);
 
     const latest = document.createElement("div");
+    const metadata = this.options.metadataClient ? new ImageMetadata(this.options.metadataClient, this.options.onMetadataFilter) : null;
     latest.className = "ls-inventory-latest";
     Object.assign(latest.style, {
       gridColumn: "1 / -1",
@@ -592,6 +599,7 @@ export class InventoryPanel {
       const rowId = latestRowId;
       latest.hidden = rowId === null;
       if (rowId === null || !builtOnce) return;
+      if (expanded) metadata?.show(rowId);
       latestImg.alt = `last mined row ${rowId}`;
       latestCaption.textContent = `LAST MINED · ROW ${rowId.toLocaleString()}`;
       latestImg.removeAttribute("src");
@@ -763,6 +771,7 @@ export class InventoryPanel {
       grid.style.display = expanded ? "grid" : "none";
       row.setAttribute("aria-expanded", String(expanded));
       if (!expanded) {
+        metadata?.clear();
         ++pageToken;
         for (const cell of cells.values()) cell.remove();
         cells.clear();
@@ -771,6 +780,7 @@ export class InventoryPanel {
       if (expanded && !builtOnce) {
         builtOnce = true;
         grid.append(latest, hint, showMoreBtn, returnAllBtn);
+        if (metadata) latest.after(metadata.element);
         renderLatest();
         appendPageSafely();
       } else if (expanded) {
@@ -803,7 +813,8 @@ export class InventoryPanel {
     };
 
     update();
-    return { el: row, stack, revision: stack.revision, update, setExpanded, setLatestRow };
+    return { el: row, stack, revision: stack.revision, update, setExpanded, setLatestRow,
+      dispose: () => { metadata?.clear(); ++latestLoadToken; ++pageToken; } };
   }
 
   dispose(): void {
@@ -811,6 +822,7 @@ export class InventoryPanel {
     this.setHovered(null);
     this.lightbox.dispose();
     this.root.remove();
+    for (const row of this.rows.values()) row.dispose();
     this.rows.clear();
   }
 }

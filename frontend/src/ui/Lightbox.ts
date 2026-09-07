@@ -11,6 +11,8 @@ import {
 import { fetchPointMeta, originHostname, peekPointMeta, type PointMeta } from "../streaming/PointMeta.ts";
 import { WeightedLruCache } from "../utils/WeightedLruCache.ts";
 import { applyHudPanelChrome, HUD_CLASS } from "./hudPanel.ts";
+import { ImageMetadata } from "./ImageMetadata.ts";
+import type { MetadataClient, FilterQuery } from "../metadata/MetadataClient.ts";
 
 /** What the lightbox needs in order to page through a whole stack without
  * being handed (or preloading) every URL up front. */
@@ -33,6 +35,8 @@ export interface LightboxSource {
 }
 
 export interface LightboxOptions {
+  metadataClient?: MetadataClient;
+  onMetadataFilter?: (query: FilterQuery) => void;
   /** Points-table id for the `/meta/<points_id>/<row_id>` original-image
    * lookup (`DatasetConfig.pointsId`). `null` disables the lookup entirely —
    * the lightbox is then thumbnail-only, with no status line, exactly as it
@@ -142,6 +146,7 @@ interface ImageLoadTask {
  * 4-point one.
  */
 export class Lightbox {
+  private metadata: ImageMetadata | null = null;
   private readonly root: HTMLElement;
   /** Holds the thumbnail (in flow, so it sizes the box) and, once one has
    * loaded, the original stacked over it. Sized explicitly only while an
@@ -296,6 +301,11 @@ export class Lightbox {
       fontFamily: "var(--hud-font)",
     } satisfies Partial<CSSStyleDeclaration>);
     frame.appendChild(this.caption);
+    if (options.metadataClient) {
+      this.metadata = new ImageMetadata(options.metadataClient, query => { options.onMetadataFilter?.(query); this.close(); });
+      Object.assign(this.metadata.element.style, { maxHeight: "22vh", overflowY: "auto", maxWidth: "650px", textAlign: "left" });
+      frame.append(this.metadata.element);
+    }
 
     this.counter = document.createElement("div");
     this.counter.className = "ls-lightbox-counter";
@@ -383,6 +393,7 @@ export class Lightbox {
   }
 
   close(): void {
+    this.metadata?.clear();
     this.showToken++;
     this.cancelMetaLookup();
     this.cancelOriginalLoad();
@@ -406,6 +417,7 @@ export class Lightbox {
     this.cancelOriginalLoad();
     source.index = clampIndex(source.index, length);
     const rowId = source.rowIds.at(source.index)!;
+    this.metadata?.show(rowId);
     this.img.removeAttribute("src");
     void Promise.resolve(source.resolveUrl(rowId)).then(url => {
       if (token === this.showToken && url) setThumbnailSource(this.img, url, () => token === this.showToken);

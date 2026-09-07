@@ -8,6 +8,8 @@ import { PagedRecords } from "../streaming/RangeReader.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
 import { validateMiningSave, type MiningSave } from "./MiningSave.ts";
 import { searchCollectionDescriptor } from "./SearchCollection.ts";
+import type { MatchSnapshot } from "../metadata/MetadataClient.ts";
+import { densityLevel } from "../voxels/DensityView.ts";
 
 export function voxelStackId(chunkId: number, localVoxelId: number): string {
   return `${chunkId}:${localVoxelId}`;
@@ -139,6 +141,72 @@ export class MiningController {
   private retryAt = 0;
   pagingError: string | null = null;
   private restoreEpoch = 0;
+  metadataFilter: MatchSnapshot | null = null;
+  filterRevision = 0;
+  private matchingHeld = new Map<string, number>();
+  private filterCursors = new Map<string, number>();
+  private filterPage: { key: string; rows: number[]; next: number } | null = null;
+
+  setMetadataFilter(filter: MatchSnapshot | null): void {
+    this.metadataFilter = filter; this.filterRevision++;
+    this.prepareToken++; this.preparing = null; this.prepared = null; this.filterPage = null;
+    this.filterCursors.clear(); this.matchingHeld.clear(); this.retryAt = 0; this.pagingError = null;
+    if (filter) for (const stack of this.inventory.stacks) {
+      let count = 0; for (const row of stack.rowIds) if (filter.matches(row)) count++;
+      this.matchingHeld.set(stack.id, count);
+    }
+    for (const id of this.chunkStore.residentChunkIds) this.onChunkResident(id);
+  }
+
+  matchesRow(row: number): boolean { return this.metadataFilter?.matches(row) ?? true; }
+  viewCount(chunk: number, local: number): number {
+    return this.metadataFilter ? this.metadataFilter.count(chunk, local) :
+      this.chunkStore.chunk(chunk)?.meta.count[local] ?? this.extractionState(chunk, local)?.total ?? 0;
+  }
+  viewExtracted(chunk: number, local: number): number {
+    return this.metadataFilter ? this.matchingHeld.get(voxelStackId(chunk, local)) ?? 0 : this.extractionState(chunk, local)?.extracted.size ?? 0;
+  }
+  private adjustMatching(chunk: number, local: number, rows: readonly number[], delta: number): void {
+    if (!this.metadataFilter) return;
+    const key = voxelStackId(chunk, local);
+    this.matchingHeld.set(key, (this.matchingHeld.get(key) ?? 0) + delta * rows.filter(row => this.matchesRow(row)).length);
+  }
+  /** Bounded posting pages; skipped rows never advance the durable mining cursor. */
+  private async matchingPage(chunkId: number, local: number, cursor: number, limit: number, valid: () => boolean): Promise<{ rows: number[]; next: number }> {
+    const chunk = this.chunkStore.chunk(chunkId), filter = this.metadataFilter;
+    if (!chunk || !filter) return { rows: [], next: cursor };
+    const rows: number[] = [], total = chunk.meta.count[local], offset = chunk.meta.pointOffset[local];
+    const table = chunk.entry.postings && this.manifest ? new PagedRecords(this.manifest.url(chunk.entry.postings.path), chunk.entry.n_points, 4) : null;
+    const initial = this.extractionState(chunkId, local);
+    for (const row of initial?.returned ?? []) if (filter.matches(row) && rows.length < limit) rows.push(row);
+    while (cursor < total && rows.length < limit && valid()) {
+      const end = Math.min(total, cursor + 100);
+      const page = table ? await Promise.all(Array.from({ length: end - cursor }, (_, i) => table.record(offset + cursor + i))) : null;
+      if (!valid() || this.chunkStore.chunk(chunkId) !== chunk) return { rows: [], next: cursor };
+      for (let i = 0; cursor < end && rows.length < limit; i++, cursor++) {
+        const row = page ? page[i].getUint32(0, true) : chunk.meta.pointIds[offset + cursor];
+        if (!Number.isInteger(row) || row < 0 || (this.manifest && row >= this.manifest.totalPoints)) throw new Error("Invalid posting row");
+        const state = this.extractionState(chunkId, local);
+        const held = state && (state.selected.has(row) || (cursor < state.cursor && !state.returned.has(row)));
+        if (filter.matches(row) && !held && !rows.includes(row)) rows.push(row);
+      }
+    }
+    return { rows, next: cursor };
+  }
+
+  private prepareFiltered(chunk: number, local: number): void {
+    const key = voxelStackId(chunk, local), revision = this.filterRevision;
+    const owner = this.chunkStore.chunk(chunk);
+    if (!owner) return;
+    if (this.preparing === key || this.filterPage?.key === key || performance.now() < this.retryAt) return;
+    const token = ++this.prepareToken; this.preparing = key;
+    void this.matchingPage(chunk, local, this.filterCursors.get(key) ?? 0, 100,
+      () => token === this.prepareToken && revision === this.filterRevision).then(page => {
+      if (token === this.prepareToken && this.chunkStore.chunk(chunk) === owner) { this.filterPage = { key, ...page }; this.pagingError = null; }
+    }).catch(error => {
+      if (token === this.prepareToken) { this.pagingError = String(error); this.retryAt = performance.now() + 2000; }
+    }).finally(() => { if (token === this.prepareToken) this.preparing = null; });
+  }
 
   constructor(
     private readonly chunkStore: ChunkStore,
@@ -171,12 +239,14 @@ export class MiningController {
       state.selected = new Set(s.selected ?? []);
     }
     this.inventory.replace(save.stacks);
+    this.setMetadataFilter(this.metadataFilter);
     for (const s of old) this.applyToResidentVoxel(s.chunkId, s.localVoxelId);
     for (const id of this.chunkStore.residentChunkIds) this.onChunkResident(id);
   }
 
   /** Only the hovered voxel's next 100 IDs are retained outside the shared page cache. */
   prepare(chunkId: number, localVoxelId: number): void {
+    if (this.metadataFilter) { this.prepareFiltered(chunkId, localVoxelId); return; }
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk?.entry.postings || !this.manifest) return;
     const state = this.extractionState(chunkId, localVoxelId);
@@ -214,6 +284,7 @@ export class MiningController {
   /** 0 (untouched) … 1 (fully drained). The single number every other system
    * — opacity, cage depletion, HUD label — reads. */
   extractedFraction(chunkId: number, localVoxelId: number): number {
+    if (this.metadataFilter) return Math.min(1, this.viewExtracted(chunkId, localVoxelId) / Math.max(1, this.viewCount(chunkId, localVoxelId)));
     const state = this.extractionByChunk.get(chunkId)?.get(localVoxelId);
     if (!state || state.total === 0) return 0;
     return Math.min(1, state.extracted.size / state.total);
@@ -223,6 +294,7 @@ export class MiningController {
    * raycaster's pass-through test (see the class comment), so it runs once
    * per instance the cursor's ray crosses, every frame: two map lookups. */
   isFullyExtracted(chunkId: number, localVoxelId: number): boolean {
+    if (this.metadataFilter) return this.viewExtracted(chunkId, localVoxelId) >= this.viewCount(chunkId, localVoxelId);
     const state = this.extractionByChunk.get(chunkId)?.get(localVoxelId);
     return !!state && state.total > 0 && state.extracted.size >= state.total;
   }
@@ -237,6 +309,10 @@ export class MiningController {
    * source of truth for the focused high-resolution face shown during a hold,
    * so the image advances immediately after every extraction batch. */
   nextRowId(chunkId: number, localVoxelId: number): number | null {
+    if (this.metadataFilter) {
+      this.prepareFiltered(chunkId, localVoxelId);
+      return this.filterPage?.key === voxelStackId(chunkId, localVoxelId) ? this.filterPage.rows[0] ?? null : null;
+    }
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk) return null;
     const total = chunk.meta.count[localVoxelId] ?? 0;
@@ -262,6 +338,15 @@ export class MiningController {
   async previewRowId(chunkId: number, localVoxelId: number): Promise<number | null> {
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk) return null;
+    if (this.metadataFilter) {
+      const revision = this.filterRevision, epoch = this.restoreEpoch;
+      const repr = chunk.meta.reprRowId[localVoxelId];
+      const stack = this.inventory.stack(voxelStackId(chunkId, localVoxelId));
+      if (this.matchesRow(repr) && (!stack || stack.rowIds.indexOf(repr) < 0)) return repr;
+      const page = await this.matchingPage(chunkId, localVoxelId, this.filterCursors.get(voxelStackId(chunkId, localVoxelId)) ?? 0, 1,
+        () => revision === this.filterRevision && epoch === this.restoreEpoch);
+      return revision === this.filterRevision && epoch === this.restoreEpoch ? page.rows[0] ?? null : null;
+    }
     const state = this.extractionState(chunkId, localVoxelId);
     const returned = state?.returned.values().next().value;
     if (returned !== undefined) return returned;
@@ -303,6 +388,7 @@ export class MiningController {
     const epoch = this.restoreEpoch;
     const descriptor = await searchCollectionDescriptor(this.manifest, chunkId, localVoxelId, rowId);
     if (cancelled() || epoch !== this.restoreEpoch) throw new Error("Collection cancelled because the map or inventory changed");
+    if (!this.matchesRow(rowId)) throw new Error("This image is excluded by the active filter");
     // Resolve current state AFTER awaiting: concurrent clicks and mining may
     // have collected this row while the small identity reads were in flight.
     const stack = this.inventory.stack(descriptor.id);
@@ -310,6 +396,8 @@ export class MiningController {
     const state = this.stateFor(chunkId, localVoxelId, descriptor.totalPoints);
     if (!state.returned.delete(rowId)) state.selected.add(rowId);
     state.extracted.size++;
+    this.adjustMatching(chunkId, localVoxelId, [rowId], 1);
+    this.prepareToken++; this.preparing = null; this.filterPage = null;
     this.inventory.extractInto(descriptor, [rowId]);
     this.applyToResidentVoxel(chunkId, localVoxelId);
     return descriptor.id;
@@ -343,6 +431,7 @@ export class MiningController {
     if (total === 0) return null;
 
     const state = this.stateFor(chunkId, localVoxelId, total);
+    if (this.metadataFilter) return this.extractFiltered(chunkId, localVoxelId, chunk, state);
     if (state.extracted.size >= state.total) return null;
 
     const batch = this.batchSizeFor(state.total, state.extracted.size);
@@ -427,6 +516,8 @@ export class MiningController {
     const state = this.extractionByChunk.get(chunkId)?.get(localVoxelId);
     if (!state || !this.inventory.returnRow(stackId, rowId)) return false;
     state.extracted.size--;
+    this.adjustMatching(chunkId, localVoxelId, [rowId], -1);
+    this.filterCursors.delete(stackId); this.filterPage = null; this.prepareToken++; this.preparing = null;
     if (!state.selected.delete(rowId)) state.returned.add(rowId);
     if (state.extracted.size === 0) this.clearState(chunkId, localVoxelId);
     this.applyToResidentVoxel(chunkId, localVoxelId);
@@ -455,6 +546,7 @@ export class MiningController {
     if (!this.extractionByChunk.get(chunkId)?.has(localVoxelId)) return false;
 
     this.clearState(chunkId, localVoxelId);
+    this.matchingHeld.delete(stackId); this.filterCursors.delete(stackId); this.filterPage = null; this.prepareToken++; this.preparing = null;
     this.inventory.removeStack(stackId);
     this.applyToResidentVoxel(chunkId, localVoxelId);
     return true;
@@ -475,24 +567,43 @@ export class MiningController {
    */
   onChunkResident(chunkId: number): void {
     const byVoxel = this.extractionByChunk.get(chunkId);
-    if (!byVoxel || byVoxel.size === 0) return;
     const chunk = this.chunkStore.chunk(chunkId);
     if (!chunk) return;
 
     const xrayActive = this.isXrayActive();
     const occupied = chunk.meta.occupied;
     for (let instanceId = 0; instanceId < occupied.length; instanceId++) {
-      const state = byVoxel.get(occupied[instanceId]);
-      if (!state) continue;
+      const local = occupied[instanceId];
+      chunk.mesh.setUniformAt(instanceId, "atlasAllowed", this.matchesRow(chunk.meta.reprRowId[local]) ? 1 : 0);
+      chunk.mesh.setUniformAt(instanceId, "densityLevel", densityLevel(this.viewCount(chunkId, local)));
+      const state = byVoxel?.get(local);
+      const fraction = this.metadataFilter ? this.extractedFraction(chunkId, local) : state ? state.extracted.size / state.total : 0;
       chunk.mesh.setOpacityAt(
         instanceId,
-        combinedVoxelOpacity(state.extracted.size / state.total, xrayActive),
+        combinedVoxelOpacity(fraction, xrayActive),
       );
       // A reloaded chunk's cages are rebuilt full, so re-draining exactly to
       // this voxel's fraction is all that's needed to make the depletion as
       // persistent across an evict/reload as the fade it accompanies.
-      chunk.containers.setExtractedFraction(instanceId, state.extracted.size / state.total);
+      chunk.containers.setExtractedFraction(instanceId, fraction);
     }
+  }
+
+  private extractFiltered(chunkId: number, local: number, chunk: LoadedChunk, state: VoxelExtraction): ExtractionCycle | null {
+    const key = voxelStackId(chunkId, local), page = this.filterPage;
+    if (this.isFullyExtracted(chunkId, local)) return null;
+    if (page?.key !== key) { this.prepareFiltered(chunkId, local); return null; }
+    const batch = this.batchSizeFor(this.viewCount(chunkId, local), this.viewExtracted(chunkId, local));
+    const rows = page.rows.splice(0, batch);
+    if (!page.rows.length) { this.filterCursors.set(key, page.next); this.filterPage = null; }
+    if (!rows.length) return null;
+    for (const row of rows) { if (!state.returned.delete(row)) state.selected.add(row); state.extracted.size++; }
+    this.adjustMatching(chunkId, local, rows, 1);
+    this.inventory.extractInto({ id: key, chunkId, localVoxelId: local, totalPoints: state.total, reprRowId: chunk.meta.reprRowId[local] }, rows);
+    this.applyToResidentVoxel(chunkId, local);
+    const total = this.viewCount(chunkId, local), extracted = this.viewExtracted(chunkId, local);
+    return { chunkId, localVoxelId: local, stackId: key, rowIds: rows, leadRowId: rows[0], lastRowId: rows[rows.length - 1],
+      extractedCount: extracted, total, fraction: extracted / total, complete: extracted >= total };
   }
 
   private stateFor(chunkId: number, localVoxelId: number, total: number): VoxelExtraction {

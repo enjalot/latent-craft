@@ -205,6 +205,7 @@ export class ChunkLoader {
         // occupied voxels in this same ascending instance order.
         instance.setUniform("tileIndex", this.manifest.compactAtlases ? index : localVoxelId);
         instance.setUniform("densityLevel", densityLevel(meta.count[localVoxelId]));
+        instance.setUniform("atlasAllowed", 1);
       });
 
       // Instances are static for the life of the chunk, so one BVH build at load

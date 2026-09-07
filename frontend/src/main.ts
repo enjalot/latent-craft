@@ -38,6 +38,8 @@ import { addDatasetAbout } from "./ui/DemoAbout.ts";
 import { SearchNavigation } from "./interaction/SearchNavigation.ts";
 import { createHoldProgressRing } from "./ui/hud/Crosshair.ts";
 import { InventoryPanel } from "./ui/InventoryPanel.ts";
+import { MetadataClient } from "./metadata/MetadataClient.ts";
+import { MetadataFilters } from "./ui/MetadataFilters.ts";
 import { ExtractionFlights } from "./ui/ExtractionFlight.ts";
 import { Hotbar } from "./ui/Hotbar.ts";
 import {
@@ -233,6 +235,7 @@ let xrayController: XRayController | null = null;
 let effectorField: EffectorFieldController | null = null;
 let minimap: MinimapBridge | null = null;
 let inventoryPanel: InventoryPanel | null = null;
+let metadataFilters: MetadataFilters | null = null;
 let gameSession: GameSession | null = null;
 let syntheticVoxelField: InstancedMesh2 | null = null;
 
@@ -404,6 +407,8 @@ async function bootstrapStreamedWorld(): Promise<void> {
       () => hotbar.equippedTool === "pickaxe",
       manifest,
     );
+    const metadataEndpoint = DATASETS[datasetKey]?.metadataEndpoint;
+    const metadataClient = metadataEndpoint ? new MetadataClient(metadataEndpoint, manifest) : undefined;
     xrayController = new XRayController(chunkStore, (chunkId, localVoxelId) =>
       miningController?.extractedFraction(chunkId, localVoxelId) ?? 0,
     );
@@ -457,6 +462,8 @@ async function bootstrapStreamedWorld(): Promise<void> {
       // the POINTS TABLE id, shared by every voxel resolution of a dataset
       // (see `DatasetConfig.pointsId`).
       pointsId: resolvePointsId(datasetKey),
+      metadataClient,
+      onMetadataFilter: query => { hud.openSettings(); void metadataFilters?.setQuery(query); },
     });
 
     // Spawn just outside the densest chunk looking straight into it, so the
@@ -485,6 +492,22 @@ async function bootstrapStreamedWorld(): Promise<void> {
       filterEnabled: settings.filterEnabled, filterThreshold: settings.filterThreshold, onFilter: applyCountFilter,
       onSpeed: value => { settings.speed = value; flightControls.setSpeed(value * manifest!.voxelWorldSize); },
       onRadius: value => effectorField?.setRadiusVoxels(value) });
+    if (metadataClient) {
+      const mapContext = document.createElement("div"); mapContext.hidden = true;
+      mapContext.textContent = "Minimap: full collection · image filter applies to 3D";
+      Object.assign(mapContext.style, { fontSize: "10px", maxWidth: "240px", padding: "4px 8px", color: "var(--hud-text)" });
+      inventoryPanel.minimapDock.before(mapContext);
+      metadataFilters = new MetadataFilters(metadataClient, snapshot => {
+        mapContext.hidden = snapshot === null;
+        pointerController.cancelHold(); searchNavigation?.clear();
+        miningController!.setMetadataFilter(snapshot);
+        effectorField!.setViewCount(snapshot ? (chunk, local) => snapshot.count(chunk, local) : null);
+        effectorField!.update(engine.camera);
+        if (voxelProxy instanceof HierarchicalProxies) voxelProxy.setMetadataFilter(snapshot);
+        if (searchCompare instanceof BLSearch) searchCompare.setMetadataFilter(snapshot ? row => snapshot.matches(row) : null);
+      });
+      hud.addMetadataControls(metadataFilters.element);
+    }
     // Places the always-on field at the post-frame spawn before the first
     // chunk residency callback can apply suppression.
     effectorField.update(engine.camera);
@@ -717,9 +740,9 @@ engine.start((dt) => {
 
     if (target) {
       const chunk = chunkStore?.chunk(target.chunkId);
-      const points = chunk ? chunk.meta.count[target.localVoxelId] : 0;
+      const points = miningController?.viewCount(target.chunkId, target.localVoxelId) ?? 0;
       const reprRowId = chunk ? chunk.meta.reprRowId[target.localVoxelId] : -1;
-      hoveredRowId = reprRowId >= 0 ? reprRowId : null;
+      hoveredRowId = reprRowId >= 0 && miningController?.matchesRow(reprRowId) ? reprRowId : null;
       const actionHint = miningController ? " · hold to extract" : "";
       const extractedHint =
         hoveredFraction > 0 ? ` · ${Math.round(hoveredFraction * 100)}% extracted` : "";
@@ -779,9 +802,8 @@ engine.start((dt) => {
       // An untouched voxel has no extraction record yet, so its total comes
       // straight from the chunk's per-voxel counts.
       const cycleFraction = Math.min(1, holdElapsedSeconds / durationSeconds);
-      const state = miningController?.extractionState(holdTarget.chunkId, holdTarget.localVoxelId);
-      const extracted = state?.extracted.size ?? 0;
-      const total = state?.total ?? chunkStore?.chunk(holdTarget.chunkId)?.meta.count[holdTarget.localVoxelId] ?? 1;
+      const extracted = miningController?.viewExtracted(holdTarget.chunkId, holdTarget.localVoxelId) ?? 0;
+      const total = miningController?.viewCount(holdTarget.chunkId, holdTarget.localVoxelId) ?? 1;
       const pendingBatch = miningController?.batchSizeFor(total, extracted) ?? 1;
       holdRing.setProgress(
         Math.min(1, (extracted + pendingBatch * cycleFraction) / Math.max(1, total)),
@@ -822,11 +844,11 @@ engine.start((dt) => {
     const yPx = (1 - (pointerController.ndc.y * 0.5 + 0.5)) * window.innerHeight;
     holdRing.setPosition(xPx, yPx);
   }
-  const hoverState = target ? miningController?.extractionState(target.chunkId, target.localVoxelId) : null;
+  const hoverExtracted = target ? miningController?.viewExtracted(target.chunkId, target.localVoxelId) ?? 0 : 0;
   const hoverTotal = target
-    ? chunkStore?.chunk(target.chunkId)?.meta.count[target.localVoxelId] ?? 0
+    ? miningController?.viewCount(target.chunkId, target.localVoxelId) ?? 0
     : proxyVoxel?.count ?? 0;
-  holdRing.setHover(showReticle ? hoverTotal - (hoverState?.extracted.size ?? 0) : null,
+  holdRing.setHover(showReticle ? hoverTotal - hoverExtracted : null,
     hoverTotal, !!proxyVoxel);
   if (pointerController.isDragging) {
     setCursorStyle("grabbing");
@@ -965,6 +987,7 @@ function disposeApp(): void {
   appLifetime.abort();
   engine.stop();
   searchCompare.dispose(); searchNavigation?.dispose(); searchNavigation = null;
+  metadataFilters?.dispose(); metadataFilters = null;
   leftDock.remove();
   if (effectorField) gameSession?.saveSettings(engine.camera.position.toArray(), engine.camera.quaternion.toArray(), effectorField.currentRadiusVoxels, true);
   gameSession?.dispose(); gameSession = null;

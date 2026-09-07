@@ -179,7 +179,7 @@ export class Hud {
       options.onFilter(enabled.checked, Number(threshold.value));
     };
     enabled.addEventListener("change", update); threshold.addEventListener("change", update);
-    filter.title = "Original images per voxel (not remaining after mining). Distant region bounds and the minimap remain as context.";
+    filter.title = "Images per voxel before mining, restricted to matches when image filters are active. The minimap remains full-collection context.";
     filter.append(label, threshold, "images"); this.controls.append(filter);
   }
 
@@ -189,6 +189,9 @@ export class Hud {
     if (this.radiusInput.value !== value) this.radiusInput.value = value;
     if (this.radiusOutput.value !== `${value} voxels`) this.radiusOutput.value = `${value} voxels`;
   }
+
+  addMetadataControls(element: HTMLElement): void { this.controls.append(element); }
+  openSettings(): void { this.setCollapsed(false); }
 
   private setCollapsed(collapsed: boolean): void {
     this.collapsed = collapsed;

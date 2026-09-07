@@ -8,6 +8,7 @@ import { VOXEL_FILL, XRAY_OPACITY } from "../config.ts";
 import { densityLevel, installDensityView, setDensityRendering } from "./DensityView.ts";
 import { selectProxyCut, proxyBrickLod, allocateProxyBricks } from "./ProxyCut.ts";
 import { proxyCellMaxCounts } from "./VoxelCountFilter.ts";
+import type { MatchSnapshot } from "../metadata/MetadataClient.ts";
 
 const CUT_CAPACITY = 1024;
 
@@ -16,7 +17,8 @@ interface Leaf { chunk: number; xyz: number[]; count: number; levels: Level[] }
 interface Node { origin: number[]; span: number; count: number; leaf?: number; children: number[] }
 interface Hierarchy { version: number; file: string; bytes: number; nodes: Leaf[]; tree: Node[] }
 interface Brick { mesh: InstancedMesh2; ids: ProxyVoxel[]; colors: THREE.Color[]; lastUsed: number;
-  leaf: Leaf; level: Level; source?: DataView; filterCounts?: Uint32Array }
+  leaf: Leaf; level: Level; origins: Uint16Array; source?: DataView; filterCounts?: Uint32Array;
+  matches?: { total: number; max: number; local: number }[] }
 
 /** Distance-prioritized octree cut + range-loaded 4/2/1 voxel bricks. Resident fine
  * geometry never scales with corpus size. A missing brick keeps its parent visible. */
@@ -48,6 +50,24 @@ export class HierarchicalProxies {
   private countFilter = 0;
   private retryAt = Infinity;
   private xrayActive = false;
+  private metadataFilter: MatchSnapshot | null = null;
+  private nodeCounts = new Map<Node, number>();
+
+  setMetadataFilter(filter: MatchSnapshot | null): void {
+    this.metadataFilter = filter; this.nodeCounts.clear();
+    if (filter) for (let i = this.hierarchy.tree.length - 1; i >= 0; i--) {
+      const node = this.hierarchy.tree[i];
+      this.nodeCounts.set(node, node.leaf !== undefined ? filter.chunkTotals.get(this.hierarchy.nodes[node.leaf].chunk) ?? 0 :
+        node.children.reduce((sum, child) => sum + (this.nodeCounts.get(this.hierarchy.tree[child]) ?? 0), 0));
+    }
+    for (const brick of this.bricks.values()) this.applyMetadata(brick);
+    this.dirty = true;
+  }
+  private applyMetadata(brick: Brick): void {
+    brick.matches = this.metadataFilter ? [...brick.origins].map(origin => this.metadataFilter!.cell(brick.leaf.chunk, origin, brick.level.step, this.manifest.voxelsPerChunk)) : undefined;
+    for (let i = 0; i < brick.ids.length; i++) brick.mesh.setUniformAt(i, "densityLevel",
+      densityLevel(brick.matches?.[i].max ?? brick.filterCounts?.[i] ?? brick.ids[i].count / brick.level.step ** 3));
+  }
 
   setXrayActive(active: boolean): void {
     this.xrayActive = active;
@@ -145,7 +165,8 @@ export class HierarchicalProxies {
     this.handles.clear();
     let coarseCount = 0, fineCount = 0;
     for (const node of cut) {
-      if (node.count <= this.countFilter) continue;
+      const nodeCount = this.metadataFilter ? this.nodeCounts.get(node) ?? 0 : node.count;
+      if (nodeCount <= this.countFilter) continue;
       if (node.leaf !== undefined) {
         const leaf = this.hierarchy.nodes[node.leaf];
         if (this.resident.has(leaf.chunk)) continue;
@@ -166,16 +187,16 @@ export class HierarchicalProxies {
         if (brick && selected.has(node.leaf)) {
           brick.mesh.visible = true;
           brick.lastUsed = this.tick;
-          if (this.countFilter && !brick.filterCounts) this.requestFilterCounts(brick);
+          if (this.countFilter && !brick.filterCounts && !this.metadataFilter) this.requestFilterCounts(brick);
           for (let i = 0; i < brick.ids.length; i++) {
             // Until exact child counts arrive, don't misrepresent a sum as an
             // individual voxel's occupancy. Regional bounds remain context.
-            const visible = !this.countFilter || (brick.filterCounts?.[i] ?? 0) > this.countFilter;
+            const visible = brick.matches ? brick.matches[i].max > this.countFilter : !this.countFilter || (brick.filterCounts?.[i] ?? 0) > this.countFilter;
             brick.mesh.setVisibilityAt(i, visible);
             if (!visible) continue;
             fineCount++;
             const id = brick.ids[i];
-            const handle = id.chunkId * 65536 + id.localVoxelId;
+            const handle = id.chunkId * 65536 + (brick.matches?.[i].local ?? id.localVoxelId);
             this.handles.set(handle, { brick, instance: i });
             brick.mesh.setColorAt(i, this.lit.has(handle) ? new THREE.Color(0xffcf6a) : brick.colors[i]);
           }
@@ -189,7 +210,7 @@ export class HierarchicalProxies {
       this.coarse.setMatrixAt(coarseCount, matrix);
       this.coarse.setColorAt(coarseCount, new THREE.Color(0x3b5861));
       this.coarse.setVisibilityAt(coarseCount, true);
-      this.coarseIds[coarseCount++] = { chunkId: node.leaf === undefined ? -1 : this.hierarchy.nodes[node.leaf].chunk, localVoxelId: -1, count: node.count };
+      this.coarseIds[coarseCount++] = { chunkId: node.leaf === undefined ? -1 : this.hierarchy.nodes[node.leaf].chunk, localVoxelId: -1, count: nodeCount };
     }
     for (let i = coarseCount; i < CUT_CAPACITY; i++) this.coarse.setVisibilityAt(i, false);
     this.coarse.computeBoundingSphere();
@@ -209,10 +230,12 @@ export class HierarchicalProxies {
         setDensityRendering(mesh, this.xrayActive);
         this.material.opacity = this.xrayActive ? XRAY_OPACITY : 1;
         const ids: ProxyVoxel[] = [], colors: THREE.Color[] = [];
+        const origins = new Uint16Array(level.count);
         const vpc = this.manifest.voxelsPerChunk;
         mesh.addInstances(level.count, (instance, i) => {
           const offset = i * 16;
           const x = data.getUint16(offset, true), y = data.getUint16(offset + 2, true), z = data.getUint16(offset + 4, true);
+          origins[i] = x + y * vpc + z * vpc * vpc;
           this.manifest.voxelCenterWorldById(leaf.chunk, x + y * vpc + z * vpc * vpc, instance.position);
           instance.position.addScalar((level.step - 1) * this.manifest.voxelWorldSize / 2);
           instance.scale.setScalar(this.manifest.voxelWorldSize * level.step * VOXEL_FILL);
@@ -229,10 +252,11 @@ export class HierarchicalProxies {
         const cast = mesh.raycast.bind(mesh);
         mesh.raycast = (ray, hits) => { if (mesh.visible) cast(ray, hits); };
         mesh.visible = false;
-        const brick: Brick = { mesh, ids, colors, lastUsed: this.tick, leaf, level,
+        const brick: Brick = { mesh, ids, colors, origins, lastUsed: this.tick, leaf, level,
           source: level.step === 1 ? undefined : data,
           filterCounts: level.step === 1 ? Uint32Array.from(ids, id => id.count) : undefined };
         mesh.userData.proxyBrick = brick;
+        this.applyMetadata(brick);
         this.bricks.set(key, brick);
         this.mesh.add(mesh);
         this.dirty = true;
@@ -253,8 +277,7 @@ export class HierarchicalProxies {
         brick.filterCounts = proxyCellMaxCounts(new DataView(buffer), brick.source!, brick.level.step, this.manifest.voxelsPerChunk);
         // If exact child counts were fetched for filtering, show the peak
         // child density. No additional request is made just for X-ray.
-        for (let i = 0; i < brick.ids.length; i++)
-          brick.mesh.setUniformAt(i, "densityLevel", densityLevel(brick.filterCounts[i]));
+        this.applyMetadata(brick);
         brick.source = undefined;
         this.dirty = true;
       }).catch(() => this.recordFailure(key))
@@ -280,7 +303,10 @@ export class HierarchicalProxies {
   }
 
   resolveHit(mesh: InstancedMesh2, id: number): ProxyVoxel | null {
-    return mesh === this.coarse ? this.coarseIds[id] ?? null : (mesh.userData.proxyBrick as Brick | undefined)?.ids[id] ?? null;
+    if (mesh === this.coarse) return this.coarseIds[id] ?? null;
+    const brick = mesh.userData.proxyBrick as Brick | undefined;
+    const original = brick?.ids[id], match = brick?.matches?.[id];
+    return original ? match ? { chunkId: original.chunkId, localVoxelId: match.local, count: match.total } : original : null;
   }
   get instanceCount() { return this.shown; }
   get shownCount() { return this.shown; }

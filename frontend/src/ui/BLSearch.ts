@@ -24,6 +24,9 @@ export class BLSearch {
   private generation = 0;
   private statusController = new AbortController();
   private statusTimer: ReturnType<typeof setTimeout> | undefined;
+  private matches: ((row: number) => boolean) | null = null;
+  private clearResults = () => {};
+  setMetadataFilter(matches: ((row: number) => boolean) | null): void { this.matches = matches; this.clearResults(); }
   constructor(container: HTMLElement, actions: { hover: (r: SearchResult | null) => void; select: (r: SearchResult) => void | Promise<void>; clear: () => void }) {
     this.root.className = "ls-bl-search";
     Object.assign(this.root.style, { padding: "10px", pointerEvents: "auto", fontSize: "11px", flexShrink: "1", minHeight: "42px", minWidth: "0", overflow: "clip", boxSizing: "border-box", display: "flex", flexDirection: "column" });
@@ -72,6 +75,7 @@ export class BLSearch {
     const pager = document.createElement("div");
     Object.assign(pager.style, { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginTop: "8px", flexShrink: "0" });
     const clear = () => { this.generation++; this.controller?.abort(); results.replaceChildren(); results.style.flexBasis = "0px"; pager.replaceChildren(); actions.clear(); };
+    this.clearResults = () => { clear(); status.textContent = this.matches ? "Image filters changed. Search again; matches are drawn from the 24 retrieved candidates." : help; };
     input.addEventListener("input", clear);
     form.addEventListener("submit", async event => {
       event.preventDefault(); clear();
@@ -85,10 +89,12 @@ export class BLSearch {
         const body = await response.json();
         if (generation !== this.generation) return;
         if (!response.ok) throw new Error(body.detail || body.error || `Search HTTP ${response.status}`);
-        const hits = parseBLResults(body);
+        const candidates = parseBLResults(body);
+        const hits = this.matches ? candidates.filter(hit => this.matches!(hit.row)) : candidates;
         results.style.flexBasis = hits.length ? "230px" : "0px";
         if (body.query !== query || ![body.embed_ms, body.search_ms].every(v => Number.isFinite(v) && v >= 0)) throw new Error("Invalid search response");
         status.textContent = `${hits.length} matches · ${(performance.now()-started).toFixed(0)} ms · encode ${body.embed_ms.toFixed(0)} / search ${body.search_ms.toFixed(0)} ms`;
+        if (this.matches) status.textContent += ` · filtered from ${candidates.length} candidates (not a full filtered-index search)`;
         let page = 0;
         const renderPage = () => {
           results.replaceChildren(); pager.replaceChildren(); actions.hover(null);

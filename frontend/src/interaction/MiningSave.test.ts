@@ -51,7 +51,7 @@ describe("portable mining saves", () => {
   });
 
   it("restores cursor/returns/depletion atomically, then mines exactly the remaining images", () => {
-    const mesh = { userData: { chunkId:7, instanceToLocalVoxelId:new Uint32Array([0]) }, setOpacityAt:vi.fn() };
+    const mesh = { userData: { chunkId:7, instanceToLocalVoxelId:new Uint32Array([0]) }, setOpacityAt:vi.fn(), setUniformAt:vi.fn() };
     const chunk = { entry:{chunk_id:7}, mesh, meta:{count: new Uint32Array([5]), occupied:new Uint32Array([0]), pointOffset:new Uint32Array([0]),
       reprRowId:new Uint32Array([10]), pointIds:new Uint32Array([10,11,12,13,14])}, containers:{setExtractedFraction:vi.fn()} };
     const store = { chunk:()=>chunk, residentChunkIds:[7] } as unknown as ChunkStore;

@@ -18,7 +18,7 @@ function fixture(resident = true) {
     else for(let i=0;i<length;i+=4) view.setUint32(i,10+(start+i)/4,true);
     return view.buffer;
   });
-  const mesh = {userData:{chunkId:7,instanceToLocalVoxelId:new Uint32Array([0])},setOpacityAt:vi.fn()};
+  const mesh = {userData:{chunkId:7,instanceToLocalVoxelId:new Uint32Array([0])},setOpacityAt:vi.fn(),setUniformAt:vi.fn()};
   const entry = {meta_path:"meta.bin",meta_bytes:65568,n_points:5,postings:{path:"postings.bin"}};
   const chunk = {entry:{chunk_id:7},mesh,meta:{count:new Uint32Array([5]),reprRowId:new Uint32Array([10]),pointOffset:new Uint32Array([0]),occupied:new Uint32Array([0]),pointIds:new Uint32Array([10,11,12,13,14])},containers:{setExtractedFraction:vi.fn()}};
   const store = {chunk:()=>resident ? chunk : undefined,residentChunkIds:resident?[7]:[]} as unknown as ChunkStore;

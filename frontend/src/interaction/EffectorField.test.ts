@@ -49,11 +49,16 @@ describe("Effector surface rectangles", () => {
     camera.position.set(0, 0, 0); field.setRadiusVoxels(2, false); field.update(camera);
     field.setCountFilter(1); field.setCountFilter(0);
     expect(visibility).toEqual([false, false]); expect(field.ghosts.count).toBe(2);
+    field.setViewCount((_chunk, local) => local === 0 ? 0 : 5); field.update(camera);
+    expect(field.ghosts.count).toBe(1);
+    camera.position.set(100, 0, 0); field.update(camera);
+    expect(visibility).toEqual([false, true]);
+    field.setViewCount(null); field.update(camera); expect(visibility).toEqual([true, true]);
     field.dispose();
   });
   it("replaces suppressed thumbnails with faint untextured, non-pickable geometry", () => {
     const source={visible:true,setVisibilityAt:vi.fn(),getMatrixAt:(_i:number,m:THREE.Matrix4)=>m.makeTranslation(0,0,-1.5)};
-    const chunk={entry:{cx:0,cy:0,cz:0},meta:{occupied:new Uint32Array([0])},mesh:source,
+    const chunk={entry:{cx:0,cy:0,cz:0},meta:{occupied:new Uint32Array([0]),count:new Uint32Array([5])},mesh:source,
       containers:{setSuppressed:vi.fn()}};
     const store={residentChunkIds:[0],chunk:()=>chunk} as unknown as ChunkStore;
     const manifest={voxelWorldSize:1,chunkWorldSize:16,

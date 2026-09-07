@@ -69,6 +69,8 @@ export interface DatasetConfig {
   pointMetaFile?: { path: string; bytes: number; rows: number };
   searchProfile?: "bl-siglip2-20260907a";
   streamingProfile?: "bl-wide";
+  /** Optional release-bound metadata/filter API; absent means no facets. */
+  metadataEndpoint?: string;
 }
 
 const ALL_DATASETS: Record<string, DatasetConfig> = {
@@ -174,5 +176,6 @@ export const DEFAULT_DATASET = import.meta.env.VITE_DEMO_DATASET || "monet-sscd-
 export const DATASETS: Record<string, DatasetConfig> = import.meta.env.VITE_DEMO_DATASET === "bl-160"
   ? { "bl-160": { ...ALL_DATASETS["bl-160"], path: "/chunks/bl-siglip2-160-stream-20260907a",
       searchProfile: "bl-siglip2-20260907a",
+      metadataEndpoint: "/api/metadata/bl-20260907a",
       pointMetaFile: { path: "/points/bl/point_meta.bin", bytes: 77049305, rows: 1080814 } } }
   : ALL_DATASETS;

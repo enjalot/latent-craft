@@ -45,13 +45,13 @@ it("removes the image band in X-ray, retaining only the focused image and invali
   const material = new THREE.MeshStandardMaterial({ map: atlas });
   const owner = { mesh: { visible: true, material, getVisibilityAt: () => true,
     getMatrixAt: (_id: number, matrix: THREE.Matrix4) => matrix.identity(), setOpacityAt: vi.fn() },
-    meta: { occupied: new Uint32Array([0,1]) }, entry: { cx: 0, cy: 0, cz: 0, atlas_tiles_per_side: 16 } };
+    meta: { occupied: new Uint32Array([0,1]), reprRowId: new Uint32Array([10,11]) }, entry: { cx: 0, cy: 0, cz: 0, atlas_tiles_per_side: 16 } };
   const store = { residentChunkIds: [0], chunk: () => owner } as unknown as ChunkStore;
   const manifest = { voxelWorldSize: 1, chunkWorldSize: 16, compactAtlases: true, tilePx: 32,
     chunkCenterWorld: (_id: number, v: THREE.Vector3) => v.set(0,0,-2.5),
     voxelCenterWorld: (_x: number, _y: number, _z: number, local: number, v: THREE.Vector3) => v.set(local,0,-2.5) } as Manifest;
   const state = { cursor: 0, extracted: {size: 0}, returned: new Set<number>() };
-  const mining = { isFullyExtracted: () => false, extractionState: () => state, extractedFraction: () => 0 } as unknown as MiningController;
+  const mining = { isFullyExtracted: () => false, extractionState: () => state, extractedFraction: () => 0, matchesRow: () => true } as unknown as MiningController;
   const band = new SharpBand(new THREE.Scene(), {} as THREE.WebGLRenderer, store, manifest, mining, vi.fn());
   const camera = new THREE.PerspectiveCamera();
   const targets = () => vi.mocked(band.pool.update).mock.lastCall![0] as PreviewTarget[];
@@ -64,5 +64,11 @@ it("removes the image band in X-ray, retaining only the focused image and invali
   state.extracted.size = 1;
   band.update(camera,2,{chunkId:0,localVoxelId:0},true); expect(targets()[0].key).not.toBe(key);
   band.update(camera,2,null,false); expect(targets()).toHaveLength(2);
+  const pending = targets()[0];
+  mining.filterRevision = 1;
+  expect(pending.valid()).toBe(false);
+  mining.matchesRow = () => false;
+  band.update(camera, 2, { chunkId: 0, localVoxelId: 0 }, true);
+  expect(band.opaqueHover.mesh.visible).toBe(false);
   band.dispose(); material.dispose(); atlas.dispose();
 });

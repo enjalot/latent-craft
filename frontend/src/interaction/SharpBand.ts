@@ -92,7 +92,8 @@ export class SharpBand {
       if (d2 <= radius ** 2 || (!focused && !isSharpBandCell(d2, radius, size))) continue;
       const state = this.mining.extractionState(v.chunkId, v.localVoxelId);
       const searchRow = focused && this.searchFocus ? this.searchFocus.rowId : null;
-      const key = `${v.chunkId}:${v.localVoxelId}:${state?.cursor ?? 0}:${state?.extracted.size ?? 0}:${state?.returned.values().next().value ?? ""}:search:${searchRow ?? ""}`;
+      const revision = this.mining.filterRevision;
+      const key = `${revision}:${v.chunkId}:${v.localVoxelId}:${state?.cursor ?? 0}:${state?.extracted.size ?? 0}:${state?.returned.values().next().value ?? ""}:search:${searchRow ?? ""}`;
       if (owners.has(key)) continue;
       owners.set(key, v);
       v.owner.mesh.getMatrixAt(v.instanceId, this.matrix);
@@ -100,10 +101,10 @@ export class SharpBand {
       // or depth bias is needed. Preserve exact clearance from border cages.
       const matrix = this.matrix.clone();
       targets.push({ key, matrix, focused, opacity: combinedVoxelOpacity(this.mining.extractedFraction(v.chunkId, v.localVoxelId), xray),
-        valid: () => this.store.chunk(v.chunkId) === v.owner && v.owner.mesh.getVisibilityAt(v.instanceId) && !this.mining.isFullyExtracted(v.chunkId, v.localVoxelId),
+        valid: () => revision === this.mining.filterRevision && this.store.chunk(v.chunkId) === v.owner && v.owner.mesh.getVisibilityAt(v.instanceId) && !this.mining.isFullyExtracted(v.chunkId, v.localVoxelId),
         resolve: async () => {
           const row = searchRow ?? await this.mining.previewRowId(v.chunkId, v.localVoxelId);
-          if (row === null) return null;
+          if (row === null || !this.mining.matchesRow(row)) return null;
           const index = await this.getIndex(); await index.ensure?.(row);
           return resolveThumbUrl(index, row);
         } });
@@ -114,7 +115,7 @@ export class SharpBand {
       if (focused && !this.pool.visibleKeys.has(focused.key)) {
         const v = owners.get(focused.key)!;
         const material = (Array.isArray(v.owner.mesh.material) ? v.owner.mesh.material[0] : v.owner.mesh.material) as THREE.MeshStandardMaterial;
-        if (material.map) {
+        if (material.map && this.mining.matchesRow(v.owner.meta.reprRowId[v.localVoxelId])) {
           this.opaqueHover.show(focused.matrix, material.map,
             this.manifest.compactAtlases ? v.instanceId : v.localVoxelId,
             v.owner.entry.atlas_tiles_per_side ?? this.manifest.tilesPerSide, this.manifest.tilePx);

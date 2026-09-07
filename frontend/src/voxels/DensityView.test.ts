@@ -15,7 +15,8 @@ describe("stable count heatmap", () => {
     const shader = {uniforms:{} as Record<string,{value:unknown}>, vertexShader:THREE.ShaderLib.standard.vertexShader,fragmentShader:THREE.ShaderLib.standard.fragmentShader};
     material.onBeforeCompile(shader as never, {} as THREE.WebGLRenderer);
     expect(VOXEL_UNIFORM_SCHEMA.fragment.densityLevel).toBe("float");
-    expect(shader.fragmentShader).toContain("if (uDensityView < 0.5)");
+    expect(shader.fragmentShader).toContain("if (uDensityView < 0.5 && atlasAllowed > 0.5)");
+    expect(VOXEL_UNIFORM_SCHEMA.fragment.atlasAllowed).toBe("float");
     expect(shader.fragmentShader).toContain("diffuseColor.rgb = lsDensityColor(densityLevel)");
     expect(shader.fragmentShader).toContain("#include <color_fragment>");
     expect(shader.fragmentShader).toContain("fwidth(vMapUv)");
