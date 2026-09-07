@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import type { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import { Engine } from "./engine/Engine.ts";
+import { resolveTheme } from "./themes/registry.ts";
+import "./themes/library.css";
 import { FlightControls } from "./engine/FlightControls.ts";
 import { VoxelRaycaster, type VoxelHit } from "./engine/Raycast.ts";
 import { createSyntheticVoxelField } from "./voxels/VoxelField.ts";
@@ -12,6 +14,7 @@ import { loadManifest, type Manifest } from "./streaming/Manifest.ts";
 import { loadVoxelProxy } from "./streaming/VoxelProxy.ts";
 import { ChunkLoader, type ChunkMeshUserData } from "./streaming/ChunkLoader.ts";
 import { ChunkStore } from "./streaming/ChunkStore.ts";
+import { streamingPolicyFor } from "./streaming/StreamingPolicy.ts";
 import { loadPointIndex, resolveThumbUrl, type PointIndex } from "./streaming/PointIndex.ts";
 import { loadRowToVoxel } from "./streaming/RowToVoxel.ts";
 import { loadMinimapPack } from "./minimap/Manifest.ts";
@@ -31,7 +34,7 @@ import { Hud, type HudStreamingState } from "./ui/Hud.ts";
 import { DatasetPicker } from "./ui/DatasetPicker.ts";
 import { SearchCompare } from "./ui/SearchCompare.ts";
 import { BLSearch } from "./ui/BLSearch.ts";
-import { addBLDemoAbout } from "./ui/DemoAbout.ts";
+import { addDatasetAbout } from "./ui/DemoAbout.ts";
 import { SearchNavigation } from "./interaction/SearchNavigation.ts";
 import { createHoldProgressRing } from "./ui/hud/Crosshair.ts";
 import { InventoryPanel } from "./ui/InventoryPanel.ts";
@@ -41,13 +44,8 @@ import {
   DATASETS,
   DEFAULT_DATASET,
   EXTRACTION_CYCLE_MS,
-  HEMISPHERE_GROUND_COLOR,
-  HEMISPHERE_INTENSITY,
-  HEMISPHERE_SKY_COLOR,
   RING_R0_CHUNKS,
-  SUN_COLOR,
   SUN_DIRECTION,
-  SUN_INTENSITY,
   WORLD_HALF_EXTENT,
   WORLD_SCALE,
   XRAY_OPACITY,
@@ -69,11 +67,14 @@ const params = new URLSearchParams(window.location.search);
 const useSynthetic = params.get("synthetic") === "1";
 /** `?dataset=bl-160` switches chunk-packs; the registry lives in config.ts. */
 const datasetKey = params.get("dataset") ?? DEFAULT_DATASET;
+const visualTheme = resolveTheme(DATASETS[datasetKey]?.theme, params.get("theme"));
+document.documentElement.dataset.theme = visualTheme.id;
 
 // `?sky=0` / `?headlamp=0`: A/B switches for the two Phase 7 environment
 // additions — the flat clear colour instead of the nebula cubemap, and the
 // distance-independent rig alone without the camera-carried lamp.
 const engine = new Engine(app, {
+  theme: visualTheme,
   sky: params.get("sky") !== "0",
   headlamp: params.get("headlamp") !== "0",
 });
@@ -84,13 +85,13 @@ const engine = new Engine(app, {
 // fill + one directional "sun" gives the cubes enough form to read as blocks
 // rather than flat colour swatches. The headlamp (the distance-DEPENDENT half)
 // is Engine's, since it has to follow the camera every frame.
-const hemiLight = new THREE.HemisphereLight(HEMISPHERE_SKY_COLOR, HEMISPHERE_GROUND_COLOR, HEMISPHERE_INTENSITY);
+const hemiLight = new THREE.HemisphereLight(...visualTheme.hemisphere);
 engine.scene.add(hemiLight);
-const sunLight = new THREE.DirectionalLight(SUN_COLOR, SUN_INTENSITY);
+const sunLight = new THREE.DirectionalLight(...visualTheme.sun);
 sunLight.position.set(...SUN_DIRECTION);
 engine.scene.add(sunLight);
 // Cool edge separation against the warm key, without shadow-map passes.
-const rimLight = new THREE.DirectionalLight(0x94cfff, .65);
+const rimLight = new THREE.DirectionalLight(...visualTheme.rim);
 rimLight.position.set(-2, .6, -1.5);
 engine.scene.add(rimLight);
 
@@ -169,7 +170,8 @@ Object.assign(leftDock.style, { position: "fixed", top: "14px", left: "14px", ma
   width: "min(420px, calc(100vw - 28px))", display: "flex", flexDirection: "column",
   gap: "8px", zIndex: "11", pointerEvents: "none" });
 app.append(leftDock);
-if (import.meta.env.VITE_DEMO_DATASET === "bl-160") addBLDemoAbout(app);
+const attribution = DATASETS[datasetKey]?.attribution;
+if (attribution) addDatasetAbout(app, attribution, visualTheme.artworkNotice);
 const datasetPicker = new DatasetPicker(leftDock, datasetKey, DATASETS, useSynthetic, true);
 const hud = new Hud(leftDock, true);
 let searchNavigation: SearchNavigation | null = null;
@@ -350,7 +352,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
     engine.scene.add(voxelProxy.mesh);
 
     const atlasCache = new AtlasCache(engine.renderer);
-    const chunkLoader = new ChunkLoader(manifest, atlasCache, engine.renderer);
+    const chunkLoader = new ChunkLoader(manifest, atlasCache, engine.renderer, engine.themeTextures.wood);
     chunkStore = new ChunkStore(manifest, chunkLoader, {
       onDisplayChanged: (chunkId, shown) => {
         voxelProxy?.setChunkResident(chunkId, shown);
@@ -371,7 +373,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
           effectorField?.onChunkResident(chunkId);
         }
       },
-    });
+    }, undefined, streamingPolicyFor(DATASETS[datasetKey]?.streamingProfile, manifest));
     engine.scene.add(chunkStore.group);
     // Both layers are hover targets. The raycaster returns the nearest hit
     // across all of them, and a chunk's proxy run is un-raycastable while its

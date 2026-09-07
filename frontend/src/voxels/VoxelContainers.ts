@@ -117,6 +117,9 @@ const CONTAINER_FRAGMENT_SHADER = /* glsl */ `
 #include <fog_pars_fragment>
 uniform vec3 uFrameColor;
 uniform vec3 uSunDir;
+#ifdef LIBRARY_WOOD
+uniform sampler2D uWood;
+#endif
 varying vec3 vLocal;
 varying vec3 vNormalLocal;
 varying vec3 vViewPosition;
@@ -130,6 +133,10 @@ void main() {
 	float railW = mix( ${f(CONTAINER_RAIL_WIDTH_MIN)}, ${f(CONTAINER_RAIL_WIDTH_MAX)}, capacity ) * 2.0;
 	float bracketL = mix( ${f(CONTAINER_BRACKET_LENGTH_MIN)}, ${f(CONTAINER_BRACKET_LENGTH_MAX)}, capacity ) * 2.0;
 	float bracketW = railW * ${f(CONTAINER_BRACKET_WIDTH_MULT)};
+#ifdef LIBRARY_WOOD
+  // Continuous mitred wood rails, without the technical corner shoulders.
+  bracketW = railW;
+#endif
 
 	bool onXEdge = d.x < d.y;
 	float e = onXEdge ? d.x : d.y;
@@ -172,6 +179,14 @@ void main() {
 	float specular = pow( max(dot(nView, halfView), 0.0), 40.0 );
 	float fresnel = pow( 1.0 - abs(dot(nView, normalize(vViewPosition))), 4.0 );
 	body += uFrameColor * bright * (specular * .65 + fresnel * .30) * (1.0 - inset * .7);
+#ifdef LIBRARY_WOOD
+  // Grain follows each rail's long axis. The box geometry supplies real
+  // depth; a routed inner groove and varnish highlight shape the face.
+  vec3 oak = texture2D(uWood, vec2((s + 1.0) * .5, e * 3.0)).rgb;
+  float groove = smoothstep(.60, .66, prof) * (1.0 - smoothstep(.76, .82, prof));
+  body = oak * (0.85 + bevel * .55 - groove * .35) * light * mix(.85, 1.3, capacity);
+  body += vec3(1.0, .79, .46) * (specular * .18 + fresnel * .06) * (1.0 - groove);
+#endif
 
 	// --- depletion -------------------------------------------------------------
 	// Brightness first (fullness 1 → BRIGHTNESS_END), then opacity
@@ -208,8 +223,9 @@ void main() {
  * Left unfogged, a distant cluster's cages would sit bright and sharp around
  * cubes that have faded into the haze.
  */
-function createContainerMaterial(): THREE.ShaderMaterial {
+export function createContainerMaterial(woodTexture: THREE.Texture | null = null): THREE.ShaderMaterial {
   const material = new THREE.ShaderMaterial({
+    defines: woodTexture ? { LIBRARY_WOOD: 1 } : {},
     uniforms: THREE.UniformsUtils.merge([
       THREE.UniformsLib.fog,
       {
@@ -227,7 +243,10 @@ function createContainerMaterial(): THREE.ShaderMaterial {
     depthWrite: false,
     fog: true,
   });
-  material.customProgramCacheKey = () => "ls-voxel-container-v3";
+  // Do not pass the shared map through UniformsUtils.merge: it clones
+  // textures, duplicating GPU allocations for every streamed chunk.
+  if (woodTexture) material.uniforms.uWood = { value: woodTexture };
+  material.customProgramCacheKey = () => woodTexture ? "lc-library-container-v1" : "ls-voxel-container-v3";
   return material;
 }
 
@@ -302,6 +321,7 @@ export class VoxelContainers {
     meta: ChunkMeta,
     manifest: Manifest,
     renderer: THREE.WebGLRenderer,
+    woodTexture: THREE.Texture | null = null,
   ): VoxelContainers {
     const occupied = meta.occupied;
     const count = occupied.length;
@@ -312,7 +332,7 @@ export class VoxelContainers {
     // and patches the material with per-mesh closures. A unit box is 24
     // vertices, and every material here compiles to the same GL program.
     const geometry = new THREE.BoxGeometry(1, 1, 1);
-    const material = createContainerMaterial();
+    const material = createContainerMaterial(woodTexture);
     const mesh = new InstancedMesh2(geometry, material, {
       capacity: Math.max(1, count),
       renderer,

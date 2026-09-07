@@ -7,12 +7,13 @@ import * as THREE from "three";
 export class SkyBackdrop {
   readonly mesh: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
 
-  constructor(texture: THREE.CubeTexture) {
+  constructor(texture: THREE.Texture, equirectangular = false) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute([
       -1, -1, 0, 3, -1, 0, -1, 3, 0,
     ], 3));
     const material = new THREE.ShaderMaterial({
+      defines: equirectangular ? { PANORAMA: 1 } : {},
       uniforms: {
         sky: { value: texture },
         inverseProjection: { value: new THREE.Matrix4() },
@@ -29,10 +30,22 @@ export class SkyBackdrop {
         }
       `,
       fragmentShader: /* glsl */ `
-        uniform samplerCube sky;
+        #ifdef PANORAMA
+          uniform sampler2D sky;
+        #else
+          uniform samplerCube sky;
+        #endif
         varying vec3 skyDirection;
         void main() {
-          gl_FragColor = textureCube(sky, skyDirection);
+          #ifdef PANORAMA
+            vec3 direction = normalize(skyDirection);
+            vec2 uv = vec2(atan(direction.z, direction.x) * 0.159154943 + 0.5,
+              asin(clamp(direction.y, -1.0, 1.0)) * 0.318309886 + 0.5);
+            gl_FragColor = texture2D(sky, uv);
+            gl_FragColor.rgb *= 0.72;
+          #else
+            gl_FragColor = textureCube(sky, skyDirection);
+          #endif
           #include <colorspace_fragment>
         }
       `,
@@ -57,6 +70,6 @@ export class SkyBackdrop {
     this.mesh.removeFromParent();
     this.mesh.geometry.dispose();
     this.mesh.material.dispose();
-    // The cubemap remains owned by NebulaSky.
+    // Textures remain owned by NebulaSky or ThemeTextures.
   }
 }

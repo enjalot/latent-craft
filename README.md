@@ -8,8 +8,11 @@ ways to move between overview and individual source images.
 
 The British Library demo is an independent project using public-domain book
 images, not an official British Library product. Dataset credits and historical
-content context accompany the [live HF demo](https://huggingface.co/spaces/enjalot/latent-craft-bl). Dataset-specific visual
-themes are a planned follow-up; the current skin remains the sci-fi prototype.
+content context accompany the [live HF demo](https://huggingface.co/spaces/enjalot/latent-craft-bl).
+The source includes a wood-and-library BL theme and the original nebula skin
+for MONET. See [dataset descriptors and themes](docs/themes-and-datasets.md)
+for appearance overrides, resource ownership, and BL's wider streaming profile.
+The hosted demo may be on an earlier release than local source.
 
 See the [full BL SigLIP / LanceDB / int8 experiment](docs/bl-search-experiment.md)
 and [deployment, costs and publication notes](docs/bl-demo-publication.md).

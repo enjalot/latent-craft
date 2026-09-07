@@ -149,6 +149,7 @@ export class ChunkLoader {
     private readonly manifest: Manifest,
     private readonly atlasCache: AtlasCache,
     private readonly renderer: THREE.WebGLRenderer,
+    private readonly woodTexture: THREE.Texture | null = null,
   ) {}
 
   async load(entry: ManifestChunk, signal?: AbortSignal): Promise<LoadedChunk> {
@@ -219,7 +220,7 @@ export class ChunkLoader {
       mesh.userData = userData;
       mesh.name = `chunk-${entry.chunk_id}`;
 
-      containers = VoxelContainers.build(entry, meta, this.manifest, this.renderer);
+      containers = VoxelContainers.build(entry, meta, this.manifest, this.renderer, this.woodTexture);
       mesh.add(containers.mesh);
       // Three's recursive raycaster does not honor Object3D.visible itself.
       // Warm prefetched chunks must not intercept the visible proxy layer.

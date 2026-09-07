@@ -3,9 +3,7 @@ import {
   CAMERA_FAR,
   CAMERA_FOV_DEG,
   CAMERA_NEAR,
-  FOG_COLOR,
   HEADLAMP_BACKSET,
-  HEADLAMP_COLOR,
   HEADLAMP_DECAY,
   HEADLAMP_INTENSITY,
   HEADLAMP_RANGE,
@@ -18,10 +16,13 @@ import { NebulaSky } from "./NebulaSky.ts";
 import { Starfield } from "./Starfield.ts";
 import { createStudioEnvironment } from "./StudioEnvironment.ts";
 import { SkyBackdrop } from "./SkyBackdrop.ts";
+import { THEMES, type VisualTheme } from "../themes/registry.ts";
+import { ThemeTextures } from "../themes/ThemeTextures.ts";
 
 export type TickCallback = (deltaSeconds: number, elapsedSeconds: number) => void;
 
 export interface EngineOptions {
+  theme?: VisualTheme;
   /** Draw the procedural nebula cubemap as the background (default true);
    * false keeps the flat clear colour — the `?sky=0` A/B switch. */
   sky?: boolean;
@@ -143,6 +144,7 @@ export class Engine {
    * `?sky=0`. Same ownership argument as the starfield. */
   readonly sky: NebulaSky | null;
   private readonly skyBackdrop: SkyBackdrop | null;
+  readonly themeTextures: ThemeTextures;
   /** The camera-carried point light (see `HEADLAMP_*` in config.ts), or null
    * under `?headlamp=0`. Owned here because following the camera has to happen
    * after the tick callback has moved it and before the render — i.e. inside
@@ -168,11 +170,13 @@ export class Engine {
 
   constructor(container: HTMLElement, options: EngineOptions = {}) {
     this.container = container;
+    const theme = options.theme ?? THEMES.nebula;
+    this.themeTextures = new ThemeTextures(theme, options.sky !== false);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setClearColor(FOG_COLOR, 1);
+    this.renderer.setClearColor(theme.fogColor, 1);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.1;
     container.appendChild(this.renderer.domElement);
@@ -190,15 +194,19 @@ export class Engine {
     // unfogged textured ones. `createSceneFog` also swaps in the fog curve (see `Fog.ts`),
     // which has to precede the first compile for the same reason.
     this.scene.fog = createSceneFog();
+    this.scene.fog.color.setHex(theme.fogColor);
+    this.scene.fog.density = theme.fogDensity;
     // The sky renders its cubemap right here, before the starfield or anything
     // else exists — it is the first thing the renderer ever draws, into an
     // offscreen target, so the main scene never sees a frame without it.
-    this.sky = options.sky === false ? null : new NebulaSky(this.renderer);
-    this.skyBackdrop = this.sky ? new SkyBackdrop(this.sky.texture) : null;
+    this.sky = options.sky === false || theme.panorama ? null : new NebulaSky(this.renderer);
+    this.skyBackdrop = this.themeTextures.panorama ? new SkyBackdrop(this.themeTextures.panorama, true)
+      : this.sky ? new SkyBackdrop(this.sky.texture) : null;
     if (this.skyBackdrop) this.scene.add(this.skyBackdrop.mesh);
     this.studioEnvironment = createStudioEnvironment(this.renderer);
     this.scene.environment = this.studioEnvironment.texture;
     this.starfield = new Starfield();
+    this.starfield.points.visible = theme.id === "nebula";
     this.scene.add(this.starfield.points);
 
     this.camera = new THREE.PerspectiveCamera(
@@ -217,7 +225,7 @@ export class Engine {
       this.headlamp = null;
     } else {
       this.headlamp = new THREE.PointLight(
-        HEADLAMP_COLOR,
+        theme.headlampColor,
         HEADLAMP_INTENSITY,
         HEADLAMP_RANGE + HEADLAMP_BACKSET,
         HEADLAMP_DECAY,
@@ -409,6 +417,7 @@ export class Engine {
   dispose(): void {
     this.stop();
     this.skyBackdrop?.dispose();
+    this.themeTextures.dispose();
     this.sky?.dispose();
     this.studioEnvironment.dispose();
     this.headlamp?.removeFromParent();

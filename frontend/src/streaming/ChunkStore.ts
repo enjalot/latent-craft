@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import type { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import { isAbortError, isRetryableRequestError } from "../net/fetchTyped.ts";
-import { Ring, chunkPriority, ringFor, type RingRadii } from "./priority.ts";
+import { Ring, chunkPriority, ringFor } from "./priority.ts";
+import { DEFAULT_STREAMING_POLICY, type StreamingPolicy } from "./StreamingPolicy.ts";
 import type { ChunkLoader, LoadedChunk } from "./ChunkLoader.ts";
 import type { Manifest } from "./Manifest.ts";
 import type { ManifestChunk } from "../types.ts";
@@ -15,12 +16,6 @@ import {
   MAX_CONCURRENT_CHUNK_LOADS,
   MAX_RESIDENT_ATLAS_BYTES,
   MAX_RESIDENT_CHUNKS,
-  RING_R0_CHUNKS,
-  RING_R1_CHUNKS,
-  RING_R2_CHUNKS,
-  THUMBNAIL_SHOW_RADIUS_CHUNKS,
-  THUMBNAIL_HIDE_RADIUS_CHUNKS,
-  STREAM_MAX_CHUNKS, STREAM_MAX_BYTES, STREAM_MAX_INSTANCES,
 } from "../config.ts";
 
 export interface ChunkStoreStats {
@@ -80,11 +75,7 @@ export class ChunkStore {
   /** Every resident chunk mesh hangs off this group; add it to the scene. */
   readonly group = new THREE.Group();
 
-  private readonly radii: RingRadii = {
-    r0: RING_R0_CHUNKS,
-    r1: RING_R1_CHUNKS,
-    r2: RING_R2_CHUNKS,
-  };
+  private get radii() { return this.policy.radii; }
 
   private readonly resident = new Map<number, LoadedChunk>();
   private readonly displayed = new Set<number>();
@@ -116,6 +107,7 @@ export class ChunkStore {
     private readonly loader: ChunkLoader,
     private readonly events: ChunkStoreEvents = {},
     private readonly now: () => number = () => performance.now(),
+    private readonly policy: StreamingPolicy = DEFAULT_STREAMING_POLICY,
   ) {
     this.group.name = "chunks";
     // Chunk meshes carry world-space instance positions and never move, so
@@ -232,8 +224,8 @@ export class ChunkStore {
    * download must never retract unrelated, already-visible thumbnails. */
   private refreshDisplay(): void {
     for (const [id, chunk] of this.resident) {
-      const horizon = !this.manifest.raw.streaming ? Infinity : this.displayed.has(id)
-        ? THUMBNAIL_HIDE_RADIUS_CHUNKS : THUMBNAIL_SHOW_RADIUS_CHUNKS;
+      const horizon = !this.manifest.raw.streaming || this.policy.showResident ? Infinity : this.displayed.has(id)
+        ? this.policy.hideRadius : this.policy.showRadius;
       const distance = this.centers.get(id)!.distanceTo(this.lastUpdatePosition) / this.manifest.chunkWorldSize;
       const shown = distance <= horizon;
       chunk.mesh.visible = shown;
@@ -344,7 +336,9 @@ export class ChunkStore {
   /** Admission, not evict/reload: the same priority cut governs both residency
    * and requests. Reserve decoded RGBA + geometry even before uploads finish. */
   private startBudgetedLoads(): void {
-    const candidates = this.candidates.filter(c => c.ring === Ring.Load || c.ring === Ring.Prefetch)
+    const candidates = this.candidates.filter(c => c.ring === Ring.Load || c.ring === Ring.Prefetch ||
+      (this.policy.retainWarmChunks && c.ring === Ring.Keep &&
+        (this.resident.has(c.entry.chunk_id) || this.loading.has(c.entry.chunk_id))))
       .sort((a, b) => a.ring - b.ring || a.priority - b.priority);
     const allowed = new Set<number>();
     let bytes = 0, instances = 0;
@@ -354,7 +348,7 @@ export class ChunkStore {
       const cost = side * side * 4 + entry.meta_bytes + entry.n_occupied_voxels * 1024;
       // A distance prefix, not a knapsack: cheap farther chunks cannot jump
       // over a nearer dense chunk. Costs are reserved before any load finishes.
-      if (allowed.size >= STREAM_MAX_CHUNKS || bytes + cost > STREAM_MAX_BYTES || instances + entry.n_occupied_voxels > STREAM_MAX_INSTANCES) break;
+      if (allowed.size >= this.policy.maxChunks || bytes + cost > this.policy.maxBytes || instances + entry.n_occupied_voxels > this.policy.maxInstances) break;
       allowed.add(entry.chunk_id);
       bytes += cost; instances += entry.n_occupied_voxels;
     }
@@ -362,7 +356,9 @@ export class ChunkStore {
     for (const [id, controller] of this.loading) if (!allowed.has(id)) controller.abort();
     for (const candidate of candidates) {
       const id = candidate.entry.chunk_id;
-      if (!allowed.has(id) || this.resident.has(id) || this.loading.has(id) || !this.canAttempt(id)) continue;
+      // A warm chunk can finish an existing request, but retention alone
+      // must never initiate a download (including a failed request's retry).
+      if (candidate.ring === Ring.Keep || !allowed.has(id) || this.resident.has(id) || this.loading.has(id) || !this.canAttempt(id)) continue;
       if (this.loading.size >= MAX_CONCURRENT_CHUNK_LOADS) break;
       this.clearFailure(id, false);
       void this.beginLoad(candidate.entry);

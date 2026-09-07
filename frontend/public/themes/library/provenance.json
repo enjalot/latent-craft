@@ -1,0 +1,17 @@
+{
+  "created": "2026-09-07",
+  "tool": "Built-in image_gen",
+  "kind": "AI-generated artistic interpretation, not a photograph or architectural reconstruction",
+  "assets": [
+    {
+      "path": "reading-room.png",
+      "bytes": 2317089,
+      "prompt": "Use case: stylized-concept. Asset type: seamless 360-degree equirectangular panorama for an interactive 3D library skybox, landscape 2:1 aspect ratio. Primary request: a warm, atmospheric British Library-inspired reading room interior, clearly an artistic interpretation, not an exact reconstruction. The viewer floats at eye level in the center of a grand historic circular reading room with tall dark oak bookcases, leather bound volumes, softly lit upper galleries and a pale coffered domed ceiling. Quiet rich wood and brass, diffused amber reading lamps, soft natural daylight from high windows. Render as a refined believable architectural game environment with subtle painterly texture, not cartoon. Full spherical 360 x 180 equirectangular projection, left/right edges matching; horizon across the middle, floor nadir at bottom, ceiling zenith at top. Clear distant architecture, empty central space, no furniture or objects close to camera, no people. Restrained contrast so data cubes in front remain legible. No typography, labels, logos, watermark, UI or cubes."
+    },
+    {
+      "path": "oak.png",
+      "bytes": 2389728,
+      "prompt": "Use case: stylized-concept. Asset type: square seamless tileable diffuse/albedo wood grain texture for 3D game block borders and wooden library UI panels. Primary request: refined warm medium-dark quarter-sawn oak, subtle long straight grain running horizontally, warm brown with honey undertones, fine pores and a few delicate medullary flecks. Top down orthographic material scan, uniform flat neutral diffuse lighting, no baked shadows, no directional illumination, no vignette, no highlights. One continuous wood surface filling the entire square, no planks, no seams, no panels, no hardware, no knots, no cracks, no border, no labels or objects. Seamlessly repeatable on both axes. Grain should be visible and realistic but restrained enough for small carved wooden borders around book illustrations, not distressed rustic wood. High quality game texture."
+    }
+  ]
+}

@@ -3,6 +3,7 @@ import type { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChunkLoader, LoadedChunk } from "./ChunkLoader.ts";
 import { ChunkStore } from "./ChunkStore.ts";
+import { BL_STREAMING_POLICY, DEFAULT_STREAMING_POLICY, streamingPolicyFor } from "./StreamingPolicy.ts";
 import { Manifest } from "./Manifest.ts";
 import type { ManifestJson } from "../types.ts";
 import { HttpError } from "../net/fetchTyped.ts";
@@ -88,6 +89,122 @@ function loadedChunk(entry: Manifest["chunks"][number]): LoadedChunk {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+function compactManifest(coordinates: number[][]): Manifest {
+  const base = manifest(true).raw;
+  const chunks = coordinates.map(([cx, cy, cz]) => ({
+    ...base.chunks[0], cx, cy, cz, chunk_id: cx + 16 * (cy + 16 * cz),
+    atlas_size_px: 32, atlas_tiles_per_side: 1, meta_bytes: 32 + 4096 * 16,
+    postings: { path: `${cx}-${cy}-${cz}.bin`, bytes: 4, sha256: "x" },
+  }));
+  return new Manifest({ ...base,
+    world: { ...base.world, num_voxels: 256, chunks_per_axis: 16 },
+    atlas: { ...base.atlas, layout: "compact-occupied-v1" }, chunks,
+    streaming: { version: 1, hierarchy: "hierarchy.json" },
+    point_source: { ...base.point_source, n_points: chunks.length },
+    point_index: { ...base.point_index, bytes: chunks.length * 8 },
+    row_to_voxel: { ...base.row_to_voxel, bytes: chunks.length * 8 },
+  }, "/chunks", 80);
+}
+
+describe("BL preview residency", () => {
+  it("opts in only compact streaming BL, leaving MONET and legacy packs unchanged", () => {
+    const m = compactManifest([[0, 0, 0]]);
+    expect(streamingPolicyFor("bl-wide", m)).toBe(BL_STREAMING_POLICY);
+    expect(streamingPolicyFor(undefined, m)).toBe(DEFAULT_STREAMING_POLICY);
+    expect(streamingPolicyFor("bl-wide", manifest(true))).toBe(DEFAULT_STREAMING_POLICY);
+    const nonCompact = new Manifest({ ...m.raw, atlas: { ...m.raw.atlas, layout: undefined } }, "/chunks", 80);
+    expect(streamingPolicyFor("bl-wide", nonCompact)).toBe(DEFAULT_STREAMING_POLICY);
+    expect(BL_STREAMING_POLICY.maxBytes).toBe(DEFAULT_STREAMING_POLICY.maxBytes);
+  });
+
+  it("shows each finished chunk immediately, retaining it across the load boundary without fetching cold warm-band chunks", async () => {
+    const m = compactManifest([[0, 0, 0], [4, 0, 0], [10, 0, 0]]);
+    const complete = new Map<number, (chunk: LoadedChunk) => void>();
+    const loader = { load: vi.fn(entry => new Promise<LoadedChunk>(resolve => complete.set(entry.chunk_id, resolve))),
+      unload: vi.fn(), dispose: vi.fn() } as unknown as ChunkLoader;
+    const store = new ChunkStore(m, loader, {}, undefined, BL_STREAMING_POLICY);
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.copy(m.chunkCenterWorld(0, new THREE.Vector3()));
+    store.updateCamera(camera, true);
+    expect(vi.mocked(loader.load).mock.calls.map(([c]) => c.chunk_id)).toEqual([0, 4]);
+    const chunk = loadedChunk(m.chunks[1]);
+    complete.get(4)!(chunk);
+    await Promise.resolve(); await Promise.resolve();
+    expect(store.stats()).toMatchObject({ resident: 1, loading: 1 });
+    expect(chunk.mesh.visible).toBe(true); // No wait for any other chunk.
+    expect(chunk.containers.setDetailVisible).toHaveBeenLastCalledWith(false);
+    // Chunk 10 is now in the keep-only band: do not fetch it. Chunk 4 stays
+    // resident/visible beyond the 5-chunk loading radius when moving back.
+    camera.position.x += 4.5 * m.chunkWorldSize;
+    store.updateCamera(camera, true);
+    expect(loader.load).toHaveBeenCalledTimes(2);
+    camera.position.x -= 5.7 * m.chunkWorldSize;
+    store.updateCamera(camera, true); // chunk 4 is 5.2 chunks away
+    expect(chunk.mesh.visible).toBe(true);
+    expect(loader.unload).not.toHaveBeenCalled();
+    camera.position.x += .3 * m.chunkWorldSize;
+    store.updateCamera(camera, true);
+    expect(loader.load).toHaveBeenCalledTimes(2);
+    camera.position.x -= 1.2 * m.chunkWorldSize;
+    store.updateCamera(camera, true); // now 6.1: evict
+    expect(loader.unload).toHaveBeenCalledWith(chunk);
+    store.dispose();
+  });
+
+  it("streams more than 96 chunks in batches of at most six, not one blocking whole-pack load", async () => {
+    const coords = Array.from({ length: 125 }, (_, i) => [i % 5, Math.floor(i / 5) % 5, Math.floor(i / 25)]);
+    const m = compactManifest(coords);
+    const loader = { load: vi.fn(async entry => loadedChunk(entry)), unload: vi.fn(), dispose: vi.fn() } as unknown as ChunkLoader;
+    const store = new ChunkStore(m, loader, {}, undefined, BL_STREAMING_POLICY);
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.copy(m.chunkCenterWorld(2 + 16 * (2 + 16 * 2), new THREE.Vector3()));
+    store.updateCamera(camera, true);
+    expect(loader.load).toHaveBeenCalledTimes(6);
+    expect(store.stats().resident).toBe(0);
+    for (let batch = 0; batch < 25; batch++) {
+      await Promise.resolve(); await Promise.resolve();
+      store.updateCamera(camera);
+      expect(store.stats().loading).toBeLessThanOrEqual(6);
+    }
+    expect(store.stats().resident).toBe(125);
+    expect(store.meshes.every(mesh => mesh.visible)).toBe(true);
+    expect(loader.unload).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it.each([
+    { maxChunks: 1 }, { maxBytes: 32 * 32 * 4 + 65568 + 1024 }, { maxInstances: 1 },
+  ])("preserves nearest-first admission under a tighter cap %j", async cap => {
+    const m = compactManifest([[0, 0, 0], [1, 0, 0], [4, 0, 0]]);
+    const loader = { load: vi.fn(async entry => loadedChunk(entry)), unload: vi.fn(), dispose: vi.fn() } as unknown as ChunkLoader;
+    const store = new ChunkStore(m, loader, {}, undefined, { ...BL_STREAMING_POLICY, ...cap });
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.copy(m.chunkCenterWorld(0, new THREE.Vector3()));
+    store.updateCamera(camera, true);
+    await Promise.resolve(); await Promise.resolve();
+    store.updateCamera(camera);
+    expect(vi.mocked(loader.load).mock.calls.map(([c]) => c.chunk_id)).toEqual([0]);
+    store.dispose();
+  });
+
+  it("admits a newly nearby chunk before retaining a farther warm chunk", async () => {
+    const m = compactManifest([[0, 0, 0], [10, 0, 0]]);
+    const loader = { load: vi.fn(async entry => loadedChunk(entry)), unload: vi.fn(), dispose: vi.fn() } as unknown as ChunkLoader;
+    const store = new ChunkStore(m, loader, {}, undefined, { ...BL_STREAMING_POLICY, maxChunks: 1 });
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.copy(m.chunkCenterWorld(0, new THREE.Vector3()));
+    store.updateCamera(camera, true);
+    await Promise.resolve(); await Promise.resolve();
+    camera.position.x += 5.2 * m.chunkWorldSize;
+    store.updateCamera(camera, true);
+    await Promise.resolve(); await Promise.resolve();
+    expect([...store.residentChunkIds]).toEqual([10]);
+    expect(vi.mocked(loader.load).mock.calls.map(([c]) => c.chunk_id)).toEqual([0, 10]);
+    expect(loader.unload).toHaveBeenCalledOnce();
+    store.dispose();
+  });
 });
 
 describe("ChunkStore scheduling", () => {

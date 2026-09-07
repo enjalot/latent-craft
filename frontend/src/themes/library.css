@@ -1,0 +1,84 @@
+/* Dataset-independent skin. Never tint image elements, canvases or density
+ * signals: only the surrounding furniture changes. */
+:root[data-theme="library"] {
+  --hud-font: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+  --hud-accent: #c4a46a;
+  --hud-accent-bright: #efdaa6;
+  --hud-line: rgba(211, 177, 117, .56);
+  --hud-line-soft: rgba(211, 177, 117, .23);
+  --hud-glow: rgba(111, 73, 35, .18);
+  --hud-ground: rgba(44, 27, 17, .95);
+  --hud-ground-inset: rgba(23, 17, 12, .87);
+  --hud-well: rgba(22, 16, 11, .74);
+  --hud-text: #f0e4cd;
+  --hud-text-dim: #c7b696;
+  --hud-title: #efdaa6;
+}
+
+[data-theme="library"] .hud-panel {
+  background: linear-gradient(90deg, rgba(31, 18, 10, .89), rgba(48, 30, 17, .85)),
+    url('/themes/library/oak.png') center / 420px 420px;
+  border: 2px solid #987345;
+  border-radius: 3px;
+  box-shadow: 0 3px 16px #0008, inset 0 1px 0 #e8c78970,
+    inset 0 0 0 3px #1f150c, inset 0 0 0 4px #ac885844;
+  backdrop-filter: none;
+}
+[data-theme="library"] .hud-panel--inset {
+  background: var(--hud-ground-inset);
+}
+[data-theme="library"] .hud-panel__scan { display: none; }
+[data-theme="library"] .hud-panel__corner {
+  width: 4px;
+  height: 4px;
+  border: 1px solid #2f1c0b;
+  border-radius: 50%;
+  background: #c4a46a;
+  box-shadow: inset 0 1px 0 #f1d5a2;
+}
+[data-theme="library"] .hud-panel__corner--tl { top: 2px; left: 2px; }
+[data-theme="library"] .hud-panel__corner--tr { top: 2px; right: 2px; }
+[data-theme="library"] .hud-panel__corner--bl { bottom: 2px; left: 2px; }
+[data-theme="library"] .hud-panel__corner--br { bottom: 2px; right: 2px; }
+[data-theme="library"] .hud-title {
+  font-size: 11px;
+  letter-spacing: .065em;
+  text-shadow: 0 1px 1px #000;
+}
+[data-theme="library"] .hud-title-bar {
+  border-image: none;
+  border-bottom-color: var(--hud-line-soft);
+}
+[data-theme="library"] .hud-readout { text-shadow: none; }
+[data-theme="library"] .hud-button {
+  background: linear-gradient(#654c31, #39291a);
+  border: 1px solid #a38556;
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 #e4c99138, 0 1px 2px #0005;
+  text-transform: none;
+  letter-spacing: .035em;
+  font-size: 11px;
+}
+[data-theme="library"] .hud-button:hover {
+  background: linear-gradient(#81643f, #4c3823);
+  color: #fff3d8;
+}
+[data-theme="library"] .hud-button:disabled { opacity: .5; cursor: default; }
+[data-theme="library"] .hud-select { font-family: Georgia, serif; }
+[data-theme="library"] .hud-select option { background: #2c2015; }
+[data-theme="library"] input { accent-color: #c4a46a; }
+[data-theme="library"] input[type="search"] { font-family: Georgia, serif; }
+[data-theme="library"] input::placeholder { color: #baa88a; opacity: 1; }
+[data-theme="library"] .hud-panel a { color: #f0d69b; }
+[data-theme="library"] .hud-slot {
+  box-shadow: inset 0 1px 2px #0008;
+  border-color: #876840;
+}
+[data-theme="library"] .hud-slot:hover,
+[data-theme="library"] .hud-row:hover { background: #d5b47816; }
+/* The equipped teal signal is retained, with less decorative bloom. */
+[data-theme="library"] .hud-slot.is-equipped { box-shadow: inset 0 0 0 1px var(--hud-signal-teal); }
+[data-theme="library"] .hud-thumb { background: #21180f; border-color: #997343; }
+[data-theme="library"] .hud-scroll { scrollbar-color: #987345 #20160e; }
+[data-theme="library"] .hud-scroll::-webkit-scrollbar-track { background: #20160e; }
+[data-theme="library"] .hud-scroll::-webkit-scrollbar-thumb { background: #987345; }
