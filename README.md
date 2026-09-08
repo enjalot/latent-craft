@@ -32,8 +32,10 @@ The default is `monet-sscd-512`, using hierarchical proxy bricks and paged
 byte-range data. See [streaming architecture and 100M limits](docs/streaming-architecture.md)
 for formats, working-set budgets, build commands, and measured verification scope.
 
-The [103.8M MONET release](docs/monet-104m-4m-release.md) uses the random
-4M-trained CLIP basemap heads for both 2D and 3D, with 512³ voxel resolution.
+The latest [103.8M MONET map](docs/full-corpus-monet.md) uses the random
+6M-trained DINOv2/PCA-768 basemap heads for both 2D and 3D, with 512³ voxel
+resolution. Select `monet-dino-basemap-full-6m-pca768-512` in the dataset picker
+or URL query. The earlier 4M-trained CLIP map remains available separately.
 
 ## Run locally
 
