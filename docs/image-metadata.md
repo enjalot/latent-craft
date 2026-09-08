@@ -28,10 +28,11 @@ and publishes only after SQLite's integrity check. The service opens SQLite
 read-only, binds `127.0.0.1:8805`, and imports no ML libraries. Vite proxies
 `/api/metadata`; `LSV_METADATA_PROXY_TARGET` overrides that local target.
 
-This is a serialized local preview service, not a multi-user production server.
-Production needs explicit routing to the metadata service and deployment of the
-matching sidecar. Do not route an unrelated database behind an existing release
-URL. The SQLite database must not be placed in the browser's static asset tree.
+The standalone HTTP server is a serialized local preview service. The BL Space
+wraps the same store in bounded FastAPI routes, with a dedicated single thread
+owning SQLite and cancellation-safe admission. Its matching sidecar is pinned
+and checksum-verified independently from the model. Do not route an unrelated
+database behind an existing release URL or put SQLite in the static asset tree.
 
 ## Wire contract
 

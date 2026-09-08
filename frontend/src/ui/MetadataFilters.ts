@@ -1,4 +1,4 @@
-import { MetadataClient, type FilterQuery, type MatchSnapshot } from "../metadata/MetadataClient.ts";
+import { MetadataClient, MetadataUnavailable, type FilterQuery, type MatchSnapshot } from "../metadata/MetadataClient.ts";
 
 export class MetadataFilters {
   readonly element = document.createElement("section");
@@ -9,6 +9,7 @@ export class MetadataFilters {
   private status = document.createElement("p");
   private controls = new Map<string, HTMLInputElement | HTMLSelectElement>();
   private ready = false;
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private bookLabel = document.createElement("div");
   private bookMatches = document.createElement("div");
   constructor(private readonly client: MetadataClient, private readonly apply: (snapshot: MatchSnapshot | null) => void) {
@@ -77,7 +78,14 @@ export class MetadataFilters {
       const note = document.createElement("p"); note.textContent = `${schema.note} “Hide voxels” also applies to matching counts; lower that threshold if a small book selection looks empty. Gray faces have no matching atlas representative; hover to load a matching image.`;
       note.style.opacity = ".7"; this.form.append(apply, clear, note); this.ready = true;
       this.status.textContent = "All images. Filters apply to counts, X-ray and mining; saved inventory is unchanged.";
-    } catch (error) { if (!this.lifetime.signal.aborted) this.status.textContent = String(error); }
+    } catch (error) {
+      if (this.lifetime.signal.aborted) return;
+      this.status.textContent = String(error);
+      if (error instanceof MetadataUnavailable && error.status === 503) {
+        this.status.textContent = "Book metadata is warming; filters will become available automatically.";
+        this.retryTimer = setTimeout(() => { if (!this.lifetime.signal.aborted) void this.init(); }, 5000);
+      }
+    }
   }
   async setQuery(query: FilterQuery): Promise<void> {
     if (!this.ready) return;
@@ -107,5 +115,5 @@ export class MetadataFilters {
       this.status.textContent = `${result.total.toLocaleString()} matching images · ${(performance.now() - start).toFixed(0)} ms · ${(result.bits.buffer.byteLength / 1024).toFixed(0)} KiB decoded filter data. Inventory unchanged.`;
     } catch (error) { if (!request.signal.aborted) this.status.textContent = `${String(error)} Previous filter remains active.`; }
   }
-  dispose(): void { this.lifetime.abort(); this.request?.abort(); this.lookup?.abort(); this.element.remove(); }
+  dispose(): void { clearTimeout(this.retryTimer); this.lifetime.abort(); this.request?.abort(); this.lookup?.abort(); this.element.remove(); }
 }

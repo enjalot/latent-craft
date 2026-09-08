@@ -1,0 +1,6 @@
+.git
+*.index
+*.bin
+*.u32
+*.npy
+*.safetensors

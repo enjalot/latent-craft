@@ -11,6 +11,12 @@ export interface MetadataSchema {
     { kind: "range"; min: number; max: number } | { kind: "lookup" }))[];
 }
 
+export class MetadataUnavailable extends Error {
+  constructor(readonly status: number) {
+    super(`Metadata unavailable (${status}). Map and inventory still work.`);
+  }
+}
+
 /** Immutable exact match snapshot. No per-image strings or full point table. */
 export class MatchSnapshot {
   readonly counts = new Map<number, Map<number, number>>();
@@ -60,7 +66,7 @@ export class MetadataClient {
   constructor(readonly endpoint: string, private readonly manifest: Manifest) {}
   private async json(path: string, signal?: AbortSignal): Promise<unknown> {
     const response = await fetch(`${this.endpoint}${path}`, { signal });
-    if (!response.ok) throw new Error(`Metadata unavailable (${response.status}). Map and inventory still work.`);
+    if (!response.ok) throw new MetadataUnavailable(response.status);
     return response.json();
   }
   async schema(signal?: AbortSignal): Promise<MetadataSchema> {

@@ -5,6 +5,12 @@ export default defineConfig(({ mode }) => {
   const dataTarget = env.LSV_DATA_PROXY_TARGET || "http://localhost:8802";
   return {
     root: ".",
+    plugins: [{ name: "publication-profile", generateBundle() {
+      this.emitFile({ type: "asset", fileName: "build-profile.json", source: JSON.stringify({
+        dataset: env.VITE_DEMO_DATASET || null, dataOrigin: env.VITE_DATA_ORIGIN || "",
+        thumbnailPack: env.VITE_THUMB_PACK_URL || "", monetThumbnailPack: env.VITE_MONET_THUMB_PACK_URL || "",
+      }) });
+    } }],
     server: {
       host: true,
       port: 5300,
@@ -18,6 +24,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         "/api/metadata": env.LSV_METADATA_PROXY_TARGET || "http://127.0.0.1:8805",
         "/api/bl": env.LSV_BL_SEARCH_PROXY_TARGET || "http://127.0.0.1:8804",
+        "/api/monet": env.LSV_MONET_SEARCH_PROXY_TARGET || "http://127.0.0.1:8807",
         "/api/explore": env.LSV_SEARCH_PROXY_TARGET || "http://127.0.0.1:8803",
         "/chunks": dataTarget,
         // BL thumbnails are static files; MONET thumbnails use the data
@@ -25,6 +32,7 @@ export default defineConfig(({ mode }) => {
         "/thumbs": dataTarget,
         "/thumb-packs": dataTarget,
         "/minimap": dataTarget,
+        "/points": dataTarget,
         // Per-row original-image lookup used by the lightbox.
         "/meta": dataTarget,
       },

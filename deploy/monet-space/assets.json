@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "ann_to_row.u32",
+      "bytes": 415267000,
+      "sha256": "3e2f4ab547bfaed1767c189980ca61ec9bfe30bf7a7a7df9de8e08813fe7f061"
+    },
+    {
+      "path": "clip-ivfpq.index",
+      "bytes": 7483751844,
+      "sha256": "d60ac1056a6493938ea1e40ad668db443f9c53c47f3a8a76c245afac7cc21b29"
+    },
+    {
+      "path": "identity-report.json",
+      "bytes": 531,
+      "sha256": "f2f5cf9574ebd35df283d637c1e2e1b6c5fd1e9046fe121ab391c1fde5807fde"
+    },
+    {
+      "path": "point_index.bin",
+      "bytes": 519083750,
+      "sha256": "43d723994c6645eece47b990c4ab9519f7ede3622bd825c078639563cf962b0b"
+    },
+    {
+      "path": "row_to_voxel.bin",
+      "bytes": 415267000,
+      "sha256": "ca437bba419cc933455eefbf2af0b797657addce8b2d886db574e7f8f94d6c5f"
+    },
+    {
+      "path": "service.json",
+      "bytes": 393,
+      "sha256": "a2e2401f2820684942cbd78d2621e5e349d86071bc2275da978af0ba0da92d07"
+    },
+    {
+      "path": "text-check.npy",
+      "bytes": 2176,
+      "sha256": "f64750327b45d59b4346fb492c3610336aa19bc62079ea22f7b6443e5198ca4c"
+    },
+    {
+      "path": "text-model/config.json",
+      "bytes": 957,
+      "sha256": "f005e6e98ba761488a3803f92f677a1c29915a26feb5309291060e7917d3070e"
+    },
+    {
+      "path": "text-model/model.safetensors",
+      "bytes": 253735728,
+      "sha256": "714c469bb150c7fa880a15420523dd866d3ab72875221ab2f97297a75ab8fdfb"
+    },
+    {
+      "path": "text-model/tokenizer.json",
+      "bytes": 3642073,
+      "sha256": "6d9109cc838977f3ca94a379eec36aecc7c807e1785cd729660ca2fc0171fb35"
+    },
+    {
+      "path": "text-model/tokenizer_config.json",
+      "bytes": 349,
+      "sha256": "19cf05e7378efc6096e8f1ed54c0a87855802f7d4f85610a66af8b821b5bd6a3"
+    }
+  ],
+  "base_url": "https://huggingface.co/datasets/enjalot/latent-craft-monet-search/resolve/7ff7d34e32fd10cab1a78e02dec7936c8c1cfdb1/monet-clip-search-20260908c"
+}

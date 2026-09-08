@@ -1,77 +1,67 @@
-# Which embedding am I looking at?
+# Dataset and model provenance
 
-Audit date: 2026-09-05. The existing MONET maps use **CLIP ViT-B/32**, not DINO.
-British Library uses **SigLIP 2**. A MONET draw arm describes the sampling rule;
-it does not describe the feature space UMAP projects. In particular, “SSCD draw”
-does not mean “UMAP of SSCD embeddings.”
+Dataset names identify the embedding model separately from the sampling rule
+and projection. An “SSCD draw” selects images using SSCD-derived sampling; the
+legacy MONET draw maps still project CLIP vectors, not SSCD vectors.
 
-| Stable dataset key | UMAP embedding | Rows | Occupied voxels at 160³ |
-| --- | --- | ---: | ---: |
-| `bl-160` | SigLIP 2, 1152 dimensions | 1,080,814 | 14,688 |
-| `monet-random-160` | CLIP ViT-B/32, 512 dimensions | 2,000,000 | 23,779 |
-| `monet-sscd-160` | CLIP ViT-B/32, 512 dimensions | 2,000,000 | 29,030 |
-| `monet-annfaiss-160` | CLIP ViT-B/32, 512 dimensions | 2,000,000 | 27,848 |
-| `monet-theirfaiss-160` | CLIP ViT-B/32, 512 dimensions | 2,000,000 | 26,933 |
+| Dataset profile | Embedding | Projection | Images |
+| --- | --- | --- | ---: |
+| `bl-160` | Google SigLIP 2 SO400M patch16-256, 1152D | Independent 2D / 3D UMAP | 1,080,814 |
+| MONET full CLIP, 512³ | OpenAI CLIP ViT-B/32, 512D | Paired 4M-trained basemap heads | 103,816,750 |
+| MONET full DINO, 512³ | DINOv2 ViT-g/14, centered PCA to 768D, then L2 normalization | Paired 6M-trained basemap heads | 103,816,750 |
+| MONET random / SSCD / ANN draw arms | OpenAI CLIP ViT-B/32, 512D | Independent 2D / 3D UMAP | 2,000,000 each |
 
-The picker and HUD show the embedding name. URL keys and points-table IDs remain
-unchanged so existing links, inventory identities and metadata endpoints keep
-working.
+The full-corpus row layout is the initial 19,344,847-row pool followed by
+84,471,903 complementary rows. Each map has a separate geometric address table;
+sharing thumbnail references does not make CLIP and DINO voxel IDs interchangeable.
+See [full-corpus construction and audit](full-corpus-monet.md).
 
-## The requested 2M CLIP / SSCD / 0.6dev map is already live
+## Search identity
 
-The retained `?dataset=monet-sscd-160` selects this complete chain:
+BL text encoding uses Google's SigLIP 2 checkpoint
+`e8708ab72d125807e45b36fb7d4e0aacbb59f379`. The exported text tower is checked
+against a saved query vector before serving its SQ8 index.
 
-1. Pool CLIP features: `/data2/monet/pool-20m/clip512.f32.npy`.
-2. Fixed draw IDs: `/data2/monet/draws/sscd.idx.npy`.
-3. Row-aligned UMAP input: `/data2/monet/draws/sscd-clip.f32.npy`,
-   shape `(2_000_000, 512)`, float32.
-4. Completed 2D and 3D fits:
-   `/data/latent-scope-3d/umap/monet-sscd/umap-001/`.
-5. Minimap: `/data/latent-scope-3d/minimap/monet-sscd/`.
-6. Active immutable 160³ streaming pack:
-   `/data/latent-scope-3d/chunks/monet-sscd-160-stream-20260904b/`.
+MONET text encoding uses OpenAI CLIP ViT-B/32 revision
+`3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268`. The existing full-corpus IVF4096/PQ64x8
+index uses a different row order from the maps. Its publisher ANN IDs are joined
+through source shard + original ID and perceptual hash. All 198 collided ANN
+entries were resolved by exact stored IVF/PQ code comparison against the source
+vectors; the final table is a one-to-one permutation of all 103,816,750 map rows.
+Another 1,026 spread/random source-vector code checks agreed. The search worker
+and client are bound to the compact 4M CLIP map's row-to-voxel SHA-256.
 
-The fit metadata records cosine distance, 25 neighbors, `min_dist=0`, seed 42,
-and independent 2D / 3D fits. Recorded runtimes were 644.16 and 668.63 seconds.
-No duplicate fit or pack was launched for the naming change.
+This index must not be attached to the DINO map without a separately verified
+map-address binding. CLIP similarity and DINO neighborhoods are different
+representations even when the image IDs overlap.
 
-The September 5 follow-up makes `monet-sscd-512` the default. It reuses the
-same coordinates, draw, points table, embedding, and 2D fit, with 304,083
-occupied voxels in 1,608 chunks at 512³. The immutable release is
-`/data/latent-scope-3d/chunks/monet-sscd-512-stream-20260905a/`.
-See [512 build and sharp-band measurements](sscd-512-sharp-band.md).
+## Image origins and rights
 
-## Model evidence and version boundary
+BL imagery comes from British Library Labs via
+[Daniel van Strien's dataset mirror](https://huggingface.co/datasets/biglam/british-library-book-images).
+Its original image release carries the Public Domain Mark / no known copyright
+restrictions. On-demand book metadata preserves source subset and row pointers,
+rather than guessing identity from an image filename.
 
-- The local pool ingestion script,
-  `../latent-basemap/experiments/sandbox/monet_download_pool_clip.py`, explicitly
-  reads MONET's `embedding_clip-vit-base-patch32` column. This establishes
-  **CLIP ViT-B/32**; the dimension alone would not establish the model.
-- `../latent-basemap/experiments/sandbox/monet_assemble_draw.py` gathers
-  `clip512[idx]` into each `{arm}-clip.f32.npy`. Existing saved draw IDs, not a
-  newly generated sample, define the row order.
-- Every MONET run's `meta.json` under `/data/latent-scope-3d/umap/` points to
-  the matching `*-clip.f32.npy` input and records 512 source dimensions.
-- `/data/latent-basemap/substrates/bl-siglip2-1m/manifest.json` identifies
-  “siglip2 (as shipped with biglam/british-library-book-images)” and 1152
-  dimensions. It does not identify a narrower checkpoint, so the label does not
-  invent one.
-- All five runs record `umap_version: "0.6.0"` and the development environment
-  `/data/latent-basemap/umap06dev-env`, with recorded source revision `67ca365`.
-  Importing that environment today confirms version `0.6.0`. **The revision is
-  historical recorded provenance, not independently reverified:** the old fit
-  helper hardcodes that string, and the local source-clone path in the installed
-  package's `direct_url.json` no longer exists. This is the project's “0.6dev”
-  installation, not a newly installed PyPI release.
+MONET comes from [Jasper's dataset](https://huggingface.co/datasets/jasperai/monet),
+whose release is labeled Apache-2.0. The collection combines web and synthetic
+images. Individual source-image rights remain with their owners; a dataset
+release license is not a blanket new license for every displayed image.
 
-## Verification performed
+The full-corpus thumbnail store covers the complete published row layout.
+Original URL metadata currently covers only the initial pool. Complement rows
+use their thumbnail fallback; unavailable originals are not replaced by guessed
+URLs or different images.
 
-For all five maps, checked input array dimensions, finite 2D/3D coordinates,
-points-table row counts, 160³ manifest resolution, summed chunk point counts,
-and existence of the minimap manifest.
+The CLIP text export retains its MIT license; the SigLIP export retains
+Apache-2.0. Model notices, dependency notices and generated-theme provenance
+are separate from the as-yet-unspecified project source license.
 
-For SSCD, additionally checked all 2M points-table `pool_row` values against
-`sscd.idx.npy`, dense ordered `row_id`s, 101 spread embedding-row probes against
-the corresponding pool rows, and every atlas/summary/postings file's declared
-byte size across all 229 chunks. Embedding probes are a sampled alignment check,
-not a full 4GB source checksum or an independent rerun of UMAP.
+## Legacy UMAP runs
+
+The retained 2M MONET draw fits recorded cosine distance, 25 neighbors,
+`min_dist=0`, seed 42 and independent 2D / 3D coordinates. Their saved environment
+reports UMAP 0.6.0 from the project's development installation. Historical helper
+revision `67ca365` was recorded by the fit helper, not independently reconstructed
+from a surviving source checkout. New basemap releases instead carry explicit
+checkpoint/input receipts and sampled CPU re-inference checks.

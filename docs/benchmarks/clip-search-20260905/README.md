@@ -1,7 +1,9 @@
 # Disposable search pilot artifacts
 
 These are the exact service, Dockerfile and Modal adapters used for the
-September 5 comparison in [the review](../../clip-search-hosting-review.md).
+September 5 comparison. Current runtime guidance lives in
+[MONET disk-search deployment](../../monet-demo.md); chronological reviews are
+kept separately from the publication source.
 They are benchmark artifacts, **not a production search implementation**.
 The accompanying JSON files contain aggregate measurements and sample IDs,
 not tokens. Pilot resources were temporary; their URLs are not live APIs.

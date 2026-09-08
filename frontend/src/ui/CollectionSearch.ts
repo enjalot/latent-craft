@@ -1,24 +1,9 @@
 import type { SearchResult } from "../search/CompareClient.ts";
 import { applyHudPanelChrome, applyHudTitle } from "./hudPanel.ts";
 import { setThumbnailSource } from "../streaming/ThumbnailSource.ts";
+import { BL_COLLECTION, MONET_CLIP_COLLECTION, parseCollectionResults } from "../search/CollectionProfile.ts";
 
-export const BL_MAP_RELEASE = "bl-20260907a";
-export function parseBLResults(value: unknown): SearchResult[] {
-  const body = value as { dataset?: string; release?: string; results?: SearchResult[] };
-  if (body?.dataset !== "bl-160" || body.release !== BL_MAP_RELEASE || !Array.isArray(body.results) || body.results.length > 24) throw new Error("Search response belongs to a different map");
-  const seen = new Set<number>();
-  for (const r of body.results) {
-    if (!r || ![r.row, r.chunk, r.local, r.thumb].every(Number.isSafeInteger) || r.row < 0 || r.row >= 1080814 ||
-      r.chunk < 0 || r.chunk >= 1000 || r.local < 0 || r.local >= 4096 || r.thumb < 0 || !Number.isFinite(r.score) ||
-      typeof r.thumbUrl !== "string" || !/^\/thumbs\/bl\/(covers|medium|embellishments|plates)\/\d{8}\.webp$/.test(r.thumbUrl) || seen.has(r.row)) throw new Error("Invalid BL search result");
-    seen.add(r.row);
-    const id = Number(r.thumbUrl!.slice(-13, -5));
-    if (id !== r.thumb) throw new Error("Thumbnail identity mismatch");
-  }
-  return body.results;
-}
-
-export class BLSearch {
+export class CollectionSearch {
   private root = document.createElement("section");
   private controller: AbortController | null = null;
   private generation = 0;
@@ -27,7 +12,8 @@ export class BLSearch {
   private matches: ((row: number) => boolean) | null = null;
   private clearResults = () => {};
   setMetadataFilter(matches: ((row: number) => boolean) | null): void { this.matches = matches; this.clearResults(); }
-  constructor(container: HTMLElement, actions: { hover: (r: SearchResult | null) => void; select: (r: SearchResult) => void | Promise<void>; clear: () => void }) {
+  constructor(container: HTMLElement, actions: { hover: (r: SearchResult | null) => void; select: (r: SearchResult) => void | Promise<void>; clear: () => void }, profileKey: "bl" | "monet" = "bl") {
+    const profile = profileKey === "monet" ? MONET_CLIP_COLLECTION : BL_COLLECTION;
     this.root.className = "ls-bl-search";
     Object.assign(this.root.style, { padding: "10px", pointerEvents: "auto", fontSize: "11px", flexShrink: "1", minHeight: "42px", minWidth: "0", overflow: "clip", boxSizing: "border-box", display: "flex", flexDirection: "column" });
     applyHudPanelChrome(this.root);
@@ -35,21 +21,21 @@ export class BLSearch {
     const bodyPanel = document.createElement("div");
     Object.assign(bodyPanel.style, { display: "flex", flexDirection: "column", minHeight: "0", overflow: "clip" });
     const heading = document.createElement("button"); heading.type = "button";
-    heading.textContent = "▾ Search the collection · SigLIP 2"; applyHudTitle(heading);
+    heading.textContent = `▾ Search the collection · ${profile.model}`; applyHudTitle(heading);
     Object.assign(heading.style, { background: "none", border: "0", padding: "0", textAlign: "left", cursor: "pointer", flexShrink: "0" });
     heading.setAttribute("aria-expanded", "true");
     heading.addEventListener("click", () => {
       const open = heading.getAttribute("aria-expanded") !== "true";
       heading.setAttribute("aria-expanded", String(open)); bodyPanel.style.display = open ? "flex" : "none";
-      heading.textContent = `${open ? "▾" : "▸"} Search the collection · SigLIP 2`;
+      heading.textContent = `${open ? "▾" : "▸"} Search the collection · ${profile.model}`;
     });
     const form = document.createElement("form"), input = document.createElement("input"), button = document.createElement("button");
     form.style.flexShrink = "0";
-    input.type = "search"; input.maxLength = 400; input.placeholder = "a sailing ship, a botanical illustration…";
-    input.setAttribute("aria-label", "Search British Library images");
+    input.type = "search"; input.maxLength = 400; input.placeholder = profile.placeholder;
+    input.setAttribute("aria-label", `Search images with ${profile.model}`);
     Object.assign(input.style, { width: "100%", boxSizing: "border-box", margin: "10px 0 8px", padding: "8px", background: "var(--hud-ground-inset)", color: "var(--hud-text)", border: "1px solid var(--hud-line)" });
     button.type = "submit"; button.textContent = "Search"; button.className = "hud-button";
-    const backend = document.createElement("span"); backend.textContent = "FAISS SQ8"; backend.style.opacity = ".65";
+    const backend = document.createElement("span"); backend.textContent = profile.backendLabel; backend.style.opacity = ".65";
     const bar = document.createElement("div"); Object.assign(bar.style, { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }); bar.append(button, backend);
     const help = "Hover to aim; click to collect the image and fly to its block.";
     const status = document.createElement("p"); status.setAttribute("role", "status"); status.textContent = help;
@@ -57,7 +43,7 @@ export class BLSearch {
     status.style.flexShrink = "0";
     const checkStatus = async () => {
       try {
-        const response = await fetch("/api/bl/status", { signal: this.statusController.signal, cache: "no-store" });
+        const response = await fetch(`${profile.endpoint}/status`, { signal: this.statusController.signal, cache: "no-store" });
         if (!response.ok) return;
         const state = await response.json();
         if (this.statusController.signal.aborted) return;
@@ -84,12 +70,12 @@ export class BLSearch {
       this.controller = new AbortController(); status.textContent = "Searching…";
       const started = performance.now();
       try {
-        const response = await fetch("/api/bl/search", { method: "POST", signal: this.controller.signal,
+        const response = await fetch(`${profile.endpoint}/search`, { method: "POST", signal: this.controller.signal,
           headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query, backend: "faiss" }) });
         const body = await response.json();
         if (generation !== this.generation) return;
         if (!response.ok) throw new Error(body.detail || body.error || `Search HTTP ${response.status}`);
-        const candidates = parseBLResults(body);
+        const candidates = parseCollectionResults(body, profile);
         const hits = this.matches ? candidates.filter(hit => this.matches!(hit.row)) : candidates;
         results.style.flexBasis = hits.length ? "230px" : "0px";
         if (body.query !== query || ![body.embed_ms, body.search_ms].every(v => Number.isFinite(v) && v >= 0)) throw new Error("Invalid search response");

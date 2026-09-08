@@ -27,6 +27,9 @@ credentials*.json
 *.pth
 *.bin
 *.ktx2
+*.u32
+*.blob
+*.offsets.u64
 *.sqlite
 *.sqlite3
 *.db

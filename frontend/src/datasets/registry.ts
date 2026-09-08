@@ -67,7 +67,7 @@ export interface DatasetConfig {
    */
   thumbsBasePath?: string;
   pointMetaFile?: { path: string; bytes: number; rows: number };
-  searchProfile?: "bl-siglip2-20260907a" | "clip-training";
+  searchProfile?: "bl-siglip2-20260907a" | "clip-training" | "clip-full-4m-20260906a";
   streamingProfile?: "bl-wide";
   /** Optional release-bound metadata/filter API; absent means no facets. */
   metadataEndpoint?: string;
@@ -79,12 +79,24 @@ const ALL_DATASETS: Record<string, DatasetConfig> = {
     label: "MONET · DINOv2 ViT-g/14 · PCA-768 · 6M head · 103.82M · 512³",
     pointsId: "monet-dino-basemap-full-6m-pca768-20260908a",
     minimapPath: "/minimap/monet-dino-basemap-full-6m-pca768-20260908a",
+    pointMetaFile: { path: "/points/monet-clip-basemap-pool-20260905a/point_meta.bin", rows: 19344847, bytes: 1887424406 },
   },
   "monet-clip-basemap-full-4m-512": {
-    path: "/chunks/monet-clip-basemap-full-4m-20260906a-512-stream",
+    searchProfile: "clip-full-4m-20260906a",
+    path: "/chunks/monet-clip-basemap-full-4m-20260906a-512-web-20260908b",
     label: "MONET · CLIP ViT-B/32 · 4M head · 103.82M · 512³",
     pointsId: "monet-clip-basemap-full-4m-20260906a",
     minimapPath: "/minimap/monet-clip-basemap-full-4m-20260906a",
+    pointMetaFile: { path: "/points/monet-clip-basemap-pool-20260905a/point_meta.bin", rows: 19344847, bytes: 1887424406 },
+    attribution: {
+      title: "latent-craft · MONET 100M",
+      description: "Independent explorer of Jasper's MONET collection. CLIP ViT-B/32 embeddings, 4M-trained basemap heads, and disk-backed FAISS search.",
+      links: [{ label: "MONET dataset", url: "https://huggingface.co/datasets/jasperai/monet" },
+        { label: "CLIP model", url: "https://huggingface.co/openai/clip-vit-base-patch32" },
+        { label: "Source code", url: "https://github.com/enjalot/latent-craft" }],
+      rights: "Dataset release: Apache-2.0. CLIP model: MIT. Individual source-image rights remain with their owners; no blanket image or project-code license is implied.",
+      warning: "Web and synthetic imagery may contain offensive or sensitive content. Similarity is not moderation. Queries go to the search worker; inventory stays in this browser. Original URLs cover the initial 19.34M pool; other rows retain thumbnail previews.",
+    },
   },
   "monet-clip-basemap-pool-512": {
     path: "/chunks/monet-clip-basemap-pool-20260905a-512-stream",
@@ -129,9 +141,8 @@ const ALL_DATASETS: Record<string, DatasetConfig> = {
   // route (MONET's are byte ranges inside packed blobs, not files), which the
   // pack's own `thumb_url_template` addresses — hence no `thumbsBasePath`
   // override here.
-  // 160^3 variants of the same three arms ("I want 160 for monet"), built
-  // next to the 96^3 packs the way `bl-160` sits next to `bl`. Same points
-  // table, fit and minimap pack per arm — only the voxel binning differs.
+  // Each draw's resolutions share points, coordinates and minimap identity;
+  // only voxel binning changes.
   "monet-random-160": {
     path: "/chunks/monet-random-160",
     label: "MONET · CLIP ViT-B/32 · random draw · 2M · 160³",
@@ -167,17 +178,9 @@ const ALL_DATASETS: Record<string, DatasetConfig> = {
 };
 
 /**
- * Which entry of `DATASETS` to load when no `?dataset=` param is given.
- *
- * `bl` (96^3 grid, 5,880 occupied voxels) -> `bl-160` (160^3, 14,688), after
- * a misread: "smaller blocks" meant HIGHER RESOLUTION — more, finer voxels
- * so the map resolves more structure — not the same voxels drawn smaller
- * (which is what the earlier `VOXEL_FILL` cut did, now reverted; see its doc
- * comment). Resolution is a pipeline-side knob (`num_voxels` in
- * `run_chunkpack_bl.py`), so the frontend just points at the finer pack.
- * New builds use compact per-chunk atlases, so finer grids no longer force a
- * full 2048² texture on every sparsely occupied chunk. Existing packs remain
- * readable through the legacy local-voxel-id atlas layout.
+ * Default when no dataset query is supplied. Resolution changes belong in
+ * the pipeline; compact atlases avoid a full 2048² texture for sparse chunks.
+ * Standalone builds below whitelist only their deployed release.
  */
 export const DEFAULT_DATASET = import.meta.env.VITE_DEMO_DATASET || "monet-sscd-512";
 const REGISTERED_DATASETS: Record<string, DatasetConfig> = import.meta.env.VITE_DEMO_DATASET === "bl-160"

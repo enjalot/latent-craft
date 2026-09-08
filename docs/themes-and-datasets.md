@@ -54,3 +54,8 @@ chunk to admit cheaper distant ones. Teleport destinations retain explicit prior
 Chunks appear as they finish. Neither the wider radius nor the count cap
 introduces an all-chunks startup barrier. Detailed cages and the 128px sharp band
 retain their independent nearby limits.
+
+The mobile tier overrides both desktop profiles: 12 chunks, 24,576 voxel
+instances, a 96 MiB conservative reservation, and no automatic sharp band.
+Its single held-image preview and smaller proxy/pixel budgets are independent
+of the visual theme.

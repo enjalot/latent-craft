@@ -19,6 +19,9 @@ def main():
     parser.add_argument("--artifact-repo", default="enjalot/latent-craft-bl-search", help="Dedicated dataset repository; Space repositories have a 1 GB cap")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
+    profile = json.loads((root / "frontend/dist/build-profile.json").read_text())
+    if profile["dataset"] != "bl-160" or profile["dataOrigin"] != "https://storage.googleapis.com/fun-data/latent-craft/bl/20260907a":
+        raise ValueError("Build the BL publication profile before updating its Space")
     token_path = Path.home() / ".cache/huggingface/token"
     api = HfApi(token=token_path.read_text().strip() if token_path.exists() else None)
     if api.whoami()["name"] != args.repo.split("/")[0]: raise ValueError("Unexpected publishing account")
@@ -57,10 +60,17 @@ Historical content may contain offensive depictions. These are approximate-neigh
         (args.search_assets / "assets-hf.json").write_text(json.dumps(search_manifest, indent=2) + "\n")
     with tempfile.TemporaryDirectory(prefix="latent-craft-space-") as folder:
         staging = Path(folder)
-        for name in ["app.py", "Dockerfile", ".dockerignore", "README.md", "SIGLIP-LICENSE.txt", "assets.json"]:
+        for name in ["app.py", "Dockerfile", ".dockerignore", "README.md", "SIGLIP-LICENSE.txt", "assets.json", "metadata.json"]:
             source = root / "deploy/bl-space" / name
             if source.exists(): shutil.copyfile(source, staging / name)
         if search_manifest: (staging / "assets.json").write_text(json.dumps(search_manifest, indent=2) + "\n")
+        # Keep experimental Lance tables in the reproducibility archive, not
+        # in the production worker's download manifest.
+        manifest_path = staging / "assets.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["files"] = [item for item in manifest["files"] if not item["path"].startswith("lance/")]
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+        shutil.copyfile(root / "pipeline/metadata_server.py", staging / "metadata_server.py")
         shutil.copytree(root / "frontend/dist", staging / "static")
         thumbs = Path("/data/latent-craft/releases/bl-20260907a/thumbs/bl")
         (staging / "thumbs").mkdir()

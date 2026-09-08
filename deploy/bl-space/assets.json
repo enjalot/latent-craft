@@ -8,51 +8,6 @@
       "sha256": "df282f96c1b3cce636732f09d69b6ee04f45af7a044bf781e5244dc01e4f61ff"
     },
     {
-      "path": "lance/lance-f16-sq8.lance/_indices/93aefcfd-1603-42aa-81c1-46de268b254b/auxiliary.idx",
-      "bytes": 1248670875,
-      "sha256": "aaeddd13fa6cad298bbcda5dc0b6bc11760a00bf02b29c4ba1d7c06d1bd77112"
-    },
-    {
-      "path": "lance/lance-f16-sq8.lance/_indices/93aefcfd-1603-42aa-81c1-46de268b254b/index.idx",
-      "bytes": 2364746,
-      "sha256": "6abb636e93c75d9c6f734d7dffcdd79273245ba578f28adcbd304b104f2a350a"
-    },
-    {
-      "path": "lance/lance-f16-sq8.lance/_transactions/0-c1b1381d-dad9-4e22-aaa3-648165ee3426.txn",
-      "bytes": 301,
-      "sha256": "9ee83ff4078f333d555bf20a6f6e0c44af114173e95060bbfabfb24ac366224f"
-    },
-    {
-      "path": "lance/lance-f16-sq8.lance/_transactions/1-83a2a79e-50d4-4485-94b0-55f1416e38ce.txn",
-      "bytes": 411,
-      "sha256": "8393b66fd5d97d25fc90c034f18c510ba1f8d6b76f574ea16a2088a4e3d38e01"
-    },
-    {
-      "path": "lance/lance-f16-sq8.lance/_versions/18446744073709551613.manifest",
-      "bytes": 1166,
-      "sha256": "4e1e1baffa473f0a3acfd3d70962e3a212e2f5888004a7af6c397b08de60ffd8"
-    },
-    {
-      "path": "lance/lance-f16-sq8.lance/_versions/18446744073709551614.manifest",
-      "bytes": 682,
-      "sha256": "75d3c3dfa1fe6bc6b44eadad6aaa8e043c08a468d6183c6717547cd9ac8f00c2"
-    },
-    {
-      "path": "lance/lance-f16-sq8.lance/_versions/latest_version_hint.json",
-      "bytes": 13,
-      "sha256": "732322c128ed67841ef5aa42c7cd04ffcd74a61b2d17d710cd502b713d62930d"
-    },
-    {
-      "path": "lance/lance-f16-sq8.lance/data/100001111001001100000111faebf64c3ba9c5770041eec08d.lance",
-      "bytes": 2418439755,
-      "sha256": "2571dbeac10df14db1afd2362f5c6000d417f75048fe99580a37a1538ebc95a4"
-    },
-    {
-      "path": "lance/lance-f16-sq8.lance/data/110101101110011100000001cd375046ccafe1700c0fa729a5.lance",
-      "bytes": 74363638,
-      "sha256": "02211106c8d9417c19717f3824349e0e5ceb9db94ada1d8e9ae5823583fd65dc"
-    },
-    {
       "path": "point_index.bin",
       "bytes": 8646512,
       "sha256": "4cf960d00e632b8fd1d7417403e2f41665a544f2aaefd0503f85f31b0a687d7e"

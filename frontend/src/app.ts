@@ -178,7 +178,7 @@ if (attribution) addDatasetAbout(app, attribution, visualTheme.artworkNotice);
 const datasetPicker = new DatasetPicker(leftDock, datasetKey, DATASETS, useSynthetic, true);
 const hud = new Hud(leftDock, true);
 let searchNavigation: SearchNavigation | null = null;
-const searchCompare = useSynthetic || !DATASETS[datasetKey]?.searchProfile ? null : DATASETS[datasetKey].searchProfile === "bl-siglip2-20260907a" ? new (await import("./ui/BLSearch.ts")).BLSearch(leftDock, {
+const searchCompare = useSynthetic || !DATASETS[datasetKey]?.searchProfile ? null : DATASETS[datasetKey].searchProfile !== "clip-training" ? new (await import("./ui/CollectionSearch.ts")).CollectionSearch(leftDock, {
   hover: result => searchNavigation?.hover(result),
   select: async result => {
     const mining = miningController, panel = inventoryPanel;
@@ -189,7 +189,7 @@ const searchCompare = useSynthetic || !DATASETS[datasetKey]?.searchProfile ? nul
     panel.focusMined(stackId, result.row);
   },
   clear: () => searchNavigation?.clear(),
-}) : new (await import("./ui/SearchCompare.ts")).SearchCompare(leftDock, datasetKey, {
+}, DATASETS[datasetKey].searchProfile === "clip-full-4m-20260906a" ? "monet" : "bl") : new (await import("./ui/SearchCompare.ts")).SearchCompare(leftDock, datasetKey, {
   project: response => {
     if (!searchNavigation) throw new Error("Map is still loading; try again shortly");
     searchNavigation.project(response);
