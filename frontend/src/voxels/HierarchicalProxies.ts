@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { runtimeProfile } from "../runtime/DeviceProfile.ts";
 import { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import { fetchJson } from "../net/fetchTyped.ts";
 import { rangeReader } from "../streaming/RangeReader.ts";
@@ -156,7 +157,7 @@ export class HierarchicalProxies {
       const lod = proxyBrickLod(distance / this.manifest.chunkWorldSize, pixels, this.lastLods.get(leaf.chunk));
       nextLods.set(leaf.chunk, lod);
       return { counts: leaf.levels.map(level => level.count), lod };
-    }));
+    }), runtimeProfile.mobile ? 48 : 128, runtimeProfile.mobile ? 16384 : 65536);
     this.lastLods = nextLods;
     const selected = new Map(leaves.slice(0, levels.length).map((node, i) => [node.leaf!, levels[i]]));
     this.protectedBases.clear();
@@ -294,7 +295,7 @@ export class HierarchicalProxies {
   private trim(): void {
     let count = [...this.bricks.values()].reduce((sum, brick) => sum + brick.ids.length, 0);
     for (const [key, brick] of [...this.bricks].sort((a, b) => a[1].lastUsed - b[1].lastUsed)) {
-      if (count <= 131072 && this.bricks.size <= 256) break;
+      if (count <= (runtimeProfile.mobile ? 32768 : 131072) && this.bricks.size <= (runtimeProfile.mobile ? 96 : 256)) break;
       if (brick.mesh.visible || this.protectedBases.has(key)) continue;
       count -= brick.ids.length;
       brick.mesh.removeFromParent(); brick.mesh.dispose(); brick.mesh.geometry.dispose();

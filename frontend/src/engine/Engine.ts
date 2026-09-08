@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { runtimeProfile, renderPixelRatio } from "../runtime/DeviceProfile.ts";
 import {
   CAMERA_FAR,
   CAMERA_FOV_DEG,
@@ -174,7 +175,7 @@ export class Engine {
     this.themeTextures = new ThemeTextures(theme, options.sky !== false);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(renderPixelRatio(runtimeProfile, window.innerWidth, window.innerHeight, window.devicePixelRatio));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setClearColor(theme.fogColor, 1);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -249,6 +250,7 @@ export class Engine {
     const height = window.innerHeight;
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(renderPixelRatio(runtimeProfile, width, height, window.devicePixelRatio));
     this.renderer.setSize(width, height);
   };
 
@@ -385,8 +387,11 @@ export class Engine {
     }
   }
 
+  private lastFrame = -Infinity;
   private loop = (timestamp: number) => {
     this.rafHandle = requestAnimationFrame(this.loop);
+    if (document.hidden || (runtimeProfile.mobile && timestamp - this.lastFrame < 1000 / runtimeProfile.maxFps - 1)) return;
+    this.lastFrame = timestamp;
     this.timer.update(timestamp);
     // still clamp defensively — Timer's visibility-API guard covers the
     // hidden-tab case, but not e.g. a slow synchronous stall while visible.

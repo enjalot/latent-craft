@@ -14,6 +14,19 @@ function fly(speed: number, code = "KeyW") {
   controls.dispose(); return distance;
 }
 describe("adjustable flight speed", () => {
+  it("keeps touch independent of keyboard and clears both on blur", () => {
+    const listeners = new Map<string, (e: unknown) => void>();
+    vi.stubGlobal("window", { addEventListener: (n: string, f: (e: unknown) => void) => listeners.set(n, f), removeEventListener: vi.fn() });
+    const camera = new THREE.PerspectiveCamera(), controls = new FlightControls(camera);
+    controls.setSpeed(1);
+    const press = (type: string) => listeners.get(type)!({ code: "KeyW", target: null, repeat: false, preventDefault: vi.fn() });
+    const step = () => { const z = camera.position.z; for (let i = 0; i < 120; i++) controls.update(1/60); return z - camera.position.z; };
+    press("keydown"); controls.setTouchKey("KeyW", true); controls.setTouchKey("KeyW", false);
+    expect(step()).toBeGreaterThan(1.5);
+    controls.setTouchKey("KeyW", true); press("keyup"); expect(step()).toBeCloseTo(2, 3);
+    listeners.get("blur")!(null); step(); expect(step()).toBeLessThan(.001);
+    controls.dispose();
+  });
   it("scales horizontal and vertical movement equally", () => {
     const slow = fly(1);
     expect(slow).toBeGreaterThan(1.5);

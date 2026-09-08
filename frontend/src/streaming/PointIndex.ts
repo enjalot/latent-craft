@@ -3,6 +3,7 @@ import type { Manifest } from "./Manifest.ts";
 import { THUMBS_BASE_PATH } from "../config.ts";
 import { PagedRecords } from "./RangeReader.ts";
 import { WeightedLruCache } from "../utils/WeightedLruCache.ts";
+import { pointRecordBytes, decodePoint } from "./RecordLayouts.ts";
 
 /**
  * Placeholders a chunk-pack manifest's `thumb_url_template` may use:
@@ -95,7 +96,8 @@ export async function loadPointIndex(
   signal?: AbortSignal,
 ): Promise<PointIndex> {
   if (manifest.raw.streaming) {
-    const records = new PagedRecords(manifest.url(manifest.raw.point_index.path), manifest.totalPoints, 8, undefined, 256);
+    const bytes = pointRecordBytes(manifest.raw.point_index);
+    const records = new PagedRecords(manifest.url(manifest.raw.point_index.path), manifest.totalPoints, bytes, undefined, 256);
     const cache = new WeightedLruCache<number, { subset: number; local: number }>({
       maxEntries: 8192, maxWeight: Infinity, weightOf: () => 1,
     });
@@ -111,7 +113,7 @@ export async function loadPointIndex(
         if ((failed.get(row) ?? 0) > Date.now()) return;
         try {
           const record = await records.record(row);
-          cache.set(row, { subset: record.getUint8(0), local: record.getUint32(2, true) });
+          cache.set(row, decodePoint(record, bytes === 5));
           failed.delete(row);
         } catch (error) { failed.set(row, Date.now() + 2000); throw error; }
       },

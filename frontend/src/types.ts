@@ -39,12 +39,14 @@ export interface ManifestAtlas {
 }
 
 export interface ManifestBlobRef {
+  encoding?: "point-u32-u8" | "voxel-u32";
   path: string;
   bytes: number;
   sha256: string;
 }
 
 export interface ManifestChunk {
+  meta_version?: 2 | 3;
   chunk_id: number;
   cx: number;
   cy: number;
@@ -66,6 +68,8 @@ export interface ManifestChunk {
 }
 
 export interface ManifestJson {
+  /** Only storage-only repacks may retain the original immutable save identity. */
+  save_identity?: string;
   streaming?: { version: 1; hierarchy: string; spatial?: string; row_xy?: string; minimap_base?: string };
   format_version: number;
   dataset_id: string;

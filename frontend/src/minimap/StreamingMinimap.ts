@@ -4,6 +4,7 @@ import { PagedRecords, rangeReader } from "../streaming/RangeReader.ts";
 import type { Manifest } from "../streaming/Manifest.ts";
 import type { MinimapManifestJson } from "../types.ts";
 import { WeightedLruCache } from "../utils/WeightedLruCache.ts";
+import { voxelRecordBytes, decodeVoxel } from "../streaming/RecordLayouts.ts";
 
 type Page = [number, number, number, number, number, number];
 interface SpatialIndex { version: number; count: number; file: string; pages: Page[] }
@@ -26,7 +27,7 @@ export class StreamingMinimap extends MinimapPack {
   constructor(raw: MinimapManifestJson, private readonly manifest: Manifest, private readonly spatial: SpatialIndex) {
     super(raw, manifest.baseUrl);
     this.xy = new PagedRecords(manifest.url(manifest.raw.streaming!.row_xy!), this.nPoints, 4);
-    this.rv = new PagedRecords(manifest.url(manifest.raw.row_to_voxel.path), this.nPoints, 8);
+    this.rv = new PagedRecords(manifest.url(manifest.raw.row_to_voxel.path), this.nPoints, voxelRecordBytes(manifest.raw.row_to_voxel));
     if (spatial.version !== 1 || spatial.count !== this.nPoints) throw new Error("Spatial index mismatch");
     let end = 0;
     for (const page of spatial.pages) {
@@ -51,7 +52,7 @@ export class StreamingMinimap extends MinimapPack {
     if (this.rows.get(row)) return;
     const [xy, rv] = await Promise.all([this.xy.record(row), this.rv.record(row)]);
     this.rows.set(row, { row, x: xy.getUint16(0, true), y: xy.getUint16(2, true),
-      chunk: rv.getUint32(0, true), local: rv.getUint16(4, true), corpus: -1 });
+      ...decodeVoxel(rv, !!this.manifest.raw.row_to_voxel.encoding), corpus: -1 });
   };
   override rowVoxel = (row: number) => this.rows.get(row);
   override hasRow(row: number) { return this.rows.peek(row) !== undefined; }

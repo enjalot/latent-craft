@@ -81,8 +81,18 @@ def verify(pack, points):
     n = manifest["point_source"]["n_points"]
     if manifest["dataset_id"] != provenance["dataset"] or n != provenance["n_points"]:
         raise ValueError("Release identity mismatch")
-    index = np.memmap(pack / "point_index.bin", dtype=POINT_INDEX_DTYPE, mode="r")
-    rv = np.memmap(pack / "row_to_voxel.bin", dtype=ROW_TO_VOXEL_DTYPE, mode="r")
+    point_dtype = np.dtype([("local_idx", "<u4"), ("subset_code", "u1")]) if manifest["point_index"].get("encoding") == "point-u32-u8" else POINT_INDEX_DTYPE
+    index = np.memmap(pack / "point_index.bin", dtype=point_dtype, mode="r")
+    if manifest["row_to_voxel"].get("encoding") == "voxel-u32":
+        packed = np.memmap(pack / "row_to_voxel.bin", dtype="<u4", mode="r")
+        # Audit-side expansion only; the browser never allocates these arrays.
+        rv = np.empty(len(packed), dtype=ROW_TO_VOXEL_DTYPE)
+        for start in range(0, len(packed), 1_000_000):
+            part = packed[start:start+1_000_000]
+            rv["chunk_id"][start:start+len(part)] = part >> 12
+            rv["local_voxel_id"][start:start+len(part)] = part & 4095
+    else:
+        rv = np.memmap(pack / "row_to_voxel.bin", dtype=ROW_TO_VOXEL_DTYPE, mode="r")
     refs = np.load(points / "thumb_refs.npy", mmap_mode="r")
     codes = np.load(points / "source_codes.npy", mmap_mode="r")
     row_xy = np.memmap(pack / "row_xy.bin", dtype="<u2", mode="r", shape=(n, 2))

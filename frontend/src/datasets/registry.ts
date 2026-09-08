@@ -67,7 +67,7 @@ export interface DatasetConfig {
    */
   thumbsBasePath?: string;
   pointMetaFile?: { path: string; bytes: number; rows: number };
-  searchProfile?: "bl-siglip2-20260907a";
+  searchProfile?: "bl-siglip2-20260907a" | "clip-training";
   streamingProfile?: "bl-wide";
   /** Optional release-bound metadata/filter API; absent means no facets. */
   metadataEndpoint?: string;
@@ -75,7 +75,7 @@ export interface DatasetConfig {
 
 const ALL_DATASETS: Record<string, DatasetConfig> = {
   "monet-dino-basemap-full-6m-pca768-512": {
-    path: "/chunks/monet-dino-basemap-full-6m-pca768-20260908a-512-stream",
+    path: "/chunks/monet-dino-basemap-full-6m-pca768-20260908a-512-web-20260908b",
     label: "MONET · DINOv2 ViT-g/14 · PCA-768 · 6M head · 103.82M · 512³",
     pointsId: "monet-dino-basemap-full-6m-pca768-20260908a",
     minimapPath: "/minimap/monet-dino-basemap-full-6m-pca768-20260908a",
@@ -93,6 +93,7 @@ const ALL_DATASETS: Record<string, DatasetConfig> = {
     minimapPath: "/minimap/monet-clip-basemap-pool-20260905a",
   },
   "monet-clip-basemap-training-512": {
+    searchProfile: "clip-training",
     path: "/chunks/monet-clip-basemap-training-20260905a-512-stream",
     label: "MONET · CLIP ViT-B/32 · basemap · 2.01M · 512³",
     pointsId: "monet-clip-basemap-training-20260905a",
@@ -179,9 +180,14 @@ const ALL_DATASETS: Record<string, DatasetConfig> = {
  * readable through the legacy local-voxel-id atlas layout.
  */
 export const DEFAULT_DATASET = import.meta.env.VITE_DEMO_DATASET || "monet-sscd-512";
-export const DATASETS: Record<string, DatasetConfig> = import.meta.env.VITE_DEMO_DATASET === "bl-160"
+const REGISTERED_DATASETS: Record<string, DatasetConfig> = import.meta.env.VITE_DEMO_DATASET === "bl-160"
   ? { "bl-160": { ...ALL_DATASETS["bl-160"], path: "/chunks/bl-siglip2-160-stream-20260907a",
       searchProfile: "bl-siglip2-20260907a",
       metadataEndpoint: "/api/metadata/bl-20260907a",
       pointMetaFile: { path: "/points/bl/point_meta.bin", bytes: 77049305, rows: 1080814 } } }
   : ALL_DATASETS;
+
+// A standalone publication must not offer research maps whose assets weren't deployed.
+const demo = import.meta.env.VITE_DEMO_DATASET;
+if (demo && !REGISTERED_DATASETS[demo]) throw new Error(`Unknown demo dataset: ${demo}`);
+export const DATASETS: Record<string, DatasetConfig> = demo ? { [demo]: REGISTERED_DATASETS[demo] } : REGISTERED_DATASETS;

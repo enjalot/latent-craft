@@ -139,6 +139,13 @@ export class FlightControls {
   }
   private readonly camera: THREE.Camera;
   private readonly keys = new Set<string>();
+  private readonly touchKeys = new Set<string>();
+
+  /** Touch and keyboard have independent ownership; releasing one cannot clear the other. */
+  setTouchKey(code: string, down: boolean): void {
+    if (down) this.touchKeys.add(code); else this.touchKeys.delete(code);
+  }
+  private pressed(code: string): boolean { return this.keys.has(code) || this.touchKeys.has(code); }
 
   private yaw = 0;
   private pitch = 0;
@@ -187,6 +194,7 @@ export class FlightControls {
 
   private readonly handleBlur = (): void => {
     this.keys.clear();
+    this.touchKeys.clear();
     this.sprinting = false;
   };
 
@@ -361,16 +369,16 @@ export class FlightControls {
     const verticalSpeed = FLIGHT_VERTICAL_SPEED * speedScale;
 
     this.targetVelocity.set(0, 0, 0);
-    if (this.keys.has("KeyW")) this.targetVelocity.addScaledVector(this.forward, speed);
-    if (this.keys.has("KeyS")) this.targetVelocity.addScaledVector(this.forward, -speed);
-    if (this.keys.has("KeyD")) this.targetVelocity.addScaledVector(this.right, speed);
-    if (this.keys.has("KeyA")) this.targetVelocity.addScaledVector(this.right, -speed);
+    if (this.pressed("KeyW")) this.targetVelocity.addScaledVector(this.forward, speed);
+    if (this.pressed("KeyS")) this.targetVelocity.addScaledVector(this.forward, -speed);
+    if (this.pressed("KeyD")) this.targetVelocity.addScaledVector(this.right, speed);
+    if (this.pressed("KeyA")) this.targetVelocity.addScaledVector(this.right, -speed);
     // Vertical is world-space, independent of camera pitch/roll. Space/Shift
     // is the primary (Minecraft creative) binding; E/Q the legacy alternate.
-    if (this.keys.has("Space") || this.keys.has("KeyE")) {
+    if (this.pressed("Space") || this.pressed("KeyE")) {
       this.targetVelocity.addScaledVector(this.up, verticalSpeed);
     }
-    if (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || this.keys.has("KeyQ")) {
+    if (this.pressed("ShiftLeft") || this.pressed("ShiftRight") || this.pressed("KeyQ")) {
       this.targetVelocity.addScaledVector(this.up, -verticalSpeed);
     }
 

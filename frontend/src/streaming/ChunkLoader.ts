@@ -26,9 +26,10 @@ const VOXEL_RECORD_BYTES = 16;
  *               | repr_row_id u32 | reserved u16
  *   point_ids: u32[n_points]
  *
- * The record table is always fully dense (4096 entries, empties zeroed), which
- * is why `total = 32 + 4096*16 + n_points*4` and why the array index alone
- * identifies a voxel — no id field is stored.
+ * Version 1 embeds postings; version 2 stores a dense summary and separate
+ * postings, with u32 counts. Version 3 stores only occupied summary records:
+ * local ID u16 followed by a v2 record. Its occupied count is at header byte
+ * 22. All versions expand to the same dense runtime arrays below.
  */
 export function parseChunkMeta(buffer: ArrayBuffer): ChunkMeta {
   const view = new DataView(buffer);
@@ -40,7 +41,7 @@ export function parseChunkMeta(buffer: ArrayBuffer): ChunkMeta {
   );
   if (magic !== META_MAGIC) throw new Error(`meta.bin: bad magic ${JSON.stringify(magic)}`);
   const version = view.getUint16(4, true);
-  if (version !== 1 && version !== 2) throw new Error(`meta.bin: unsupported version ${version}`);
+  if (![1, 2, 3].includes(version)) throw new Error(`meta.bin: unsupported version ${version}`);
 
   const chunkId = view.getUint32(6, true);
   const nVoxelRecords = view.getUint32(10, true);
@@ -48,7 +49,10 @@ export function parseChunkMeta(buffer: ArrayBuffer): ChunkMeta {
   const voxelGridN = view.getUint16(18, true);
   const atlasTilePx = view.getUint16(20, true);
 
-  const expectedBytes = META_HEADER_BYTES + nVoxelRecords * VOXEL_RECORD_BYTES + (version === 1 ? nPoints * 4 : 0);
+  const storedRecords = version === 3 ? view.getUint32(22, true) : nVoxelRecords;
+  if (version === 3 && (nVoxelRecords !== voxelGridN ** 3 || nVoxelRecords > 65536 || storedRecords > nVoxelRecords)) throw Error("Invalid sparse voxel grid");
+  const recordBytes = version === 3 ? 18 : VOXEL_RECORD_BYTES;
+  const expectedBytes = META_HEADER_BYTES + storedRecords * recordBytes + (version === 1 ? nPoints * 4 : 0);
   if (buffer.byteLength !== expectedBytes) {
     throw new Error(
       `meta.bin (chunk ${chunkId}): size mismatch — got ${buffer.byteLength}B, header implies ${expectedBytes}B`,
@@ -63,9 +67,15 @@ export function parseChunkMeta(buffer: ArrayBuffer): ChunkMeta {
 
   let nOccupied = 0;
   let postingEnd = 0;
-  for (let i = 0; i < nVoxelRecords; i++) {
-    const base = META_HEADER_BYTES + i * VOXEL_RECORD_BYTES;
+  let previous = -1;
+  for (let stored = 0; stored < storedRecords; stored++) {
+    const start = META_HEADER_BYTES + stored * recordBytes;
+    const i = version === 3 ? view.getUint16(start, true) : stored;
+    if (i <= previous || i >= nVoxelRecords) throw Error("Invalid sparse voxel IDs");
+    previous = i;
+    const base = start + (version === 3 ? 2 : 0);
     const c = version === 1 ? view.getUint16(base, true) : view.getUint32(base, true);
+    if (version === 3 && !c) throw Error("Empty sparse voxel record");
     count[i] = c;
     if (c === 0) continue; // empty slot: every other field is zero/sentinel
     nOccupied++;
@@ -89,7 +99,7 @@ export function parseChunkMeta(buffer: ArrayBuffer): ChunkMeta {
   // of 4), so a zero-copy typed-array view over the same buffer is safe.
   const pointIds = new Uint32Array(
     buffer,
-    META_HEADER_BYTES + nVoxelRecords * VOXEL_RECORD_BYTES,
+    version === 1 ? META_HEADER_BYTES + nVoxelRecords * VOXEL_RECORD_BYTES : 0,
     version === 1 ? nPoints : 0,
   );
 
@@ -233,7 +243,7 @@ export class ChunkLoader {
         meta,
         mesh,
         atlasUrl,
-        bytes: this.atlasCache.byteSize(atlasUrl, entry.atlas_bytes) + entry.meta_bytes,
+        bytes: this.atlasCache.byteSize(atlasUrl, entry.atlas_bytes) + Math.max(entry.meta_bytes, this.manifest.voxelsPerChunk ** 3 * 16 + 32),
         instanceToLocalVoxelId: meta.occupied,
         containers,
       };

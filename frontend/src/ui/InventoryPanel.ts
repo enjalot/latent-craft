@@ -29,6 +29,7 @@ const PANEL_STYLE: Partial<CSSStyleDeclaration> = {
 };
 
 export interface InventoryPanelOptions {
+  compact?: boolean;
   /** Resolves once `point_index.bin` has loaded; may still be pending when
    * the panel first renders (extraction can happen before it lands), so every
    * thumbnail request awaits it rather than assuming it's ready. */
@@ -153,10 +154,12 @@ export class InventoryPanel {
   ) {
     this.root = document.createElement("div");
     this.root.className = "ls-inventory-panel";
+    this.actionsDock.className = "ls-inventory-actions";
     Object.assign(this.root.style, PANEL_STYLE);
     applyHudPanelChrome(this.root);
 
     this.headerEl = document.createElement("div");
+    this.headerEl.className = "ls-inventory-header";
     applyHudTitle(this.headerEl, { bar: true });
     Object.assign(this.headerEl.style, {
       display: "flex",
@@ -208,6 +211,7 @@ export class InventoryPanel {
 
     this.emptyEl = document.createElement("div");
     this.emptyEl.textContent = "Hold click on a voxel to extract its points into your inventory.";
+    if (options.compact) this.emptyEl.textContent = "Hold to collect";
     this.emptyEl.classList.add(HUD_CLASS.dim);
     Object.assign(this.emptyEl.style, {
       padding: "10px 12px",
@@ -227,7 +231,7 @@ export class InventoryPanel {
     this.stackPager.classList.add(HUD_CLASS.button);
     Object.assign(this.stackPager.style, { flex: "none", margin: "4px 12px" });
     this.stackPager.addEventListener("click", () => {
-      this.stackPage = (this.stackPage + 1) % Math.max(1, Math.ceil(this.inventory.stacks.length / 100));
+      this.stackPage = (this.stackPage + 1) % Math.max(1, Math.ceil(this.inventory.stacks.length / this.pageSize));
       this.render(this.inventory.stacks);
     });
     this.bodyEl.appendChild(this.stackPager);
@@ -265,8 +269,8 @@ export class InventoryPanel {
    * by the extraction path (rather than inferred from generic store updates)
    * so returning an item never steals focus or reopens the panel. */
   focusMined(stackId: string, lastRowId: number): void {
-    const stackIndex = this.inventory.stacks.findIndex(stack => stack.id === stackId);
-    const page = Math.floor(Math.max(0, stackIndex) / 100);
+    const stackIndex = this.sortedStacks(this.inventory.stacks).findIndex(stack => stack.id === stackId);
+    const page = Math.floor(Math.max(0, stackIndex) / this.pageSize);
     if (page !== this.stackPage) { this.stackPage = page; this.render(this.inventory.stacks); }
     const focusChanged = this.focusedStackId !== stackId;
     this.focusedStackId = stackId;
@@ -327,6 +331,7 @@ export class InventoryPanel {
   }
 
   private setCollapsed(collapsed: boolean): void {
+    if (this.options.compact) { this.bodyEl.style.display = "flex"; return; }
     this.collapsed = collapsed;
     this.bodyEl.style.display = collapsed ? "none" : "flex";
     this.headerEl.classList.toggle(HUD_CLASS.titleBar, !collapsed);
@@ -353,11 +358,13 @@ export class InventoryPanel {
     const totalPoints = this.inventory.totalPoints;
     this.headerCountEl.textContent = `${stacks.length} stack${stacks.length === 1 ? "" : "s"} · ${totalPoints.toLocaleString()} pts`;
     this.emptyEl.hidden = stacks.length > 0;
-    const pageCount = Math.max(1, Math.ceil(stacks.length / 100));
+    this.root.classList.toggle("lc-inventory-empty", stacks.length === 0);
+    const pageCount = Math.max(1, Math.ceil(stacks.length / this.pageSize));
     this.stackPage = Math.min(this.stackPage, pageCount - 1);
     this.stackPager.hidden = pageCount === 1;
-    this.stackPager.textContent = `More blocks · page ${this.stackPage + 1} / ${pageCount}`;
-    stacks = stacks.slice(this.stackPage * 100, (this.stackPage + 1) * 100);
+    this.stackPager.textContent = this.options.compact ? "More" : `More blocks · page ${this.stackPage + 1} / ${pageCount}`;
+    this.stackPager.setAttribute("aria-label", `More blocks, page ${this.stackPage + 1} of ${pageCount}`);
+    stacks = this.sortedStacks(stacks).slice(this.stackPage * this.pageSize, (this.stackPage + 1) * this.pageSize);
 
     const live = new Set<string>();
     for (const stack of stacks) {
@@ -403,7 +410,39 @@ export class InventoryPanel {
     }
   }
 
+  private get pageSize(): number { return this.options.compact ? 16 : 100; }
+
+  private sortedStacks(stacks: readonly InventoryStack[]): readonly InventoryStack[] {
+    return this.options.compact ? [...stacks].sort((a, b) => b.lastExtractedAt - a.lastExtractedAt) : stacks;
+  }
+
+  private buildCompactRow(stack: InventoryStack): StackRowView {
+    const el = document.createElement("button"); el.type = "button"; el.className = "lc-inventory-thumb";
+    const img = document.createElement("img"); img.alt = "Collected image"; img.decoding = "async"; el.append(img);
+    img.style.visibility = "hidden";
+    img.addEventListener("load", () => { img.style.visibility = "visible"; });
+    let current = -1, revision = 0, dead = false;
+    const setLatestRow = (rowId: number) => {
+      if (current === rowId) return;
+      current = rowId; const token = ++revision;
+      el.setAttribute("aria-label", `Collected image ${rowId}. Open preview`);
+      void this.getPointIndex().then(async index => {
+        await index.ensure?.(rowId);
+        const url = resolveThumbUrl(index, rowId);
+        if (url && !dead && token === revision) setThumbnailSource(img, url, () => !dead && token === revision);
+      }).catch(() => { if (token === revision) img.alt = "Preview unavailable"; });
+    };
+    el.addEventListener("click", () => this.lightbox.open({ rowIds: stack.rowIds, index: Math.max(0, stack.rowIds.indexOf(current)),
+      resolveUrl: async row => { const index = await this.getPointIndex(); await index.ensure?.(row); return resolveThumbUrl(index, row); },
+      resolveSubsetName: () => null, contextLabel: "Collected images" }));
+    const update = () => { const row = stack.rowIds.at(-1); if (row !== undefined) setLatestRow(row); };
+    update();
+    return { el, stack, revision: stack.revision, update, setExpanded: () => {}, setLatestRow,
+      dispose: () => { dead = true; revision++; img.removeAttribute("src"); } };
+  }
+
   private buildRow(stack: InventoryStack): StackRowView {
+    if (this.options.compact) return this.buildCompactRow(stack);
     const row = document.createElement("div");
     row.className = `ls-inventory-row ${HUD_CLASS.row}`;
     row.dataset.stackId = stack.id;

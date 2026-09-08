@@ -23,6 +23,7 @@ export default defineConfig(({ mode }) => {
         // BL thumbnails are static files; MONET thumbnails use the data
         // server's dynamic packed-blob route.
         "/thumbs": dataTarget,
+        "/thumb-packs": dataTarget,
         "/minimap": dataTarget,
         // Per-row original-image lookup used by the lightbox.
         "/meta": dataTarget,

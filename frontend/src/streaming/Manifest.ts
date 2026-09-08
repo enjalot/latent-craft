@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { pointRecordBytes, voxelRecordBytes } from "./RecordLayouts.ts";
 import { fetchJson } from "../net/fetchTyped.ts";
 import type { ManifestChunk, ManifestJson } from "../types.ts";
 
@@ -40,12 +41,13 @@ export class Manifest {
       if (raw.streaming.version !== 1) throw new Error("Unsupported streaming pack version");
       if (!Number.isSafeInteger(raw.point_source.n_points) || raw.point_source.n_points < 0 || raw.point_source.n_points >= 2 ** 28)
         throw new Error("Streaming row count exceeds the minimap's 28-bit row identity");
-      if (raw.point_index.bytes !== raw.point_source.n_points * 8 || raw.row_to_voxel.bytes !== raw.point_source.n_points * 8)
+      if (raw.point_index.bytes !== raw.point_source.n_points * pointRecordBytes(raw.point_index) || raw.row_to_voxel.bytes !== raw.point_source.n_points * voxelRecordBytes(raw.row_to_voxel))
         throw new Error("Streaming lookup table size mismatch");
       for (const chunk of raw.chunks) {
-        if (!chunk.postings || chunk.postings.bytes !== chunk.n_points * 4 || chunk.meta_bytes !== 32 + raw.world.voxels_per_chunk ** 3 * 16)
+        if (!chunk.postings || chunk.postings.bytes !== chunk.n_points * 4 || chunk.meta_bytes !== 32 + (chunk.meta_version === 3 ? chunk.n_occupied_voxels * 18 : raw.world.voxels_per_chunk ** 3 * 16))
           throw new Error(`chunk ${chunk.chunk_id}: invalid summary/posting sizes`);
       }
+      if (raw.row_to_voxel.encoding && (raw.world.voxels_per_chunk !== 16 || raw.world.chunks_per_axis ** 3 > 2 ** 20)) throw Error("Packed voxel coordinates exceed u32");
     }
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.worldScale = worldScale;

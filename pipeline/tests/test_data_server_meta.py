@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import gzip
 import threading
 import urllib.error
 import urllib.request
@@ -97,3 +98,23 @@ def test_meta_route_reopens_after_a_rebuild(server, tmp_path):
     write_point_meta(path, ["https://new/0.jpg"], [1], [1])  # rename swaps the inode
     assert json.loads(_get(f"{server}/meta/demo-1/0")[2]) == {"row_id": 0, "url": "https://new/0.jpg", "width": 1, "height": 1}
     assert _get(f"{server}/meta/demo-1/1")[0] == 404
+
+
+def test_json_gzip_negotiation_never_changes_byte_range_offsets(server, tmp_path):
+    raw = b'{"rows":123456,"encoding":"voxel-u32"}'
+    path = tmp_path / "root" / "manifest.json"
+    path.write_bytes(raw)
+    path.with_suffix(".json.gz").write_bytes(gzip.compress(raw, mtime=0))
+    for encoding, compressed in [("gzip", True), ("identity", False), ("gzip;q=0, *;q=1", False), ("gzip;q=0.5", True)]:
+        request = urllib.request.Request(f"{server}/manifest.json", headers={"Accept-Encoding": encoding})
+        with urllib.request.urlopen(request) as response:
+            assert response.headers["Vary"] == "Accept-Encoding"
+            assert (response.headers.get("Content-Encoding") == "gzip") == compressed
+            body = response.read()
+            assert int(response.headers["Content-Length"]) == len(body)
+            assert (gzip.decompress(body) if compressed else body) == raw
+    request = urllib.request.Request(f"{server}/manifest.json", headers={"Range": "bytes=3-12", "Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(request) as response:
+        assert response.status == 206
+        assert response.headers.get("Content-Encoding") is None
+        assert response.read() == raw[3:13]

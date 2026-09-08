@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import type { Manifest } from "../streaming/Manifest.ts";
 import type { ChunkMeta, ManifestChunk } from "../types.ts";
+import { createContainerGeometry } from "./ContainerGeometry.ts";
 import {
   CONTAINER_BRACKET_LENGTH_MAX,
   CONTAINER_BRACKET_LENGTH_MIN,
@@ -302,10 +303,10 @@ export class VoxelContainers {
   private xrayActive = false;
   private detailVisible = true;
 
-  private readonly geometry: THREE.BoxGeometry;
+  private readonly geometry: THREE.BufferGeometry;
   private readonly material: THREE.ShaderMaterial;
 
-  private constructor(mesh: InstancedMesh2, geometry: THREE.BoxGeometry, material: THREE.ShaderMaterial, count: number) {
+  private constructor(mesh: InstancedMesh2, geometry: THREE.BufferGeometry, material: THREE.ShaderMaterial, count: number) {
     this.mesh = mesh;
     this.geometry = geometry;
     this.material = material;
@@ -329,9 +330,9 @@ export class VoxelContainers {
     // Geometry and material are BOTH per-chunk, exactly as `ChunkLoader` does
     // for the voxel mesh and for the same two reasons: InstancedMesh2 writes
     // its own `instanceIndex` attribute into whatever geometry it is handed,
-    // and patches the material with per-mesh closures. A unit box is 24
-    // vertices, and every material here compiles to the same GL program.
-    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    // and patches the material with per-mesh closures. Hollow faces avoid
+    // rasterizing their empty centers; all chunks share one shader program.
+    const geometry = createContainerGeometry();
     const material = createContainerMaterial(woodTexture);
     const mesh = new InstancedMesh2(geometry, material, {
       capacity: Math.max(1, count),

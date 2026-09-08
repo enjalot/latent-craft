@@ -15,7 +15,7 @@ export interface MiningSave { version: 1; dataset: string; pack: string; stacks:
  * pack prevents applying a 160-grid save to 512, or a rebuilt projection. */
 export function validateMiningSave(value: unknown, dataset: string, manifest: Manifest): MiningSave {
   const save = value as MiningSave;
-  if (!save || save.version !== 1 || save.dataset !== dataset || save.pack !== manifest.baseUrl || !Array.isArray(save.stacks))
+  if (!save || save.version !== 1 || save.dataset !== dataset || save.pack !== (manifest.raw?.save_identity ?? manifest.baseUrl) || !Array.isArray(save.stacks))
     throw new Error("This save belongs to a different dataset or map revision.");
   const ids = new Set<string>(), rows = new Set<number>();
   const integer = (n: number, max: number) => Number.isSafeInteger(n) && n >= 0 && n <= max;

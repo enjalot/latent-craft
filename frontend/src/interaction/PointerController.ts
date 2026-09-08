@@ -64,17 +64,24 @@ export class PointerController {
   private pointerDown = false;
   private downX = 0;
   private downY = 0;
+  private activePointer: number | null = null;
+  private lastX = 0;
+  private lastY = 0;
+  private readonly view: Window | null;
 
   constructor(
     private readonly domElement: HTMLElement,
     private readonly flightControls: FlightControls,
     private readonly callbacks: PointerControllerCallbacks,
   ) {
+    this.view = domElement.ownerDocument?.defaultView ?? null;
+    this.view?.addEventListener("blur", this.cancelPointer);
     domElement.tabIndex = -1;
     domElement.addEventListener("pointerdown", this.handlePointerDown);
     domElement.addEventListener("pointermove", this.handlePointerMove);
     domElement.addEventListener("pointerup", this.handlePointerUp);
     domElement.addEventListener("pointercancel", this.handlePointerUp);
+    domElement.addEventListener("lostpointercapture", this.handlePointerUp);
   }
 
   /** The voxel a hold is currently armed against, or `null`. Read-only from
@@ -119,7 +126,8 @@ export class PointerController {
   }
 
   private handlePointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0) return; // left button only
+    if (event.button !== 0 || this.activePointer !== null) return;
+    this.activePointer = event.pointerId;
     event.preventDefault();
     // preventDefault suppresses the browser's native focus transfer. Explicitly
     // release sliders/selects so subsequent movement/hotbar keys target the world.
@@ -130,6 +138,7 @@ export class PointerController {
     this.pointerDown = true;
     this.downX = event.clientX;
     this.downY = event.clientY;
+    this.lastX = event.clientX; this.lastY = event.clientY;
 
     this.callbacks.onPointerEngage();
     const target = this.callbacks.hitTestVoxel(this.ndc);
@@ -146,28 +155,40 @@ export class PointerController {
   };
 
   private handlePointerMove = (event: PointerEvent): void => {
+    if (this.activePointer !== null && event.pointerId !== this.activePointer) return;
     this.updateNdc(event.clientX, event.clientY);
     if (!this.pointerDown) return;
+    const dxLook = event.clientX - this.lastX, dyLook = event.clientY - this.lastY;
+    this.lastX = event.clientX; this.lastY = event.clientY;
 
-    if (!this.dragging && this._holdTarget) {
+    if (!this.dragging) {
       const dx = event.clientX - this.downX;
       const dy = event.clientY - this.downY;
-      if (Math.hypot(dx, dy) > LOOK_DRAG_THRESHOLD_PX) {
+      if (Math.hypot(dx, dy) > (event.pointerType === "touch" ? 12 : LOOK_DRAG_THRESHOLD_PX)) {
         // Promote to a look-drag; the armed hold never completes.
         this.dragging = true;
-        this._holdTarget = null;
-        this.callbacks.onHoldCancel();
+        // Flight can invalidate the held voxel before the look finger moves.
+        // That must not strand the pointer in a non-dragging, targetless state.
+        this.cancelHold();
       }
     }
 
     if (this.dragging) {
-      this.flightControls.applyLookDelta(event.movementX, event.movementY);
+      // Touch movementX/Y is zero on some browsers; client deltas are reliable.
+      this.flightControls.applyLookDelta(dxLook, dyLook);
     }
   };
 
   private handlePointerUp = (event: PointerEvent): void => {
-    if (this.domElement.hasPointerCapture(event.pointerId)) {
-      this.domElement.releasePointerCapture(event.pointerId);
+    if (event.pointerId !== this.activePointer) return;
+    this.cancelPointer();
+  };
+
+  private cancelPointer = (): void => {
+    const id = this.activePointer;
+    this.activePointer = null;
+    if (id !== null && this.domElement.hasPointerCapture(id)) {
+      this.domElement.releasePointerCapture(id);
     }
     this.pointerDown = false;
     this.dragging = false;
@@ -175,9 +196,12 @@ export class PointerController {
   };
 
   dispose(): void {
+    this.cancelPointer();
+    this.view?.removeEventListener("blur", this.cancelPointer);
     this.domElement.removeEventListener("pointerdown", this.handlePointerDown);
     this.domElement.removeEventListener("pointermove", this.handlePointerMove);
     this.domElement.removeEventListener("pointerup", this.handlePointerUp);
     this.domElement.removeEventListener("pointercancel", this.handlePointerUp);
+    this.domElement.removeEventListener("lostpointercapture", this.handlePointerUp);
   }
 }

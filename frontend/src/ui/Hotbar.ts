@@ -66,6 +66,7 @@ export class Hotbar {
     // strip above it is showing. (The strip used to hang under the rack, and
     // every time it appeared it shoved the rack up by its own height.)
     this.root = document.createElement("div");
+    this.root.className = "ls-hotbar";
     Object.assign(this.root.style, {
       position: "fixed",
       bottom: "16px",

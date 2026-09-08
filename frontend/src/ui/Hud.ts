@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { runtimeProfile } from "../runtime/DeviceProfile.ts";
 import { applyHudPanelChrome, applyHudTitle, HUD_CLASS } from "./hudPanel.ts";
 import { voxelCountThreshold } from "../voxels/VoxelCountFilter.ts";
 
@@ -114,6 +115,7 @@ export class Hud {
     const heading = document.createElement("div");
     const help = document.createElement("div");
     help.textContent = "Drag to look · WASD fly · Space / Shift up / down\nDouble-tap W to sprint · Scroll to resize field";
+    if (runtimeProfile.mobile) help.textContent = "D-pad to fly · drag to look · hold to preview";
     Object.assign(help.style, { whiteSpace: "pre-line", fontSize: "10px", opacity: ".7", marginTop: "3px" });
     heading.append(label, help);
     this.header.appendChild(heading);

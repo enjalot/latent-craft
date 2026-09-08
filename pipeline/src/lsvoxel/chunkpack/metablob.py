@@ -51,6 +51,7 @@ WIDE_VOXEL_RECORD_DTYPE = np.dtype([
     ('count', '<u4'), ('point_offset', '<u4'), ('color_rgb', 'u1', (3,)),
     ('flags', 'u1'), ('repr_row_id', '<u4'),
 ])
+SPARSE_VOXEL_RECORD_DTYPE = np.dtype([("local", "<u2"), ("record", WIDE_VOXEL_RECORD_DTYPE)])
 
 
 @dataclass
@@ -105,18 +106,35 @@ def write_chunk_meta(path: Path, meta: ChunkMeta) -> None:
 
 def read_chunk_meta(path: Path) -> ChunkMeta:
     raw = np.fromfile(path, dtype=np.uint8)
+    if len(raw) < 32:
+        raise ValueError("Truncated metadata header")
     header = raw[: HEADER_DTYPE.itemsize].view(HEADER_DTYPE)[0]
     if bytes(header["magic"]) != MAGIC:
         raise ValueError(f"{path}: bad magic {bytes(header['magic'])!r}")
-    wide = int(header['version']) == 2
-    if int(header["version"]) not in (VERSION, 2):
+    sparse = int(header['version']) == 3
+    wide = int(header['version']) >= 2
+    if int(header["version"]) not in (VERSION, 2, 3):
         raise ValueError(f"{path}: unsupported version {header['version']}")
 
     n_voxel_records = int(header["n_voxel_records"])
     n_points = int(header["n_points"])
     off = HEADER_DTYPE.itemsize
-    vrec_bytes = n_voxel_records * VOXEL_RECORD_DTYPE.itemsize
-    voxel_records = raw[off : off + vrec_bytes].view(WIDE_VOXEL_RECORD_DTYPE if wide else VOXEL_RECORD_DTYPE).copy()
+    if sparse:
+        count = int(raw[22:26].view("<u4")[0])
+        if n_voxel_records != int(header["voxel_grid_n"]) ** 3 or n_voxel_records > 65536 or count > n_voxel_records:
+            raise ValueError("Invalid sparse voxel grid")
+        vrec_bytes = count * SPARSE_VOXEL_RECORD_DTYPE.itemsize
+        if len(raw) != off + vrec_bytes:
+            raise ValueError("Sparse metadata size mismatch")
+        stored = raw[off:].view(SPARSE_VOXEL_RECORD_DTYPE)
+        ids = stored["local"]
+        if np.any(ids >= n_voxel_records) or np.any(ids[1:] <= ids[:-1]) or np.any(stored["record"]["count"] == 0):
+            raise ValueError("Invalid sparse voxel IDs/counts")
+        voxel_records = new_voxel_records(n_voxel_records, wide=True)
+        voxel_records[ids] = stored["record"]
+    else:
+        vrec_bytes = n_voxel_records * VOXEL_RECORD_DTYPE.itemsize
+        voxel_records = raw[off : off + vrec_bytes].view(WIDE_VOXEL_RECORD_DTYPE if wide else VOXEL_RECORD_DTYPE).copy()
     off += vrec_bytes
     point_ids_bytes = n_points * 4
     if wide:

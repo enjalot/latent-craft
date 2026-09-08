@@ -1,0 +1,31 @@
+.lc-data-consent { color: #def4f5; background: #0c1a23; border: 1px solid #548f96; border-radius: 8px; padding: 24px; width: min(460px, calc(100vw - 64px)); max-height: 85dvh; overflow: auto; font: 16px/1.5 ui-sans-serif, sans-serif; }
+.lc-data-consent::backdrop { background: #050b10; }
+.lc-data-consent h1 { font-size: 23px; margin: 0 0 18px; }
+.lc-consent-actions { display: grid; gap: 10px; margin: 20px 0 14px; }
+.lc-data-consent button { min-height: 48px; border: 1px solid #68a5ac; border-radius: 4px; background: #173c47; color: #e6ffff; padding: 10px 16px; font: inherit; cursor: pointer; }
+.lc-data-consent input { width: 100%; box-sizing: border-box; background: #08121a; color: #c5dddf; border: 1px solid #548f96; padding: 10px; font-size: 13px; }
+.lc-data-consent [role=status] { font-size: 13px; color: #a9c8cc; }
+.lc-boot-error { color: white; padding: 24px; }
+[data-mobile=true] #app > canvas { touch-action: none; }
+[data-mobile=true] .ls-left-dock { top: max(8px, env(safe-area-inset-top)) !important; left: max(8px, env(safe-area-inset-left)) !important; width: min(300px, calc(100vw - 80px)) !important; max-height: 40dvh !important; gap: 4px !important; }
+[data-mobile=true] .ls-left-dock input, [data-mobile=true] .ls-left-dock select { font-size: 16px !important; }
+[data-mobile=true] .ls-hotbar { display: none !important; }
+.lc-touch-controls { position: fixed; z-index: 15; inset: auto max(12px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); display: flex; justify-content: space-between; align-items: end; pointer-events: none; }
+.lc-dpad { display: grid; grid-template-columns: repeat(3, 48px); grid-template-rows: repeat(3, 48px); gap: 5px; }
+.lc-touch-controls button { touch-action: none; user-select: none; -webkit-user-select: none; pointer-events: auto; color: var(--hud-title, #ccffff); background: rgba(9,27,37,.85); border: 1px solid #5d919a; border-radius: 5px; font: 22px ui-sans-serif, sans-serif; min-width: 48px; min-height: 48px; }
+.lc-touch-controls button[aria-pressed=true] { background: #377a86; }
+.lc-vertical { display: grid; grid-template-columns: 48px; gap: 8px; }
+.lc-touch-hint { position: fixed; bottom: max(182px, calc(env(safe-area-inset-bottom) + 164px)); left: 12px; right: 12px; text-align: center; pointer-events: none; color: #d4eeee; font-size: 11px; text-shadow: 0 1px 3px #000; }
+.lc-mobile-preview { position: fixed; left: 50%; top: 48%; transform: translate(-50%,-50%); width: min(256px, 64vw, 46dvh); z-index: 13; pointer-events: none; background: #09141e; border: 1px solid #72a5ad; box-shadow: 0 6px 28px #0009; }
+.lc-mobile-preview img { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; }
+.lc-mobile-preview p { margin: 0; padding: 7px; color: #def4f5; text-align: center; font-size: 11px; }
+[data-mobile=true] .ls-inventory-panel { top: max(8px, env(safe-area-inset-top)) !important; right: max(8px, env(safe-area-inset-right)) !important; width: 56px !important; height: auto !important; max-height: min(240px, 34dvh); overflow: hidden; }
+[data-mobile=true] .ls-inventory-header, [data-mobile=true] .ls-inventory-panel .ls-inventory-actions, [data-mobile=true] .ls-inventory-minimap, [data-mobile=true] .lc-inventory-empty { display: none !important; }
+[data-mobile=true] .ls-inventory-panel button:not(.lc-inventory-thumb) { margin: 0 !important; min-height: 44px; padding: 3px; }
+.lc-inventory-thumb { display: block; padding: 3px; background: none; border: 0; width: 50px; height: 50px; }
+.lc-inventory-thumb img { width: 44px; height: 44px; object-fit: cover; }
+@media (max-height: 500px) {
+  .lc-dpad { grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(3, 44px); gap: 3px; }
+  .lc-touch-controls button { min-width: 44px; min-height: 44px; }
+  .lc-touch-hint { bottom: max(156px, calc(env(safe-area-inset-bottom) + 148px)); }
+}

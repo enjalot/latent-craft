@@ -5,6 +5,7 @@ import {
 } from "../config.ts";
 import type { Manifest } from "./Manifest.ts";
 import type { RingRadii } from "./priority.ts";
+import { runtimeProfile } from "../runtime/DeviceProfile.ts";
 
 export interface StreamingPolicy {
   readonly radii: Readonly<RingRadii>;
@@ -40,10 +41,18 @@ export const BL_STREAMING_POLICY: StreamingPolicy = {
   maxChunks: 256,
 };
 
+export const MOBILE_STREAMING_POLICY: StreamingPolicy = {
+  ...DEFAULT_STREAMING_POLICY,
+  radii: { r0: 1.2, r1: 1.6, r2: 2.3 },
+  showRadius: 1.6, hideRadius: 1.9,
+  maxChunks: 12, maxBytes: 96 * 1024 * 1024, maxInstances: 24576,
+};
+
 export function streamingPolicyFor(
   profile: "bl-wide" | undefined,
   manifest: Manifest,
 ): StreamingPolicy {
+  if (runtimeProfile.mobile) return MOBILE_STREAMING_POLICY;
   // Legacy BL packs have full-size atlases even for sparse chunks. The
   // measured compact-pack costs must not be applied to those releases.
   return profile === "bl-wide" && manifest.raw.streaming && manifest.compactAtlases

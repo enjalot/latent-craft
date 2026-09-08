@@ -27,7 +27,7 @@ export class SearchNavigation {
 
   constructor(private readonly manifest: Manifest, private readonly engine: Engine,
     private readonly controls: FlightControls, private readonly store: ChunkStore,
-    private readonly sharp: SharpBand, private readonly minimap: () => MinimapBridge | null,
+    private readonly sharp: SharpBand | null, private readonly minimap: () => MinimapBridge | null,
     private readonly radius: () => number, private readonly cancelHold: () => void) {
     const size = manifest.voxelWorldSize;
     this.ring = new THREE.TorusGeometry(.7 * size, .035 * size, 6, 32);
@@ -60,7 +60,7 @@ export class SearchNavigation {
 
   hover(result: SearchResult | null): void {
     const focus = result ?? this.selected;
-    this.sharp.setSearchFocus(focus ? { chunkId: focus.chunk, localVoxelId: focus.local, rowId: focus.row } : null);
+    this.sharp?.setSearchFocus(focus ? { chunkId: focus.chunk, localVoxelId: focus.local, rowId: focus.row } : null);
     if (!focus) { this.minimap()?.clearVoxelHighlight(); this.controls.cancelLookTransition(); return; }
     const plan = planVoxelFlight(this.manifest, focus.chunk, focus.local, this.engine.camera.position, this.radius());
     if (!plan) return;
@@ -86,7 +86,7 @@ export class SearchNavigation {
   }
 
   clear(): void {
-    this.selected = null; this.marker.visible = false; this.sharp.setSearchFocus(null);
+    this.selected = null; this.marker.visible = false; this.sharp?.setSearchFocus(null);
     this.minimap()?.clearVoxelHighlight(); this.minimap()?.cancelHoverLook(); this.controls.cancelLookTransition();
   }
 

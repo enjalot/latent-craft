@@ -345,7 +345,7 @@ export class ChunkStore {
     for (const candidate of candidates) {
       const entry = candidate.entry;
       const side = entry.atlas_size_px ?? this.manifest.raw.atlas.size_px;
-      const cost = side * side * 4 + entry.meta_bytes + entry.n_occupied_voxels * 1024;
+      const cost = side * side * 4 + Math.max(entry.meta_bytes, this.manifest.voxelsPerChunk ** 3 * 16 + 32) + entry.n_occupied_voxels * 1024;
       // A distance prefix, not a knapsack: cheap farther chunks cannot jump
       // over a nearer dense chunk. Costs are reserved before any load finishes.
       if (allowed.size >= this.policy.maxChunks || bytes + cost > this.policy.maxBytes || instances + entry.n_occupied_voxels > this.policy.maxInstances) break;

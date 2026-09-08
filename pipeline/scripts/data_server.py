@@ -85,6 +85,25 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
         self._range_remaining = None
         requested = self.headers.get("Range")
         path = Path(self.translate_path(self.path))
+        # Only non-ranged JSON uses gzip sidecars. Binary offsets always refer
+        # to original bytes; even Range+Accept-Encoding:gzip stays identity.
+        encodings = {}
+        for item in self.headers.get("Accept-Encoding", "").split(","):
+            parts = [p.strip().lower() for p in item.split(";")]
+            try:
+                encodings[parts[0]] = float(next((p[2:] for p in parts[1:] if p.startswith("q=")), "1"))
+            except ValueError:
+                encodings[parts[0]] = 0
+        compressed = path.with_suffix(path.suffix + ".gz")
+        self._json_varies = path.suffix == ".json" and path.is_file() and compressed.is_file()
+        if not requested and self._json_varies and encodings.get("gzip", encodings.get("*", 0)) > 0:
+            source = compressed.open("rb")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(os.fstat(source.fileno()).st_size))
+            self.end_headers()
+            return source
         # RFC 9110 §14.2 only defines Range for GET; HEAD describes the full resource.
         if self.command != 'GET' or not requested or not requested.startswith('bytes=') or not path.is_file():
             return super().send_head()
@@ -240,6 +259,8 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(data)
 
     def end_headers(self):
+        if getattr(self, "_json_varies", False):
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, ETag, Accept-Ranges")
         self.send_header("Access-Control-Allow-Origin", "*")

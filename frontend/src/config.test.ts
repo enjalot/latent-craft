@@ -39,7 +39,7 @@ describe("dataset identities", () => {
   it("gives the audited 6M DINO pair its own release and save identity", () => {
     const dino = DATASETS["monet-dino-basemap-full-6m-pca768-512"];
     expect(dino).toMatchObject({
-      path: "/chunks/monet-dino-basemap-full-6m-pca768-20260908a-512-stream",
+      path: "/chunks/monet-dino-basemap-full-6m-pca768-20260908a-512-web-20260908b",
       pointsId: "monet-dino-basemap-full-6m-pca768-20260908a",
       minimapPath: "/minimap/monet-dino-basemap-full-6m-pca768-20260908a",
     });

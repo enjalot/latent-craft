@@ -11,6 +11,12 @@ const save = (): MiningSave => ({ version: 1, dataset: "test", pack: manifest.ba
 }] });
 
 describe("portable mining saves", () => {
+  it("keeps save identity across a storage-only repack, without accepting a different projection", () => {
+    const repacked = { ...manifest, baseUrl: "/chunks/release-a-compact", raw: { save_identity: manifest.baseUrl } } as Manifest;
+    expect(validateMiningSave(save(), "test", repacked)).toEqual(save());
+    const different = { ...repacked, raw: { save_identity: "/chunks/different-projection" } } as Manifest;
+    expect(() => validateMiningSave(save(), "test", different)).toThrow();
+  });
   it("round-trips CSV with URLs, commas, quotes, BOM and CRLF", async () => {
     const original = save();
     original.dataset = 'name, "quoted"';

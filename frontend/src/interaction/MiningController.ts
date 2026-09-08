@@ -217,7 +217,7 @@ export class MiningController {
 
   snapshot(dataset: string): MiningSave {
     if (!this.manifest) throw new Error("No dataset loaded.");
-    return { version: 1, dataset, pack: this.manifest.baseUrl, stacks: this.inventory.stacks.map(s => {
+    return { version: 1, dataset, pack: this.manifest.raw?.save_identity ?? this.manifest.baseUrl, stacks: this.inventory.stacks.map(s => {
       const state = this.extractionState(s.chunkId, s.localVoxelId)!;
       return { id: s.id, chunkId: s.chunkId, localVoxelId: s.localVoxelId, totalPoints: s.totalPoints, reprRowId: s.reprRowId,
         rowIds: [...s.rowIds], cursor: state.cursor, returned: [...state.returned],

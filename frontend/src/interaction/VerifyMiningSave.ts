@@ -1,6 +1,7 @@
 import type { Manifest } from "../streaming/Manifest.ts";
 import { PagedRecords, rangeReader, type RangeReader } from "../streaming/RangeReader.ts";
 import type { MiningSave } from "./MiningSave.ts";
+import { decodeVoxel, voxelRecordBytes, summaryOffset } from "../streaming/RecordLayouts.ts";
 
 /** Verify only each consumed posting prefix, including legacy packs whose
  * postings live after the summary. Never fetch a whole dense voxel/chunk list. */
@@ -10,12 +11,12 @@ export async function verifyMiningPostings(save: MiningSave, manifest: Manifest,
   for (const stack of save.stacks) {
     if (cancelled()) throw new Error("Map closed.");
     const entry = manifest.chunksById.get(stack.chunkId)!;
-    const meta = new DataView(await reader.read(manifest.url(entry.meta_path), 0, summaryBytes, entry.meta_bytes));
+    const meta = new DataView(await reader.read(manifest.url(entry.meta_path), 0, entry.meta_version === 3 ? entry.meta_bytes : summaryBytes, entry.meta_bytes));
     const version = meta.getUint16(4,true);
-    if (meta.getUint32(0,true) !== 0x3156534c || (version !== 1 && version !== 2) ||
+    if (meta.getUint32(0,true) !== 0x3156534c || ![1, 2, 3].includes(version) ||
       meta.getUint32(6,true) !== stack.chunkId || meta.getUint32(10,true) !== manifest.voxelsPerChunk ** 3)
       throw new Error("Invalid block summary.");
-    const off = 32 + stack.localVoxelId * 16;
+    const off = summaryOffset(meta, stack.localVoxelId);
     const count = version === 1 ? meta.getUint16(off,true) : meta.getUint32(off,true);
     const repr = meta.getUint32(off + (version === 1 ? 10 : 12),true);
     const pointOffset = meta.getUint32(off + (version === 1 ? 2 : 4),true);
@@ -25,7 +26,7 @@ export async function verifyMiningPostings(save: MiningSave, manifest: Manifest,
     const selected = new Set(stack.selected ?? []);
     for (const row of selected) rows.delete(row);
     const start = pointOffset + (version === 1 ? summaryBytes / 4 : 0);
-    if (version === 2 && !entry.postings) throw new Error("Missing posting reference.");
+    if (version >= 2 && !entry.postings) throw new Error("Missing posting reference.");
     const records = version === 1
       ? new PagedRecords(manifest.url(entry.meta_path), entry.meta_bytes / 4, 4, reader)
       : new PagedRecords(manifest.url(entry.postings!.path), entry.n_points, 4, reader);
@@ -39,8 +40,9 @@ export async function verifyMiningPostings(save: MiningSave, manifest: Manifest,
     for (const row of selected) {
       if (cancelled()) throw new Error("Map closed.");
       const lookup = manifest.raw.row_to_voxel;
-      const identity = new DataView(await reader.read(manifest.url(lookup.path), row * 8, 8, lookup.bytes));
-      if (identity.getUint32(0, true) !== stack.chunkId || identity.getUint16(4, true) !== stack.localVoxelId)
+      const stride = voxelRecordBytes(lookup);
+      const identity = decodeVoxel(new DataView(await reader.read(manifest.url(lookup.path), row * stride, stride, lookup.bytes)), stride === 4);
+      if (identity.chunk !== stack.chunkId || identity.local !== stack.localVoxelId)
         throw new Error("Selected image does not belong to this voxel");
     }
   }

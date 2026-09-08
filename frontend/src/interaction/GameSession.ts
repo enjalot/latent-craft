@@ -27,7 +27,7 @@ export class GameSession {
   constructor(private readonly dataset: string, private readonly manifest: Manifest,
     private readonly mining: MiningController, private readonly panel: InventoryPanel,
     private readonly getIndex: () => Promise<PointIndex>) {
-    this.key = `lsv-game-v1:${dataset}:${manifest.baseUrl}`;
+    this.key = `lsv-game-v1:${dataset}:${manifest.raw?.save_identity ?? manifest.baseUrl}`;
     const bar = document.createElement("div");
     Object.assign(bar.style, { display: "flex", gap: "6px", padding: "8px 12px 2px" });
     const button = (text: string) => {

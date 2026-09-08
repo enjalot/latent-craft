@@ -21,20 +21,25 @@ trained direct-DINO-1536 2D projection is not substituted into this pair.
 
 The registered DINO release is `monet-dino-basemap-full-6m-pca768-20260908a`;
 select `?dataset=monet-dino-basemap-full-6m-pca768-512` on a frontend with its
-data routes configured. Its completed full-row audit measured:
+data routes configured. The current storage-only repack is
+`monet-dino-basemap-full-6m-pca768-20260908a-512-web-20260908b`.
+Its completed full-row audit measured:
 
 | Quantity | Value |
 | --- | ---: |
 | Occupied voxels | 1,408,316 |
 | Streaming chunks | 4,446 |
 | Largest voxel | 91,696 images |
-| Complete streaming pack | 4,732,488,380 bytes (4.41 GiB) |
+| Complete compact streaming pack | 3,739,632,688 bytes (3.48 GiB) |
+| Saved against the original streaming pack | 992,855,692 bytes (20.98%) |
 | Compressed atlases, included in pack | 230,019,081 bytes (219.36 MiB) |
-| Density overview files, included in pack | 276,667 bytes (270.18 KiB) |
+| Density overview files and gzip sidecar, included in pack | 276,941 bytes (270.45 KiB) |
 
 These are server-side file sizes, excluding the shared thumbnail store and build
 intermediates. They are not browser memory requirements or startup transfers.
-This release retains the existing browser cache limits.
+Desktop retains the existing distance/residency budgets. Touch devices use the
+smaller profile described below. The repack preserves image/voxel identities and
+the original `save_identity`, so existing inventories and CSV files remain valid.
 
 ## Build and verify
 
@@ -56,6 +61,66 @@ python pipeline/scripts/verify_fullcorpus_monet.py \
   /path/to/published-stream-pack /path/to/published-points \
   --check-heads --report /path/to/audit.json
 ```
+
+For a storage-only publication repack, preserve the source and use a fresh output:
+
+```bash
+python pipeline/scripts/compact_streaming_pack.py /path/to/stream-pack /path/to/new-web-pack
+python pipeline/scripts/verify_fullcorpus_monet.py /path/to/new-web-pack /path/to/points --check-heads
+```
+
+Compaction removes padding from lookup records, stores only occupied voxel
+summaries where smaller, minifies JSON and adds gzip sidecars. It does not change
+embeddings, counts, geometry, atlas ordering, or postings. Unchanged binary files
+are hardlinked on the same filesystem, copied across filesystems; both releases
+must remain immutable. Compact readers still accept legacy packs.
+
+## Mobile and publication profile
+
+Touch phones/tablets show a data-use consent dialog before importing the 3D
+engine or fetching map assets. Copying the URL does not start the map; plain-HTTP
+LAN clipboard fallback is supported. `?mobile=1` previews this mode on desktop,
+and `?mobile=0` explicitly opts into the desktop layout.
+
+Mobile uses a D-pad, separate up/down buttons, drag-to-look, and a held 256px image
+preview. Collection pauses until that preview is decoded. It retains small saved
+thumbnails (16 block rows per page), skips the minimap and automatic sharp band,
+caps device pixel ratio at 1.25 and framebuffer area at one million pixels, and
+targets at most 30 rendered frames/s. Chunk admission is bounded by 12 chunks,
+24,576 voxel instances and a conservative 96 MiB reservation. These are not total
+browser-memory limits or a phone FPS guarantee. Tabs pause rendering while hidden.
+
+A cold local production-browser sample at 390×844 transferred about 4.2 MB to
+reach four resident chunks; its accounted chunk resources were 16.25 MiB. The
+pre-consent page used about 6 KB and requested no map data. Routes, devices,
+compression and cache state change these values. The warning budgets 5–15 MB to
+start and explains that extended exploration can exceed 100 MB.
+
+Maps without a `searchProfile`, including DINO, do not show or load search UI.
+`VITE_DEMO_DATASET` restricts a publication build's picker to that one dataset.
+
+## Direct static thumbnail serving
+
+The optional `VITE_MONET_THUMB_PACK_URL` enables browser-to-object-storage
+thumbnail ranges without a per-image application server. Prepare its small index:
+
+```bash
+python pipeline/scripts/prepare_monet_thumbnail_cdn.py /path/to/thumbnail-store /path/to/thumb-publication
+```
+
+Publish the generated manifest at the configured URL, with existing source
+`shards/*.blob` and `shards/*.offsets.u64` beneath it. No images are re-encoded or
+duplicated per map. A cold thumbnail takes a 16-byte offset-pair range, then its
+WebP range; both must return valid 206 responses. Missing decode spans are not
+replaced with another image. The complete shared store has 828,415,235,818 image
+bytes plus 830,621,040 offset bytes; its manifest is 178,874 bytes before gzip.
+
+Use `VITE_DATA_ORIGIN` for chunk/minimap data and an absolute
+`VITE_MONET_THUMB_PACK_URL` for this shared thumbnail manifest. Keep binary ranged
+objects identity-encoded. Only JSON/page assets should use HTTP compression.
+For exported permanent thumbnail URLs, retain a resolver at `VITE_THUMBS_ORIGIN`;
+the direct range client itself does not require it. Desktop original-URL metadata
+still needs the existing `/meta` service unless a static `pointMetaFile` is set.
 
 Replace `RELEASE_ID` with a fresh alphanumeric identifier. Existing releases
 are never overwritten. `--resume` is for completed stages of an unpublished
