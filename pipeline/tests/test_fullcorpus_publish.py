@@ -17,6 +17,57 @@ audit = importlib.util.module_from_spec(audit_spec)
 audit_spec.loader.exec_module(audit)
 
 
+def projection_fixture(tmp_path, monkeypatch):
+    folder, pool, complement = [tmp_path / name for name in ("projection", "pool", "complement")]
+    for path in (folder, pool, complement): path.mkdir()
+    monkeypatch.setattr(publisher, "MONET_POOL_DIR", pool)
+    monkeypatch.setattr(publisher, "COMPLEMENT", complement)
+    head = tmp_path / "head.pt"; head.write_bytes(b"frozen-model")
+    pca = tmp_path / "pca.npz"; pca.write_bytes(b"frozen-pca")
+    inputs = [pool / "dino.npy", complement / "dino.npy"]
+    np.save(inputs[0], np.zeros((2, 1536), dtype=np.float16))
+    np.save(inputs[1], np.zeros((3, 1536), dtype=np.float16))
+    np.save(folder / "coords.f32.npy", np.arange(10, dtype=np.float32).reshape(5, 2))
+    receipt = dict(status="complete", dim=2, checkpoint=str(head), checkpoint_sha256=publisher.digest(head),
+        checkpoint_sha256_16=publisher.digest(head)[:16], n_rows=5, n_pool=2, n_complement=3,
+        row_layout={"pool": [0, 2], "complement": [2, 5]}, training_rows=6_000_000, input_dimensions=768,
+        pca_sha256=publisher.digest(pca), source_identity={"inputs": [
+            dict(path=str(p), bytes=p.stat().st_size, mtime_ns=p.stat().st_mtime_ns) for p in inputs]})
+    (folder / "manifest.json").write_text(json.dumps(receipt))
+    return folder, head, dict(column="dino.npy", pca=str(pca)), receipt
+
+
+def test_dino_projection_identity_keeps_saved_pca_and_explicit_input_columns(tmp_path, monkeypatch):
+    folder, head, profile, _ = projection_fixture(tmp_path, monkeypatch)
+    verified = publisher.verify_projection(folder, head, 2, profile)
+    assert verified["pca_model"] == profile["pca"]
+    assert verified["checkpoint_sha256"] == publisher.digest(head)
+    assert verified["input_paths"][0].endswith("pool/dino.npy")
+    assert publisher.PROFILES["clip-4m"]["stem"] != publisher.PROFILES["dino-6m-pca768"]["stem"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("status", "projecting"), ("training_rows", 4_000_000), ("input_dimensions", 1536),
+    ("pca_sha256", "wrong"), ("checkpoint_sha256", "wrong"), ("dim", 3),
+    ("n_complement", 4), ("row_layout", {"pool": [0, 3], "complement": [3, 5]})])
+def test_dino_projection_rejects_wrong_model_transform_and_layout(tmp_path, monkeypatch, field, value):
+    folder, head, profile, receipt = projection_fixture(tmp_path, monkeypatch)
+    receipt[field] = value
+    (folder / "manifest.json").write_text(json.dumps(receipt))
+    with pytest.raises(ValueError): publisher.verify_projection(folder, head, 2, profile)
+
+
+def test_dino_projection_rejects_nonfinite_coordinates_and_changed_sources(tmp_path, monkeypatch):
+    folder, head, profile, receipt = projection_fixture(tmp_path, monkeypatch)
+    coords = np.load(folder / "coords.f32.npy"); coords[-1, -1] = np.nan
+    np.save(folder / "coords.f32.npy", coords)
+    with pytest.raises(ValueError, match="Nonfinite"): publisher.verify_projection(folder, head, 2, profile)
+    coords[-1, -1] = 0; np.save(folder / "coords.f32.npy", coords)
+    receipt["source_identity"]["inputs"][0]["mtime_ns"] += 1
+    (folder / "manifest.json").write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="changed"): publisher.verify_projection(folder, head, 2, profile)
+
+
 def test_source_mapping_preserves_shuffled_rows_and_validates_global_shard_boundary():
     counts, names, codes = np.array([2, 1, 3]), np.array(["a", "b", "c"]), np.array([0, 4, 8], dtype=np.uint8)
     refs, sources = publisher.map_source_rows(np.array([1, 0, 0]), np.array([0, 1, 0]),

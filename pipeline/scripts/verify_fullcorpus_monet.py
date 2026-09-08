@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read-only full-row identity/count audit of a published MONET streaming pack."""
 import argparse
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -27,20 +28,37 @@ def verify_heads(provenance):
     spec.loader.exec_module(module)
     errors = {}
     for entry in provenance["coordinates"]:
+        with Path(entry["checkpoint"]).open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != entry["checkpoint_sha256"]:
+                raise ValueError("Projection checkpoint changed")
         checkpoint = torch.load(entry["checkpoint"], map_location="cpu", weights_only=True)
         dim = checkpoint["n_components"]
-        if checkpoint["architecture"] != "residual_bottleneck" or checkpoint["input_dim"] != 512:
+        input_dim = checkpoint["input_dim"]
+        if checkpoint["architecture"] != "residual_bottleneck" or input_dim not in (512, 768):
             raise ValueError("Unexpected projection model architecture")
-        head = module.ResidualBottleneckMLP(512, checkpoint["hidden_dim"], dim, checkpoint["n_layers"], checkpoint["neck_fraction"])
+        head = module.ResidualBottleneckMLP(input_dim, checkpoint["hidden_dim"], dim, checkpoint["n_layers"], checkpoint["neck_fraction"])
         head.load_state_dict(checkpoint["model_state_dict"], strict=True)
         head.eval()
         coords = np.load(entry["path"], mmap_mode="r")
+        pca = None
+        if entry.get("pca_model"):
+            with Path(entry["pca_model"]).open("rb") as stream:
+                if hashlib.file_digest(stream, "sha256").hexdigest() != entry["pca_sha256"]:
+                    raise ValueError("Projection PCA model changed")
+            with np.load(entry["pca_model"]) as model:
+                pca = (torch.from_numpy(model["mean"].copy()), torch.from_numpy(model["components"].copy()))
+            if pca[0].shape != (1536,) or pca[1].shape != (1536, input_dim):
+                raise ValueError("Invalid PCA dimensions")
+        paths = entry.get("input_paths", [f"/data2/monet/{name}/clip512.f32.npy" for name in ("pool-20m", "pool-complement-88m")])
         offset = 0
-        for name in ("pool-20m", "pool-complement-88m"):
-            vectors = np.load(Path("/data2/monet") / name / "clip512.f32.npy", mmap_mode="r")
+        for name, path in zip(("pool-20m", "pool-complement-88m"), paths):
+            vectors = np.load(path, mmap_mode="r")
             sample = np.linspace(0, len(vectors)-1, 64, dtype=np.int64)
             with torch.inference_mode():
-                predicted = head(torch.from_numpy(np.array(vectors[sample], dtype=np.float32))).numpy()
+                inputs = torch.from_numpy(np.array(vectors[sample], dtype=np.float32))
+                if pca is not None:
+                    inputs = torch.nn.functional.normalize((inputs - pca[0]) @ pca[1], dim=1)
+                predicted = head(inputs).numpy()
             error = float(np.abs(predicted - coords[offset+sample]).max())
             if not np.isfinite(error) or error > 1e-3:
                 raise ValueError(f"{dim}D {name} projections do not reproduce: {error}")
@@ -54,6 +72,11 @@ def verify_heads(provenance):
 def verify(pack, points):
     manifest = json.loads((pack / "manifest.json").read_text())
     provenance = json.loads((points / "provenance.json").read_text())
+    for entry in provenance["coordinates"]:
+        if entry.get("sha256"):
+            with Path(entry["path"]).open("rb") as stream:
+                if hashlib.file_digest(stream, "sha256").hexdigest() != entry["sha256"]:
+                    raise ValueError("Source coordinates changed after publication")
     validate_manifest(pack)
     n = manifest["point_source"]["n_points"]
     if manifest["dataset_id"] != provenance["dataset"] or n != provenance["n_points"]:

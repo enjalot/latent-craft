@@ -11,3 +11,24 @@ __pycache__/
 !.env.example
 *.pem
 credentials*.json
+
+# Generated datasets and search/model artifacts live outside the source repo.
+/data/
+/artifacts/
+*.npy
+*.npz
+*.parquet
+*.arrow
+*.faiss
+*.index
+*.lance/
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.ktx2
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
