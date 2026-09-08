@@ -300,3 +300,27 @@
 .hud-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(70, 200, 224, 0.65);
 }
+/* Shared left-column alignment; each expanded panel owns its own overflow. */
+:root { --lc-dock-width: 320px; }
+.ls-left-dock {
+  position: fixed; top: 14px; left: 14px;
+  width: min(var(--lc-dock-width), calc(100vw - 28px));
+  max-height: calc(100dvh - 380px);
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 11; pointer-events: none;
+}
+.lc-minimap-dock {
+  position: fixed; bottom: 14px; left: 14px;
+  width: var(--lc-dock-width); z-index: 10; pointer-events: none;
+}
+.lc-ui-toggle {
+  position: fixed; top: max(14px, env(safe-area-inset-top)); left: 50%;
+  transform: translateX(-50%); z-index: 50; pointer-events: auto; min-height: 32px;
+}
+#app.lc-ui-hidden > :not(canvas):not(.lc-ui-toggle) {
+  display: none !important;
+}
+[data-mobile=true] .lc-minimap-dock { display: none; }
+[data-mobile=true] .lc-ui-toggle {
+  top: auto; bottom: max(18px, env(safe-area-inset-bottom)); min-height: 44px;
+}

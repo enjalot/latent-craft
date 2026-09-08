@@ -121,7 +121,6 @@ export class InventoryPanel {
   private readonly listEl: HTMLElement;
   private stackPage = 0;
   private readonly stackPager = document.createElement("button");
-  readonly minimapDock = document.createElement("div");
   readonly actionsDock = document.createElement("div");
   private readonly emptyEl: HTMLElement;
   /** Public so `main.ts` can hang it off `window.lsv` for the headless
@@ -235,9 +234,6 @@ export class InventoryPanel {
       this.render(this.inventory.stacks);
     });
     this.bodyEl.appendChild(this.stackPager);
-    Object.assign(this.minimapDock.style, { flex: "none", margin: "auto auto 8px", paddingTop: "8px" });
-    this.minimapDock.className = "ls-inventory-minimap";
-    this.root.appendChild(this.minimapDock);
 
     // Coarse safety net for the row-level hover handlers below: whatever the
     // per-row `pointerleave`s did or didn't fire, leaving the panel entirely

@@ -13,7 +13,29 @@ export interface MetadataSchema {
 
 export class MetadataUnavailable extends Error {
   constructor(readonly status: number) {
-    super(`Metadata unavailable (${status}). Map and inventory still work.`);
+    super(status === 429 ? "Metadata is busy. Please try again in a moment." : `Metadata unavailable (${status}). Map and inventory still work.`);
+  }
+}
+
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = () => { clearTimeout(timer); reject(signal!.reason); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+/** Retry only temporary admission failures, never validation errors or forever. */
+export async function fetchMetadata(url: string, options: RequestInit = {}): Promise<Response> {
+  const signal = options.signal ?? undefined;
+  for (let attempt = 0; ; attempt++) {
+    signal?.throwIfAborted();
+    const response = await fetch(url, options);
+    if (response.status !== 429 || attempt === 2) return response;
+    const seconds = Number(response.headers.get("Retry-After"));
+    await response.body?.cancel();
+    await pause(seconds > 0 && Number.isFinite(seconds) ? Math.min(seconds * 1000, 2000) : 250 * 2 ** attempt, signal);
   }
 }
 
@@ -63,9 +85,10 @@ export class MatchSnapshot {
 }
 
 export class MetadataClient {
+  private readonly details = new Map<number, ImageDetail>();
   constructor(readonly endpoint: string, private readonly manifest: Manifest) {}
   private async json(path: string, signal?: AbortSignal): Promise<unknown> {
-    const response = await fetch(`${this.endpoint}${path}`, { signal });
+    const response = await fetchMetadata(`${this.endpoint}${path}`, { signal });
     if (!response.ok) throw new MetadataUnavailable(response.status);
     return response.json();
   }
@@ -76,18 +99,26 @@ export class MetadataClient {
     return schema;
   }
   async detail(row: number, signal?: AbortSignal): Promise<ImageDetail> {
+    signal?.throwIfAborted();
+    const cached = this.details.get(row);
+    if (cached) { this.details.delete(row); this.details.set(row, cached); return cached; }
     const detail = await this.json(`/rows/${row}`, signal) as ImageDetail;
     if (detail.row !== row || detail.identity !== this.manifest.raw.row_to_voxel.sha256 ||
       typeof detail.title !== "string" || !Array.isArray(detail.fields) || !Array.isArray(detail.links)) throw new Error("Invalid image metadata identity");
+    this.details.set(row, detail);
+    while (this.details.size > 128) this.details.delete(this.details.keys().next().value!);
     return detail;
   }
   async books(query: string, signal?: AbortSignal): Promise<{ id: string; title: string }[]> {
     return await this.json(`/books?q=${encodeURIComponent(query)}`, signal) as { id: string; title: string }[];
   }
   async filter(query: FilterQuery, signal?: AbortSignal): Promise<MatchSnapshot> {
-    const response = await fetch(`${this.endpoint}/filter`, { method: "POST", signal,
+    const response = await fetchMetadata(`${this.endpoint}/filter`, { method: "POST", signal,
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(query) });
-    if (!response.ok) throw new Error((await response.json()).error || "Filter failed");
+    if (!response.ok) {
+      if (response.status === 429 || response.status === 503) throw new MetadataUnavailable(response.status);
+      const error = await response.json(); throw new Error(error.detail || error.error || "Filter failed");
+    }
     const buffer = await response.arrayBuffer();
     return new MatchSnapshot(buffer, this.manifest.raw.row_to_voxel.sha256!, this.manifest.totalPoints,
       this.manifest.chunksPerAxis ** 3, this.manifest.voxelsPerChunk);

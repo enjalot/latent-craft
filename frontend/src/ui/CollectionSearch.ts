@@ -30,13 +30,12 @@ export class CollectionSearch {
       heading.textContent = `${open ? "▾" : "▸"} Search the collection · ${profile.model}`;
     });
     const form = document.createElement("form"), input = document.createElement("input"), button = document.createElement("button");
-    form.style.flexShrink = "0";
+    Object.assign(form.style, { flexShrink: "0", display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "6px", margin: "8px 0 0" });
     input.type = "search"; input.maxLength = 400; input.placeholder = profile.placeholder;
     input.setAttribute("aria-label", `Search images with ${profile.model}`);
-    Object.assign(input.style, { width: "100%", boxSizing: "border-box", margin: "10px 0 8px", padding: "8px", background: "var(--hud-ground-inset)", color: "var(--hud-text)", border: "1px solid var(--hud-line)" });
+    Object.assign(input.style, { minWidth: "0", width: "100%", boxSizing: "border-box", padding: "7px", background: "var(--hud-ground-inset)", color: "var(--hud-text)", border: "1px solid var(--hud-line)" });
     button.type = "submit"; button.textContent = "Search"; button.className = "hud-button";
-    const backend = document.createElement("span"); backend.textContent = profile.backendLabel; backend.style.opacity = ".65";
-    const bar = document.createElement("div"); Object.assign(bar.style, { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }); bar.append(button, backend);
+    heading.title = profile.backendLabel;
     const help = "Hover to aim; click to collect the image and fly to its block.";
     const status = document.createElement("p"); status.setAttribute("role", "status"); status.textContent = help;
     status.style.overflowWrap = "anywhere";
@@ -81,11 +80,13 @@ export class CollectionSearch {
         if (body.query !== query || ![body.embed_ms, body.search_ms].every(v => Number.isFinite(v) && v >= 0)) throw new Error("Invalid search response");
         status.textContent = `${hits.length} matches · ${(performance.now()-started).toFixed(0)} ms · encode ${body.embed_ms.toFixed(0)} / search ${body.search_ms.toFixed(0)} ms`;
         if (this.matches) status.textContent += ` · filtered from ${candidates.length} candidates (not a full filtered-index search)`;
-        let page = 0;
+        let page = 0, pageSize = window.innerHeight < 850 ? 4 : 8;
         const renderPage = () => {
+          results.style.gridTemplateRows = `repeat(${pageSize / 4}, minmax(0, 1fr))`;
+          results.style.flexBasis = hits.length ? `${pageSize === 4 ? 100 : 200}px` : "0px";
           results.replaceChildren(); pager.replaceChildren(); actions.hover(null);
-          for (const [offset, hit] of hits.slice(page * 8, (page + 1) * 8).entries()) {
-            const i = page * 8 + offset;
+          for (const [offset, hit] of hits.slice(page * pageSize, (page + 1) * pageSize).entries()) {
+            const i = page * pageSize + offset;
             const card = document.createElement("button"); card.type = "button"; card.className = "hud-button";
             Object.assign(card.style, { minWidth: "0", minHeight: "0", padding: "3px", display: "grid", gridTemplateRows: "minmax(0, 1fr) auto", gap: "3px", overflow: "clip" });
             card.setAttribute("aria-label", `Result ${i+1}: collect image and fly to block`);
@@ -105,23 +106,27 @@ export class CollectionSearch {
               } finally { card.disabled = false; }
             });
           }
-          if (hits.length > 8) {
+          if (hits.length > pageSize) {
             const previous = document.createElement("button"), next = document.createElement("button"), label = document.createElement("span");
             previous.type = next.type = "button"; previous.className = next.className = "hud-button";
             previous.textContent = "← Previous"; next.textContent = "Next →";
-            previous.disabled = page === 0; next.disabled = (page + 1) * 8 >= hits.length;
-            label.textContent = `${page * 8 + 1}–${Math.min((page + 1) * 8, hits.length)} of ${hits.length}`;
+            previous.disabled = page === 0; next.disabled = (page + 1) * pageSize >= hits.length;
+            label.textContent = `${page * pageSize + 1}–${Math.min((page + 1) * pageSize, hits.length)} of ${hits.length}`;
             previous.addEventListener("click", () => { page--; renderPage(); });
             next.addEventListener("click", () => { page++; renderPage(); });
             pager.append(previous, label, next);
           }
         };
+        window.addEventListener("resize", () => {
+          const nextSize = window.innerHeight < 850 ? 4 : 8;
+          if (nextSize !== pageSize) { pageSize = nextSize; page = 0; renderPage(); }
+        }, { signal: this.controller.signal });
         renderPage();
       } catch (error) {
         if (generation === this.generation) status.textContent = error instanceof Error ? error.message : String(error);
       }
     });
-    form.append(input, bar); bodyPanel.append(form, status, results, pager); this.root.append(heading, bodyPanel); container.append(this.root);
+    form.append(input, button); bodyPanel.append(form, status, results, pager); this.root.append(heading, bodyPanel); container.append(this.root);
   }
   dispose(): void {
     this.generation++; this.controller?.abort(); this.statusController.abort();

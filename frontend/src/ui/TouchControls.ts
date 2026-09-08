@@ -35,6 +35,6 @@ export class TouchControls {
     this.held.delete(id);
     if (![...this.held.values()].some(v => v.code === held.code)) { this.flight.setTouchKey(held.code, false); held.button.setAttribute("aria-pressed", "false"); }
   }
-  private clear = () => { for (const id of this.held.keys()) this.release(id); };
+  clear = () => { for (const id of this.held.keys()) this.release(id); };
   dispose(): void { this.clear(); this.lifetime.abort(); this.root.remove(); this.hint.remove(); }
 }

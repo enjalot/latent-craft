@@ -1,5 +1,6 @@
 import { PagedRecords, rangeReader } from "./RangeReader.ts";
 import { fetchJson } from "../net/fetchTyped.ts";
+import { localThumbnailPreview } from "./ThumbnailQuality.ts";
 
 interface ThumbnailPack { version: number; shard_rows: number;
   subsets: Record<string, { count: number; sizes: number[] }> }
@@ -47,6 +48,12 @@ async function fetchMonetThumbnail(ref: number, signal?: AbortSignal): Promise<B
 /** Permanent URLs stay in saves; display bytes come directly from CDN ranges. */
 export async function fetchThumbnailBlob(url: string, signal?: AbortSignal): Promise<Blob> {
   signal?.throwIfAborted();
+  const preview = localThumbnailPreview(url);
+  if (preview) {
+    const response = await fetch(preview, { signal });
+    if (!response.ok) throw new Error(`Thumbnail preview HTTP ${response.status}`);
+    return response.blob();
+  }
   const monet = monetAddress(url);
   if (monet !== null) return fetchMonetThumbnail(monet, signal);
   const item = address(url);
@@ -77,7 +84,8 @@ export async function fetchThumbnailBlob(url: string, signal?: AbortSignal): Pro
 export function setThumbnailSource(img: HTMLImageElement, url: string, valid = () => true): void {
   const generation = (generations.get(img) ?? 0) + 1;
   generations.set(img, generation);
-  if (!address(url) && monetAddress(url) === null) { img.src = url; return; }
+  const preview = localThumbnailPreview(url);
+  if (preview || (!address(url) && monetAddress(url) === null)) { img.src = preview ?? url; return; }
   void fetchThumbnailBlob(url).then(blob => {
     if (!valid() || generations.get(img) !== generation || !img.isConnected) return;
     const objectUrl = URL.createObjectURL(blob);

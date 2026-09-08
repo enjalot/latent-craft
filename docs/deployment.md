@@ -25,6 +25,10 @@ defaults to MONET and uses `LSV_DATA_PROXY_TARGET` for its local data service.
 
 ## Search worker
 
+For a bounded Modal thumbnail-origin experiment and the local 128px quality
+comparison, see [thumbnail serving](thumbnail-serving.md). This is separate from
+the published BL assets; enabling the local comparison does not republish them.
+
 `deploy/bl-space/Dockerfile` pins the CPU runtime dependencies. The worker
 downloads files listed in `deploy/bl-space/assets.json` from an immutable Hub
 commit and verifies byte lengths and SHA-256 before loading them. Keep model,

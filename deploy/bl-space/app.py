@@ -130,20 +130,23 @@ def warm():
 
 
 class MetadataWorker:
-    """Own SQLite on a single thread. Reject concurrent work instead of queuing.
+    """Own SQLite on one thread, with bounded admission for normal UI bursts.
 
-    Cancellation keeps the admission lock until the underlying work completes;
+    Cancellation keeps the admission slot until the underlying work completes;
     disconnected clients cannot accidentally build an unbounded executor queue.
     """
-    def __init__(self, path, identity, rows):
+    def __init__(self, path, identity, rows, max_pending=16):
         from metadata_server import MetadataStore
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="metadata")
-        self.lock = threading.Lock()
+        self.slots = threading.BoundedSemaphore(max_pending)
         def initialize():
             self.store = MetadataStore(path)
             if self.store.info["identity"] != identity or self.store.info["rows"] != rows:
                 self.store.db.close()
                 raise ValueError("Metadata belongs to another map")
+            # Immutable release: don't scan the year column for every visitor,
+            # or make loading the settings wait behind a full filter snapshot.
+            self.schema_value = self.store.schema()
         try:
             self.executor.submit(initialize).result()
         except Exception:
@@ -151,10 +154,15 @@ class MetadataWorker:
             raise
 
     async def call(self, method, *args):
-        if not self.lock.acquire(blocking=False):
-            raise HTTPException(429, "Metadata is busy; please try again.")
-        future = asyncio.get_running_loop().run_in_executor(self.executor, getattr(self.store, method), *args)
-        future.add_done_callback(lambda _future: self.lock.release())
+        if method == "schema": return self.schema_value
+        if not self.slots.acquire(blocking=False):
+            raise HTTPException(429, "Metadata is busy; please try again.", headers={"Retry-After": "1"})
+        try:
+            future = asyncio.get_running_loop().run_in_executor(self.executor, getattr(self.store, method), *args)
+        except BaseException:
+            self.slots.release()
+            raise
+        future.add_done_callback(lambda _future: self.slots.release())
         try:
             return await asyncio.shield(future)
         except (ValueError, TypeError) as error:

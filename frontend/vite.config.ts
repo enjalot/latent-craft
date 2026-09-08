@@ -22,6 +22,7 @@ export default defineConfig(({ mode }) => {
       // server. `LSV_DATA_PROXY_TARGET` makes the server location deployable
       // without changing source.
       proxy: {
+        "/api/thumb-preview": "http://127.0.0.1:8808",
         "/api/metadata": env.LSV_METADATA_PROXY_TARGET || "http://127.0.0.1:8805",
         "/api/bl": env.LSV_BL_SEARCH_PROXY_TARGET || "http://127.0.0.1:8804",
         "/api/monet": env.LSV_MONET_SEARCH_PROXY_TARGET || "http://127.0.0.1:8807",

@@ -14,9 +14,9 @@ export class MetadataFilters {
   private bookMatches = document.createElement("div");
   constructor(private readonly client: MetadataClient, private readonly apply: (snapshot: MatchSnapshot | null) => void) {
     this.element.className = "ls-metadata-filters";
-    const heading = document.createElement("h3"); heading.textContent = "Filter images"; heading.style.fontSize = "12px";
+    this.element.setAttribute("aria-label", "Image filters");
     this.status.setAttribute("role", "status"); this.status.textContent = "Loading filter fields…";
-    this.element.append(heading, this.status, this.form);
+    this.element.append(this.status, this.form);
     this.element.addEventListener("keydown", event => event.stopPropagation());
     this.form.addEventListener("submit", event => { event.preventDefault(); void this.submit(); });
     void this.init();
@@ -81,8 +81,8 @@ export class MetadataFilters {
     } catch (error) {
       if (this.lifetime.signal.aborted) return;
       this.status.textContent = String(error);
-      if (error instanceof MetadataUnavailable && error.status === 503) {
-        this.status.textContent = "Book metadata is warming; filters will become available automatically.";
+      if (error instanceof MetadataUnavailable && [429, 503].includes(error.status)) {
+        this.status.textContent = error.status === 503 ? "Book metadata is warming; filters will become available automatically." : "Book metadata is busy; retrying shortly.";
         this.retryTimer = setTimeout(() => { if (!this.lifetime.signal.aborted) void this.init(); }, 5000);
       }
     }

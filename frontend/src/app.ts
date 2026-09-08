@@ -36,6 +36,7 @@ import { DatasetPicker } from "./ui/DatasetPicker.ts";
 import { TouchControls } from "./ui/TouchControls.ts";
 import { TouchPreview } from "./ui/TouchPreview.ts";
 import { addDatasetAbout } from "./ui/DemoAbout.ts";
+import { UiVisibility } from "./ui/UiVisibility.ts";
 import { SearchNavigation } from "./interaction/SearchNavigation.ts";
 import { createHoldProgressRing } from "./ui/hud/Crosshair.ts";
 import { InventoryPanel } from "./ui/InventoryPanel.ts";
@@ -166,16 +167,17 @@ highlightBox.visible = false;
 highlightBox.renderOrder = 2;
 engine.scene.add(highlightBox);
 
-// Fixed dock; settings and search scroll independently inside their own panels.
+// Fixed dock: About first, with independent settings overflow and paged search.
 const leftDock = document.createElement("div");
 leftDock.className = "ls-left-dock";
-Object.assign(leftDock.style, { position: "fixed", top: "14px", left: "14px", maxHeight: "calc(100vh - 104px)",
-  width: "min(420px, calc(100vw - 28px))", display: "flex", flexDirection: "column",
-  gap: "8px", zIndex: "11", pointerEvents: "none" });
 app.append(leftDock);
 const attribution = DATASETS[datasetKey]?.attribution;
-if (attribution) addDatasetAbout(app, attribution, visualTheme.artworkNotice);
-const datasetPicker = new DatasetPicker(leftDock, datasetKey, DATASETS, useSynthetic, true);
+if (attribution) addDatasetAbout(leftDock, attribution, visualTheme.artworkNotice);
+// A single-collection publication does not need an inert dataset selector.
+const datasetPicker = import.meta.env.VITE_DEMO_DATASET ? null : new DatasetPicker(leftDock, datasetKey, DATASETS, useSynthetic, true);
+const minimapDock = document.createElement("div");
+minimapDock.className = "lc-minimap-dock";
+app.append(minimapDock);
 const hud = new Hud(leftDock, true);
 let searchNavigation: SearchNavigation | null = null;
 const searchCompare = useSynthetic || !DATASETS[datasetKey]?.searchProfile ? null : DATASETS[datasetKey].searchProfile !== "clip-training" ? new (await import("./ui/CollectionSearch.ts")).CollectionSearch(leftDock, {
@@ -215,6 +217,10 @@ let sharpBand: SharpBand | null = null;
 const touchPreview = runtimeProfile.mobile ? new TouchPreview(app) : null;
 const touchControls = runtimeProfile.mobile ? new TouchControls(app, flightControls,
   delta => effectorField?.setRadiusVoxels(effectorField.currentRadiusVoxels + delta)) : null;
+const uiVisibility = new UiVisibility(app, engine.renderer.domElement, () => {
+  pointerController.cancelHold(); touchControls?.clear();
+  minimap?.cancelHoverLook(); searchNavigation?.clear();
+});
 
 // scratch objects reused every frame to avoid per-frame allocation
 const hitMatrix = new THREE.Matrix4();
@@ -503,7 +509,7 @@ async function bootstrapStreamedWorld(): Promise<void> {
       const mapContext = document.createElement("div"); mapContext.hidden = true;
       mapContext.textContent = "Minimap: full collection · image filter applies to 3D";
       Object.assign(mapContext.style, { fontSize: "10px", maxWidth: "240px", padding: "4px 8px", color: "var(--hud-text)" });
-      inventoryPanel.minimapDock.before(mapContext);
+      minimapDock.append(mapContext);
       metadataFilters = new MetadataFilters(metadataClient, snapshot => {
         mapContext.hidden = snapshot === null;
         pointerController.cancelHold(); searchNavigation?.clear();
@@ -564,9 +570,7 @@ async function bootstrapMinimap(m: Manifest, store: ChunkStore, proxies: VoxelPr
       );
     }
     bridge = new MinimapBridge({
-      // Non-null assertion: same module-scope `throw` narrowing limitation as
-      // the InventoryPanel construction above.
-      container: inventoryPanel!.minimapDock,
+      container: minimapDock,
       pack,
       manifest: m,
       chunkStore: store,
@@ -1008,7 +1012,7 @@ function disposeApp(): void {
   searchCompare?.dispose(); searchNavigation?.dispose(); searchNavigation = null;
   touchControls?.dispose(); touchPreview?.dispose();
   metadataFilters?.dispose(); metadataFilters = null;
-  leftDock.remove();
+  leftDock.remove(); minimapDock.remove(); uiVisibility.dispose();
   if (effectorField) gameSession?.saveSettings(engine.camera.position.toArray(), engine.camera.quaternion.toArray(), effectorField.currentRadiusVoxels, true);
   gameSession?.dispose(); gameSession = null;
 
@@ -1026,7 +1030,7 @@ function disposeApp(): void {
   hotbar.dispose();
   holdRing.dispose();
   hud.dispose();
-  datasetPicker.dispose();
+  datasetPicker?.dispose();
 
   chunkStore?.dispose();
   chunkStore = null;

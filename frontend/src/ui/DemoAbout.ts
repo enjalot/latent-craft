@@ -4,11 +4,14 @@ import type { DatasetAttribution } from "../datasets/registry.ts";
 /** Collection credits come from data; generated artwork credits from the skin. */
 export function addDatasetAbout(container: HTMLElement, attribution: DatasetAttribution, artworkNotice?: string): void {
   const root = document.createElement("details");
-  Object.assign(root.style, { position: "fixed", bottom: "14px", left: "14px", width: "min(420px, calc(100vw - 28px))",
-    boxSizing: "border-box", padding: "9px", zIndex: "12", pointerEvents: "auto", fontSize: "11px", maxHeight: "45vh", overflowY: "auto" });
+  root.className = "lc-about";
+  Object.assign(root.style, { position: "relative", width: "100%", flexShrink: "0",
+    boxSizing: "border-box", padding: "9px", pointerEvents: "auto", fontSize: "11px" });
   applyHudPanelChrome(root);
-  const summary = document.createElement("summary"); summary.textContent = `latent-craft · ${attribution.title} · about`; applyHudTitle(summary);
+  const summary = document.createElement("summary"); summary.textContent = `latent-craft · ${attribution.title}`;
+  summary.title = "About latent-craft and this collection"; summary.setAttribute("aria-label", summary.title); applyHudTitle(summary);
   const body = document.createElement("div");
+  Object.assign(body.style, { maxHeight: "25dvh", overflowY: "auto", overscrollBehavior: "contain" });
   const paragraph = (text: string) => {
     const p = document.createElement("p"); p.textContent = text; body.append(p);
   };

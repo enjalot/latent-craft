@@ -1199,7 +1199,7 @@ export const EFFECTOR_DOT_COLOR = 0x66d9e8;
 
 /** On-screen edge of the square minimap panel, CSS pixels. Small and
  * unobtrusive by design — it's an overview, not a second viewport. */
-export const MINIMAP_SIZE_PX = 220;
+export const MINIMAP_SIZE_PX = 272;
 
 /**
  * Which density zoom level to composite the static base image from.

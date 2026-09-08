@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { runtimeProfile } from "../runtime/DeviceProfile.ts";
 import { applyHudPanelChrome, applyHudTitle, HUD_CLASS } from "./hudPanel.ts";
 import { voxelCountThreshold } from "../voxels/VoxelCountFilter.ts";
+import { addThumbnailQualityControl } from "../streaming/ThumbnailQuality.ts";
 
 export interface HudStreamingState {
   /** Dataset label from the config registry. */
@@ -72,6 +73,7 @@ export class Hud {
 
   constructor(container: HTMLElement, docked = false) {
     this.root = document.createElement("div");
+    this.root.className = "lc-settings";
     Object.assign(this.root.style, {
       position: docked ? "relative" : "fixed",
       // DatasetPicker occupies the first strip in this top-left dock.
@@ -183,6 +185,7 @@ export class Hud {
     enabled.addEventListener("change", update); threshold.addEventListener("change", update);
     filter.title = "Images per voxel before mining, restricted to matches when image filters are active. The minimap remains full-collection context.";
     filter.append(label, threshold, "images"); this.controls.append(filter);
+    addThumbnailQualityControl(this.controls);
   }
 
   updateRadius(radius: number): void {

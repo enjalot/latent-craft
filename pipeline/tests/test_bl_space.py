@@ -77,12 +77,12 @@ def test_metadata_thread_ownership_identity_and_http_contract(runtime, store):
         worker.close()
 
 
-def test_metadata_disconnect_keeps_admission_lock_until_work_finishes(runtime, store):
+def test_metadata_disconnect_keeps_bounded_admission_until_work_finishes(runtime, store):
     import asyncio
     import threading
     from fastapi import HTTPException
     path = store.db.execute("PRAGMA database_list").fetchone()[2]
-    worker = runtime.MetadataWorker(path, "ab" * 32, 8)
+    worker = runtime.MetadataWorker(path, "ab" * 32, 8, max_pending=1)
     started, finish = threading.Event(), threading.Event()
     def slow():
         started.set()
@@ -94,15 +94,35 @@ def test_metadata_disconnect_keeps_admission_lock_until_work_finishes(runtime, s
         await asyncio.to_thread(started.wait, 2)
         task.cancel()
         with pytest.raises(asyncio.CancelledError): await task
-        with pytest.raises(HTTPException) as error: await worker.call("schema")
+        # The cached schema stays available even while a full filter is busy.
+        assert (await worker.call("schema"))["rows"] == 8
+        with pytest.raises(HTTPException) as error: await worker.call("detail", 1)
         assert error.value.status_code == 429
+        assert error.value.headers["Retry-After"] == "1"
         finish.set()
         for _ in range(100):
-            if not worker.lock.locked(): break
             await asyncio.sleep(.01)
-        assert (await worker.call("schema"))["rows"] == 8
+            try:
+                assert (await worker.call("detail", 1))["row"] == 1
+                break
+            except HTTPException as error:
+                assert error.status_code == 429
+        else: pytest.fail("Cancelled request leaked an admission slot")
     try:
         asyncio.run(check())
     finally:
         finish.set()
         worker.close()
+
+
+def test_metadata_accepts_a_normal_burst_and_caches_schema(runtime, store):
+    import asyncio
+    path = store.db.execute("PRAGMA database_list").fetchone()[2]
+    worker = runtime.MetadataWorker(path, "ab" * 32, 8)
+    worker.store.schema = lambda: pytest.fail("Immutable schema must not scan SQLite again")
+    async def check():
+        details = await asyncio.gather(*(worker.call("detail", i) for i in range(8)))
+        assert [d["row"] for d in details] == list(range(8))
+        assert (await worker.call("schema"))["rows"] == 8
+    try: asyncio.run(check())
+    finally: worker.close()

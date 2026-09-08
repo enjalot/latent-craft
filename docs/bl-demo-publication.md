@@ -26,7 +26,10 @@ under `gs://fun-data/latent-craft/bl/20260907a`.
 
 The Space uses CPU Basic, with one bounded search request at a time, two CPU
 threads, 24 results and a 128-entry embedding cache. Read-only SQLite has a
-16 MiB page cache, an eight-snapshot result cache and one admitted operation.
+16 MiB page cache, an eight-snapshot result cache and one execution thread with
+at most 16 admitted operations. The immutable schema is precomputed; ordinary
+overlapping reads queue within that bound instead of immediately returning 429.
+Overflow returns Retry-After, which the client respects with at most two retries.
 Metadata starts independently from the model. No query history is intentionally
 persisted by the application.
 
@@ -34,6 +37,13 @@ Ordinary thumbnails travel directly from browser to GCS. The worker's thumbnail
 endpoint preserves stable exported URLs and provides a fallback. Source metadata
 loads only for the focused image. Full collection masks stay small at BL scale;
 the 100M MONET profiles do not use these BL predicates.
+
+About, Settings and Search share a 320px left column. About is first; the
+single-collection publication omits the dataset picker. The wider minimap sits
+bottom-left, separately from the right-hand inventory. Search pages contain
+four images on shorter windows or eight on taller ones. Hide UI retains all
+state while leaving only its restore button visible. Mobile still omits the
+minimap and uses compact inventory thumbnails.
 
 GCS is a public object-storage origin, not a provisioned Cloud CDN load balancer.
 The existing bucket CORS settings support exact 206 byte ranges. Binary objects

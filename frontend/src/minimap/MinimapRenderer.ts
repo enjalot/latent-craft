@@ -93,8 +93,10 @@ export class MinimapRenderer {
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
 
     this.root = document.createElement("div");
+    this.root.className = "lc-minimap";
     Object.assign(this.root.style, {
       position: "relative",
+      width: "100%", boxSizing: "border-box",
       fontSize: "11px",
       lineHeight: "1.4",
       padding: "5px 7px 6px",
@@ -129,6 +131,7 @@ export class MinimapRenderer {
     this.mapWrap = document.createElement("div");
     Object.assign(this.mapWrap.style, {
       position: "relative",
+      margin: "0 auto",
       width: `${this.sizePx}px`,
       height: `${this.sizePx}px`,
       // Slightly lighter than the panel so the extent of the 2D frame is
