@@ -32,7 +32,7 @@ sensitive content. Similarity search is not moderation or a factual classifier.
 
 Inventory/settings stay in this browser unless exported as CSV. Search phrases
 are sent to the Space; the application does not intentionally save query history.
-Google Cloud Storage receives map/thumbnail requests. CPU Basic may sleep;
+Cloudflare R2/CDN receives map and 128px thumbnail requests. CPU Basic may sleep;
 a fresh worker downloads its verified artifacts before search is ready.
 Memory mapping saves eager RAM allocation, but the operating system's disk page
 cache grows with use; it is not a fixed total-memory limit.

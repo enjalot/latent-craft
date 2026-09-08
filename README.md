@@ -16,7 +16,8 @@ attribution notices are available in the app.
 
 The full 103.8M MONET CLIP profile, projected by 4M-trained basemap heads, also
 supports disk-backed FAISS search. Its [search artifacts](https://huggingface.co/datasets/enjalot/latent-craft-monet-search)
-are published; the public map is pending static thumbnail publication.
+are published; the public map is pending completion of the 128px Cloudflare R2
+thumbnail release. R2 also serves the voxel packs, minimap and URL metadata.
 See [MONET deployment](docs/monet-demo.md). The separate
 [6M-trained DINO/PCA-768 map](docs/full-corpus-monet.md) has no text-search bar.
 
@@ -68,6 +69,7 @@ Vite proxies those routes to the local data server. Select a registered map with
 - [Dataset/model provenance](docs/dataset-provenance.md)
 - [BL deployment and static-serving requirements](docs/deployment.md)
 - [MONET full-corpus build and verification](docs/full-corpus-monet.md)
+- [R2 publication and read-only usage dashboard](docs/r2-operations.md)
 
 ## Checks
 

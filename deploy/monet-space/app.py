@@ -25,7 +25,9 @@ from pydantic import BaseModel, Field
 HERE = Path(__file__).resolve().parent
 ROOT = Path(os.environ.get("LC_SEARCH_ROOT", "/tmp/latent-craft-monet-search"))
 STATIC = Path(os.environ.get("LC_STATIC_ROOT", "/app/static"))
-THUMBS_ORIGIN = os.environ.get("LC_MONET_THUMBS_ORIGIN", "https://storage.googleapis.com/fun-data/latent-craft/monet/thumbs/full-20260908b")
+THUMBS_ORIGIN = os.environ.get("LC_MONET_THUMBS_ORIGIN", "https://assets.latent.download/monet/thumbs/full-128-20260908a")
+if (HERE / "thumbnail-origin.json").exists():
+    THUMBS_ORIGIN = json.loads((HERE / "thumbnail-origin.json").read_text())["base_url"]
 STATE = {"state": "starting", "detail": "Preparing CLIP search; explore the map meanwhile."}
 service = None
 
@@ -175,10 +177,13 @@ thumb_lock = threading.BoundedSemaphore(8)
 
 def read_range(url, start, length, size):
     if not 0 <= start < size or not 0 < length <= 1024*1024 or start+length > size: raise HTTPException(404)
-    request = urllib.request.Request(url, headers={"Range": f"bytes={start}-{start+length-1}"})
+    request = urllib.request.Request(url, headers={"Range": f"bytes={start}-{start+length-1}",
+        "User-Agent": "latent-craft/1.0 (+https://github.com/enjalot/latent-craft)", "Accept-Encoding": "identity"})
     with urllib.request.urlopen(request, timeout=15) as response:
         if response.status != 206 or response.headers.get("Content-Range") != f"bytes {start}-{start+length-1}/{size}":
             raise HTTPException(502, "Invalid thumbnail range response")
+        if response.headers.get("Content-Encoding"):
+            raise HTTPException(502, "Encoded thumbnail range response")
         payload = response.read(length+1)
         if len(payload) != length: raise HTTPException(502, "Invalid thumbnail range length")
         return payload

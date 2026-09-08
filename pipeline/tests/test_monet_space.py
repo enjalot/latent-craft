@@ -65,3 +65,17 @@ def test_ranges_never_fall_back_to_whole_object(runtime, monkeypatch):
     monkeypatch.setattr(runtime.urllib.request, "urlopen", lambda *a, **k: WholeObject())
     with pytest.raises(HTTPException) as error: runtime.read_range("https://example.test/file", 8, 16, 1000)
     assert error.value.status_code == 502
+
+
+def test_encoded_range_is_rejected_before_reading(runtime, monkeypatch):
+    from fastapi import HTTPException
+    class Encoded:
+        status = 206
+        headers = {"Content-Range": "bytes 8-23/1000", "Content-Encoding": "gzip"}
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self, n): pytest.fail("Do not read transformed byte ranges")
+    monkeypatch.setattr(runtime.urllib.request, "urlopen", lambda *a, **k: Encoded())
+    with pytest.raises(HTTPException) as error:
+        runtime.read_range("https://example.test/file", 8, 16, 1000)
+    assert error.value.status_code == 502

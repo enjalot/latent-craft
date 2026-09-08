@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>latent-craft · usage</title><link rel="stylesheet" href="/dashboard.css"><script type="module" src="/dashboard.js"></script></head>
+<body><main>
+  <header><p class="eyebrow">GSV · PRIVATE OPERATIONS</p><h1>What is running, and what does it cost?</h1><p>Provider usage, estimates and missing connections stay separate. This page does not wake sleeping demo servers.</p><p id="updated" role="status">Loading local observations…</p></header>
+  <section aria-labelledby="build-title"><div class="heading"><h2 id="build-title">MONET · 128px publication</h2><span class="tag">LOCAL JOB</span></div><div id="build"></div><progress id="progress" max="100" value="0" aria-label="Thumbnail conversion progress"></progress><p id="build-note"></p><div id="upload"></div></section>
+  <div class="cards">
+    <section id="r2"><div class="heading"><h2>Cloudflare R2</h2><span class="tag">MONET STATIC ASSETS</span></div><div class="content">Awaiting first observation…</div><a href="https://dash.cloudflare.com/?to=/:account/r2" target="_blank" rel="noreferrer">R2 console ↗</a></section>
+    <section id="modal"><div class="heading"><h2>Modal</h2><span class="tag">REPORTED USAGE</span></div><div class="content">Awaiting first observation…</div><a href="https://modal.com/settings/enjalot/usage" target="_blank" rel="noreferrer">Usage and billing ↗</a></section>
+    <section id="gcp"><div class="heading"><h2>Google Cloud</h2><span class="tag">BUCKET METRICS</span></div><div class="content">Awaiting first observation…</div><a href="https://console.cloud.google.com/storage/browser/fun-data?project=enjasets" target="_blank" rel="noreferrer">fun-data bucket ↗</a></section>
+    <section id="hf"><div class="heading"><h2>Hugging Face</h2><span class="tag">SPACE HARDWARE</span></div><div class="content">Awaiting first observation…</div><a href="https://huggingface.co/settings/billing" target="_blank" rel="noreferrer">HF billing ↗</a></section>
+  </div>
+  <section id="setup"><h2>Cloudflare connection</h2>
+    <p>The <code>latent-craft</code> Standard bucket serves MONET through <code>assets.latent.download</code>. Uploads use a bucket-only key; metrics use a separate read-only token. Both stay on gsv, outside the repository and browser. No Worker is needed.</p>
+    <details><summary>Credential setup for another installation</summary>
+    <ol>
+      <li><a href="https://dash.cloudflare.com/sign-up">Create a Cloudflare account</a>, enable R2, and create a <strong>Standard</strong> bucket named <code>latent-craft</code>. This checkout creates a metered R2 subscription; do not choose Infrequent Access.</li>
+      <li>In R2 → Manage API Tokens, create <strong>Object Read &amp; Write</strong> credentials restricted to this bucket. Save the <em>Access Key ID</em> and <em>Secret Access Key</em>.</li>
+      <li>From your laptop terminal, run the command below. It prompts privately over SSH and stores credentials in a mode-600 file on gsv, outside the repository. Do not paste secrets into chat, URLs or frontend settings.</li>
+    </ol>
+    <pre>ssh -t enjalot@gsv.local 'python3 /home/enjalot/code/latent-craft/ops/configure_r2.py'</pre>
+    <p>For these usage charts, also create a separate Cloudflare API token with <strong>Account → Account Analytics → Read</strong>, restricted to your account. The prompt accepts that optional token too.</p>
+    <p>For publication, connect a custom domain to the bucket. The domain must be a zone in the same Cloudflare account. <code>r2.dev</code> is rate-limited and intended only for development. Do not change an existing site's DNS or nameservers until we review its records.</p>
+    <p>Publication requires GET/HEAD CORS and caching on the public asset bucket, verified exact byte ranges, and uploading the manifest last. No Worker or image-transformation subscription is needed.</p>
+    <p><a href="https://developers.cloudflare.com/r2/get-started/s3/">Upload credentials ↗</a> · <a href="https://developers.cloudflare.com/r2/buckets/public-buckets/">Custom domains ↗</a> · <a href="https://developers.cloudflare.com/analytics/graphql-api/getting-started/authentication/api-token-auth/">Analytics token ↗</a></p>
+    </details>
+  </section>
+  <section><h2>What remains an estimate?</h2><p>R2's storage run rate uses current bytes, not the billing cycle's average daily peak. Requests and free allowances are account-wide; origin requests exclude CDN cache hits. Modal reports usage before credits. HF shows the current configured Spaces, not your entire account invoice.</p><p>GCP traffic includes all destinations and is not equivalent to billed Internet egress. To show actual GCP costs, enable a Cloud Billing export to BigQuery and share its <code>project.dataset.table</code> identifier—not a secret key. We have Monitoring access already, but have not found a connected billing export.</p><p><a href="https://developers.cloudflare.com/r2/pricing/">R2 pricing ↗</a> · <a href="https://modal.com/docs/guide/billing">Modal billing reports ↗</a> · <a href="https://cloud.google.com/billing/docs/how-to/export-data-bigquery">GCP billing export setup ↗</a> · <a href="https://huggingface.co/docs/hub/spaces-gpus">HF hardware pricing ↗</a></p></section>
+</main></body></html>

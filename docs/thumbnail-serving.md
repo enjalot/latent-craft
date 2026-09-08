@@ -5,6 +5,10 @@ are packed WebP byte spans with `(rows + 1)` little-endian u64 offsets per sourc
 shard. Preserve both source shard and row identity when making another size.
 Never decompress/recompress blob objects in a range-serving proxy.
 
+The selected MONET publication format is 128px on Cloudflare R2; BL stays at
+256px on GCS. See [R2 publication and monitoring](r2-operations.md). The Modal
+deployment below is a retained bounded experiment, not the full-corpus origin.
+
 ## Local 128px comparison
 
 Run with the pipeline environment, including Pillow:
