@@ -23,6 +23,8 @@ python ops/cloudflare_setup.py --env-file /private/path/.env
 python ops/cloudflare_setup.py --env-file /private/path/.env \
   --create-bucket --public-domain assets.latent.download --import-credentials \
   --create-scoped-tokens
+python ops/cloudflare_setup.py --env-file /private/path/.env \
+  --large-range-domain assets.latent.download
 ```
 
 The required account token can manage R2, read zones/DNS and manage cache rules
@@ -69,6 +71,27 @@ themselves with a project User-Agent; the default generic urllib agent was
 blocked by the configured Cloudflare security policy. No zone-wide security
 settings were weakened.
 
+### Large objects need an explicit cache exception
+
+Cloudflare's normal CDN cache limit is 512 MB on Free/Pro/Business plans.
+On this release, a cold request to a 1.887 GB file returned HTTP 200 for the
+whole object, even with `Range` and `CF-Cache-Status: BYPASS`. The next request
+returned the correct 206. A warm probe therefore did not establish safe
+first-touch behavior. [CDN range behavior and size limits](https://developers.cloudflare.com/cache/concepts/default-cache-behavior/).
+
+The `--large-range-domain` setup flag appends an exact-host, exact-path cache
+bypass for three oversized objects: `spatial.bin`, minimap `points/xy_id.bin`,
+and shared `point_meta.bin`. Those reads go directly to R2; ordinary chunks,
+atlases and thumbnail shards retain CDN caching. It does not alter the bucket,
+DNS or object contents. The bypass must follow the normal cache rule because
+the last matching cache setting wins.
+
+Preflight checks unique cache keys, nonzero middle ranges and end-of-file
+ranges on all three objects, plus ordinary map and thumbnail lookups. It still
+rejects HTTP 200 before consuming a response body; retrying a warm URL or
+accepting whole-object fallback is not a fix. Future releases need their own
+large-object inventory and exact-path exceptions, or smaller sharded objects.
+
 ## Completion-gated HF publication
 
 Build the R2 profile in [MONET deployment](monet-demo.md), then freeze it before
@@ -94,6 +117,15 @@ It reports `complete` only after these checks. It stops visibly on failures;
 waiting is bounded at 12 hours for data, 30 minutes for publication and 90 minutes
 for HF startup. `publish.log` and progress stay outside the repo. A brief browser
 check of the resulting Space remains useful; these checks are not an E2E suite.
+
+Static preflight failures also write a bounded `preflight.json` report with the
+object path, status, expected/actual Content-Range and cache state. Its error is
+shown in the dashboard, so diagnosing it does not require opening a log file.
+Prepare a fresh job directory when changing publication code; keep old failed
+snapshots and logs for diagnosis. Completed corpus objects need no re-upload.
+The completion guard is scoped to that job, so a new frozen release can replace
+an earlier successful one. Verification waits for the new `index.html` before
+checking search readiness; the old healthy Space does not count as a deployment.
 
 ## Read-only LAN dashboard
 

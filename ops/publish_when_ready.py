@@ -46,6 +46,8 @@ def prepare(args):
         "monet-clip-basemap-full-4m-512", "https://assets.latent.download/monet/20260908b",
         "https://assets.latent.download/monet/thumbs/full-128-20260908a/manifest.json"):
         raise ValueError("Build the approved R2 MONET profile first")
+    if profile.get("thumbnailOrigin") != "":
+        raise ValueError("Build with VITE_THUMBS_ORIGIN='' for permanent thumbnail URLs")
     sources = [(p, Path("frontend/dist") / p.relative_to(args.frontend_dist)) for p in args.frontend_dist.rglob("*") if p.is_file()]
     sources += [(REPOSITORY / "deploy/monet-space" / name, Path("deploy/monet-space") / name)
         for name in ("app.py", "Dockerfile", ".dockerignore", "README.md", "CLIP-LICENSE.txt")]
@@ -150,14 +152,16 @@ def verify_search(config):
 def run(job):
     config = json.loads((job / "job.json").read_text())
     state_path = Path(config["state"])
-    state = {"state": "waiting", "phase": "checking frozen release", "started_at": time.time()}
+    state = {"state": "waiting", "phase": "checking frozen release", "started_at": time.time(), "job": str(job)}
     def report(**updates):
         state.update(updates, updated_at=time.time())
         save(state_path, state)
     with (job / ".run.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if state_path.exists() and json.loads(state_path.read_text()).get("state") == "complete":
-            raise ValueError("Already published; prepare a fresh job for a new deployment")
+        if state_path.exists():
+            previous = json.loads(state_path.read_text())
+            if previous.get("state") == "complete" and previous.get("job") == str(job):
+                raise ValueError("Already published; prepare a fresh job for a new deployment")
         try:
             verify_snapshot(job, config)
             deadline = time.monotonic() + 12*3600
@@ -173,7 +177,7 @@ def run(job):
             report(state="publishing", phase="public range preflight and HF upload")
             with (job / "publish.log").open("a") as log:
                 process = subprocess.Popen([sys.executable, str(job / "pipeline/scripts/publish_monet_space.py"),
-                    "--search-assets", config["search_assets"], "--reuse-pinned-assets"], stdout=log, stderr=subprocess.STDOUT)
+                    "--search-assets", config["search_assets"], "--reuse-pinned-assets", "--preflight-report", str(job / "preflight.json")], stdout=log, stderr=subprocess.STDOUT)
                 deadline = time.monotonic() + 1800
                 try:
                     while process.poll() is None:
@@ -181,6 +185,11 @@ def run(job):
                             raise TimeoutError("HF publication exceeded 30 minutes")
                         report(); time.sleep(10)
                     if process.returncode:
+                        report_path = job / "preflight.json"
+                        if report_path.exists() and report_path.stat().st_size < 8192:
+                            preflight = json.loads(report_path.read_text())
+                            if preflight.get("state") == "failed":
+                                raise RuntimeError("Static preflight failed: " + preflight.get("detail", "unknown response"))
                         raise RuntimeError("Publisher failed; inspect private publish.log")
                 finally:
                     if process.poll() is None:
@@ -189,9 +198,13 @@ def run(job):
                         except subprocess.TimeoutExpired: process.kill(); process.wait()
             report(state="verifying", phase="waiting for HF build and disk search startup")
             deadline = time.monotonic() + 90*60
+            expected_frontend = sha(job / "frontend/dist/index.html")
             while time.monotonic() < deadline:
                 try:
-                    status = json.loads(public_bytes("/api/monet/status"))
+                    # An update can still serve the old healthy app while HF
+                    # builds its replacement. Verify the new UI before readiness.
+                    current_frontend = hashlib.sha256(public_bytes("/")).hexdigest()
+                    status = json.loads(public_bytes("/api/monet/status")) if current_frontend == expected_frontend else {"state": "building new frontend"}
                 except (HTTPError, URLError, TimeoutError, ValueError):
                     status = {"state": "building"}
                 if status["state"] == "failed":

@@ -1,11 +1,11 @@
 # MONET: full-corpus CLIP and disk FAISS
 
 The `monet-clip-basemap-full-4m-512` profile contains 103,816,750 images,
-projected with paired 4M-trained CLIP basemap heads. Its compact map is audited
-and its full-corpus search runs locally. The [search artifact bundle](https://huggingface.co/datasets/enjalot/latent-craft-monet-search)
-is published. Static assets use Cloudflare R2 with 128px thumbnails. Public map
-deployment waits for the full conversion/upload and public range preflight;
-do not advertise a live MONET Space until those checks pass.
+projected with paired 4M-trained CLIP basemap heads. The [public Space](https://huggingface.co/spaces/enjalot/latent-craft-monet)
+serves the UI and full-corpus disk search on CPU Basic; Cloudflare R2 serves
+static assets and 128px thumbnails. The [search artifact bundle](https://huggingface.co/datasets/enjalot/latent-craft-monet-search)
+is pinned separately. A cold worker downloads that bundle before search becomes
+ready; the map can load meanwhile. [Open the app directly](https://enjalot-latent-craft-monet.hf.space/).
 
 ## Storage versus runtime
 
@@ -13,7 +13,7 @@ do not advertise a live MONET Space until those checks pass.
 | --- | ---: | --- |
 | Compact 4M CLIP map, including atlases, hierarchy and spatial index | 3,923,972,996 | Nearby chunks, proxy bricks, byte ranges |
 | Shared initial-pool original URL metadata | 1,887,424,406 | A record and URL only when needed |
-| Shared full-corpus 128px WebP image bytes | Approximately 296.1 billion, estimated from eight shards | One selected image range |
+| Shared full-corpus 128px WebP image bytes | 293,508,626,308 | One selected image range |
 | Shared thumbnail u64 offsets | 830,621,040 | A 16-byte extent pair per cold image |
 | Text-search worker bundle | 9,090,751,801 | Never loaded in browser |
 
@@ -79,12 +79,13 @@ names, public range-capable CORS, and no dynamic compression of binary objects.
 The R2 uploader skips gzip sidecars; Cloudflare may compress plain JSON but must
 not transform ranged binary files. Source 256px files remain untouched locally.
 
-The 128px thumbnail store plus offsets is estimated at 296.9 GB (276.5 GiB),
+The completed 128px thumbnail store plus offsets measures 294.34 GB (274.12 GiB),
 compared with 829.2 GB (772.3 GiB) for the local 256px source. The static upload
 plan adds 6,640,924,381 bytes for the CLIP pack, minimap and shared URL table.
 Together that is roughly $4–5/month in R2 Standard storage, before requests;
 the exact monthly charge depends on measured bytes, daily storage and account-wide
-allowances. R2 Internet egress is free; origin reads remain metered. This is
+allowances. Three oversized index/metadata objects explicitly bypass CDN cache
+to preserve first-touch byte ranges. R2 Internet egress is free; origin reads remain metered. This is
 server-side storage, not a browser download. [R2 pricing](https://developers.cloudflare.com/r2/pricing/).
 
 See [R2 publication and monitoring](r2-operations.md) for credential setup,
@@ -96,9 +97,15 @@ Build after static assets are ready:
 cd frontend
 VITE_DEMO_DATASET=monet-clip-basemap-full-4m-512 \
 VITE_DATA_ORIGIN=https://assets.latent.download/monet/20260908b \
+VITE_THUMBS_ORIGIN='' \
 VITE_MONET_THUMB_PACK_URL=https://assets.latent.download/monet/thumbs/full-128-20260908a/manifest.json \
 npm run build
 ```
+
+Keep `VITE_THUMBS_ORIGIN` explicitly empty: permanent `/thumbs/monet/<id>.webp`
+URLs belong to the Space's resolver, while display bytes come directly from the
+R2 thumbnail pack. The static map prefix has no individual WebP files. Preflight
+rejects builds that omit this separation.
 
 Then run `pipeline/scripts/publish_monet_space.py --search-assets /path/to/release`.
 Add `--reuse-pinned-assets` to reuse an existing, locally verified `assets-hf.json`

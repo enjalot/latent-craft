@@ -14,10 +14,13 @@ book metadata and filters, and a wood-and-library theme. It is an independent
 project, not an official British Library product. Historical-content and source
 attribution notices are available in the app.
 
-The full 103.8M MONET CLIP profile, projected by 4M-trained basemap heads, also
-supports disk-backed FAISS search. Its [search artifacts](https://huggingface.co/datasets/enjalot/latent-craft-monet-search)
-are published; the public map is pending completion of the 128px Cloudflare R2
-thumbnail release. R2 also serves the voxel packs, minimap and URL metadata.
+[MONET demo on Hugging Face Spaces](https://huggingface.co/spaces/enjalot/latent-craft-monet)
+· [Open the app directly](https://enjalot-latent-craft-monet.hf.space/)
+
+The MONET demo contains 103,816,750 images, projected by 4M-trained CLIP basemap
+heads, with disk-backed FAISS search. Cloudflare R2 serves its 128px thumbnails,
+voxel packs, minimap and URL metadata. The [search artifacts](https://huggingface.co/datasets/enjalot/latent-craft-monet-search)
+stay on the HF worker; search warms separately from the map after a cold start.
 See [MONET deployment](docs/monet-demo.md). The separate
 [6M-trained DINO/PCA-768 map](docs/full-corpus-monet.md) has no text-search bar.
 

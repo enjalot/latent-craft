@@ -16,6 +16,14 @@ from urllib.request import Request, urlopen
 
 from configure_r2 import CONFIG, save_config
 
+# These three immutable objects exceed the CDN's 512 MB object cache limit.
+# Explicitly bypass the cache so even the first request forwards Range to R2.
+LARGE_RANGE_PATHS = (
+    "/monet/20260908b/chunks/monet-clip-basemap-full-4m-20260906a-512-web-20260908b/spatial.bin",
+    "/monet/20260908b/minimap/monet-clip-basemap-full-4m-20260906a/points/xy_id.bin",
+    "/monet/20260908b/points/monet-clip-basemap-pool-20260905a/point_meta.bin",
+)
+
 
 def read_credentials(path):
     value = {}
@@ -138,6 +146,33 @@ def create_scoped_tokens(credentials, bucket):
         print(json.dumps({"scoped_token": name, "permission": group, "state": "created and saved privately"}))
 
 
+def large_range_rule(domain):
+    if not re.fullmatch(r"[a-z0-9.-]+", domain):
+        raise ValueError("Invalid public asset hostname")
+    paths = " ".join(json.dumps(path) for path in LARGE_RANGE_PATHS)
+    return {"ref": "latent_craft_large_range_objects", "description": "Preserve cold byte ranges for oversized MONET objects",
+        "expression": f'(http.host eq "{domain}" and http.request.uri.path in {{{paths}}})',
+        "action": "set_cache_settings", "action_parameters": {"cache": False}, "enabled": True}
+
+
+def configure_large_ranges(credentials, domain, zones):
+    matches = [z for z in zones if domain.endswith("." + z["name"]) and z["status"] == "active"]
+    if len(matches) != 1:
+        raise ValueError("Choose an asset subdomain of one active account zone")
+    zone = matches[0]["id"]
+    entry = require(api(credentials, f"/zones/{zone}/rulesets/phases/http_request_cache_settings/entrypoint"), "Read cache rules")
+    rule = large_range_rule(domain)
+    rules = entry.get("rules", [])
+    owned = next((r for r in rules if r.get("ref") == rule["ref"]), None)
+    if owned is None:
+        # Last matching rule wins. Append this exception after the normal cache
+        # rule without replacing or reordering any existing account rules.
+        require(api(credentials, f'/zones/{zone}/rulesets/{entry["id"]}/rules', "POST", rule), "Add oversized-object range exception")
+    elif any(owned.get(k) != v for k, v in rule.items()) or any(r.get("ref") == "latent_craft_static_assets" for r in rules[rules.index(owned)+1:]):
+        raise ValueError("Owned large-object rule changed or is ordered incorrectly; review before replacing")
+    return {"domain": domain, "bypassed_paths": list(LARGE_RANGE_PATHS), "other_assets": "cache policy unchanged"}
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", type=Path, default=Path.home() / "code/.env")
@@ -146,6 +181,7 @@ if __name__ == "__main__":
     parser.add_argument("--create-bucket", action="store_true")
     parser.add_argument("--public-domain", help="Explicitly attach this asset subdomain and add scoped CORS/cache rules")
     parser.add_argument("--create-scoped-tokens", action="store_true", help="Create private bucket-only upload and account-read-only analytics credentials")
+    parser.add_argument("--large-range-domain", help="Add an exact-path CDN bypass for oversized MONET range objects on this asset domain")
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", args.bucket):
         raise ValueError("Invalid dedicated bucket name")
@@ -184,3 +220,7 @@ if __name__ == "__main__":
         print(json.dumps({"credentials": "Saved privately; source .env unchanged"}))
     if args.create_scoped_tokens:
         create_scoped_tokens(credentials, args.bucket)
+    if args.large_range_domain:
+        if not zones.get("success"):
+            raise SystemExit("Need zone read access to resolve the domain safely")
+        print(json.dumps({"large_ranges": configure_large_ranges(credentials, args.large_range_domain, zones["result"])}))

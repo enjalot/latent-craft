@@ -15,3 +15,11 @@ it("does not attach published search identities to the legacy development BL map
   expect(DATASETS["bl-160"].searchProfile).toBeUndefined();
   expect(DATASETS["monet-clip-basemap-full-4m-512"].streamingProfile).toBeUndefined();
 });
+it("keeps MONET thumbnail identities at the resolver while map bytes use a prefixed CDN", async () => {
+  vi.stubEnv("VITE_DEMO_DATASET", "monet-clip-basemap-full-4m-512");
+  vi.stubEnv("VITE_DATA_ORIGIN", "https://assets.example/monet/release");
+  vi.stubEnv("VITE_THUMBS_ORIGIN", ""); vi.resetModules();
+  const { resolveThumbsBaseUrl, resolveDatasetBaseUrl } = await import("./config.ts");
+  expect(resolveThumbsBaseUrl("monet-clip-basemap-full-4m-512")).toBe("/thumbs");
+  expect(resolveDatasetBaseUrl("monet-clip-basemap-full-4m-512")).toMatch(/^https:\/\/assets.example\/monet\/release\/chunks\//);
+});

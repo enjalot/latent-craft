@@ -26,6 +26,7 @@ async function refresh() {
     const jobs = document.querySelector('#upload'); jobs.replaceChildren();
     for (const [label, job] of [['R2 thumbnails', state.upload], ['R2 map and metadata', state.static_upload], ['HF publication', state.deployment]]) {
       line(jobs, `${label}: ${progressLabel(job)}${job.files_done != null ? ` · ${number(job.files_done)} / ${number(job.files_total)} files · ${bytes(job.bytes_done)}` : ''}${job.phase ? ` · ${job.phase}` : ''}`, job.stale || job.state === 'failed' ? 'warning' : '');
+      if (job.state === 'failed' && job.detail) line(jobs, job.detail, 'warning small');
     }
     if (state.deployment.state === 'complete' && state.deployment.url) {
       const link = document.createElement('a'); link.href = state.deployment.url; link.textContent = 'Open verified MONET Space ↗'; jobs.append(link);

@@ -12,7 +12,9 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import time
 import urllib.request
+from urllib.parse import urlsplit
 
 from huggingface_hub import HfApi
 
@@ -30,12 +32,18 @@ def public_json(url):
     return json.loads(body)
 
 
-def range_probe(url, length, size):
-    request = urllib.request.Request(url, headers={"Range": f"bytes=0-{length-1}", "User-Agent": USER_AGENT,
+def range_probe(url, length, size, start=0):
+    if not 0 <= start < size or not 0 < length <= 1024**2 or start+length > size:
+        raise ValueError("Invalid publication probe bounds")
+    expected = f"bytes {start}-{start+length-1}/{size}"
+    request = urllib.request.Request(url, headers={"Range": f"bytes={start}-{start+length-1}", "User-Agent": USER_AGENT,
         "Origin": "https://enjalot-latent-craft-monet.hf.space", "Accept-Encoding": "identity"})
     with urllib.request.urlopen(request, timeout=30) as response:
-        if response.status != 206 or response.headers.get("Content-Range") != f"bytes 0-{length-1}/{size}":
-            raise ValueError("Static origin does not preserve byte ranges")
+        if response.status != 206 or response.headers.get("Content-Range") != expected:
+            # Fail before reading a possible multi-gigabyte 200 response.
+            raise ValueError(f"Invalid range at {urlsplit(url).path}: HTTP {response.status}, "
+                f"Content-Range={response.headers.get('Content-Range')!r}, expected={expected!r}, "
+                f"CF-Cache-Status={response.headers.get('CF-Cache-Status')!r}")
         if response.headers.get("Content-Encoding") or response.headers.get("Access-Control-Allow-Origin") != "*":
             raise ValueError("Static origin must preserve bytes and allow public cross-origin reads")
         if len(response.read(length+1)) != length: raise ValueError("Invalid static range length")
@@ -45,16 +53,26 @@ def preflight(root, frontend_dist=None):
     profile = json.loads(((frontend_dist or root / "frontend/dist") / "build-profile.json").read_text())
     if profile["dataset"] != "monet-clip-basemap-full-4m-512" or profile["dataOrigin"] != MAP_ORIGIN or profile["monetThumbnailPack"] != THUMBS:
         raise ValueError("Build the MONET publication profile before publishing this Space")
+    if profile.get("thumbnailOrigin") != "":
+        raise ValueError("Build with VITE_THUMBS_ORIGIN='' so image URLs address the same-origin resolver, not individual R2 files")
     base = MAP_ORIGIN + "/chunks/monet-clip-basemap-full-4m-20260906a-512-web-20260908b"
     manifest = public_json(base + "/manifest.json")
     if manifest["row_to_voxel"]["sha256"] != "ca437bba419cc933455eefbf2af0b797657addce8b2d886db574e7f8f94d6c5f":
         raise ValueError("Static map belongs to another release")
     ref = manifest["row_to_voxel"]; range_probe(base + "/" + ref["path"], 4, ref["bytes"])
+    ref = manifest["point_index"]; range_probe(base + "/" + ref["path"], 5, ref["bytes"])
     minimap_base = MAP_ORIGIN + "/minimap/monet-clip-basemap-full-4m-20260906a"
     minimap = public_json(minimap_base + "/manifest.json")
     if minimap["n_points"] != 103816750 or minimap["display_strategy"] != "overview-png-v1":
         raise ValueError("Wrong minimap release")
-    range_probe(MAP_ORIGIN + "/points/monet-clip-basemap-pool-20260905a/point_meta.bin", 16, 1887424406)
+    large_objects = [(base + "/spatial.bin", 1661068000), (minimap_base + "/points/xy_id.bin", 830534000),
+        (MAP_ORIGIN + "/points/monet-clip-basemap-pool-20260905a/point_meta.bin", 1887424406)]
+    for url, size in large_objects:
+        # A new cache key catches first-touch behavior; a warm URL alone can
+        # hide an oversized-object cache fill returning HTTP 200 instead of 206.
+        cold_url = url + f"?range_preflight={time.time_ns()}"
+        range_probe(cold_url, 16, size, start=size//2)
+        range_probe(url, 16, size, start=size-16)
     thumbs = public_json(THUMBS)
     if thumbs["rows"] != 103816750 or len(thumbs["shards"]) != 10880 or thumbs.get("thumbnail_size") != 128:
         raise ValueError("Incomplete or wrong-resolution thumbnail corpus")
@@ -80,11 +98,19 @@ def main():
     parser.add_argument("--reuse-pinned-assets", action="store_true", help="Reuse an already published verified assets-hf.json; no artifact upload")
     parser.add_argument("--frontend-dist", type=Path, help="Use a previously built, profile-checked frontend")
     parser.add_argument("--runtime-dir", type=Path, help="Use a frozen deployment runtime directory")
+    parser.add_argument("--preflight-report", type=Path, help="Write bounded static preflight diagnostics for the local dashboard")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     frontend_dist = args.frontend_dist or root / "frontend/dist"
     runtime_dir = args.runtime_dir or root / "deploy/monet-space"
-    thumbs = None if args.artifacts_only else preflight(root, frontend_dist)
+    try:
+        thumbs = None if args.artifacts_only else preflight(root, frontend_dist)
+    except Exception as error:
+        if args.preflight_report:
+            args.preflight_report.write_text(json.dumps({"state": "failed", "error": type(error).__name__, "detail": str(error)[:1600]}))
+        raise
+    if args.preflight_report:
+        args.preflight_report.write_text(json.dumps({"state": "complete"}))
     api = HfApi(token=(Path.home() / ".cache/huggingface/token").read_text().strip())
     if api.whoami()["name"] != args.repo.split("/")[0] or args.artifact_repo.split("/")[0] != args.repo.split("/")[0]:
         raise ValueError("Unexpected publishing account")

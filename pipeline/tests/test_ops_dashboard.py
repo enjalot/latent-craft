@@ -8,9 +8,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ops"))
 from cloudflare_setup import import_connection, read_credentials
+import cloudflare_setup
 from configure_r2 import save_config
 from usage_dashboard import allowed_request, local_progress, modal_summary, summarize_metrics
 from publish_when_ready import prerequisites, sha, verify_snapshot
+import publish_when_ready
 
 
 def credentials():
@@ -106,3 +108,54 @@ def test_frozen_publisher_cannot_silently_change_while_waiting(tmp_path):
     path.write_text("later work")
     with pytest.raises(ValueError, match="changed"):
         verify_snapshot(tmp_path, config)
+
+
+def test_new_publication_waits_for_its_frontend_not_previous_healthy_space(tmp_path, monkeypatch):
+    job = tmp_path / "new-job"
+    (job / "frontend/dist").mkdir(parents=True)
+    (job / "frontend/dist/index.html").write_bytes(b"new frontend")
+    state = tmp_path / "deployment.json"
+    state.write_text(json.dumps(dict(state="complete", job=str(tmp_path / "old-job"))))
+    (job / "job.json").write_text(json.dumps(dict(state=str(state), search_assets="unused")))
+    monkeypatch.setattr(publish_when_ready, "verify_snapshot", lambda *_: None)
+    monkeypatch.setattr(publish_when_ready, "prerequisites", lambda *_: (True, "ready"))
+    monkeypatch.setattr(publish_when_ready.time, "sleep", lambda *_: None)
+    class Process:
+        returncode = 0
+        def poll(self): return 0
+    monkeypatch.setattr(publish_when_ready.subprocess, "Popen", lambda *args, **kw: Process())
+    requests = []
+    responses = iter([b"old frontend", b"new frontend", b'{"state":"ready"}'])
+    monkeypatch.setattr(publish_when_ready, "public_bytes", lambda path: requests.append(path) or next(responses))
+    monkeypatch.setattr(publish_when_ready, "verify_search", lambda *_: dict(results_checked=24))
+    publish_when_ready.run(job)
+    assert requests == ["/", "/", "/api/monet/status"]
+    assert json.loads(state.read_text())["state"] == "complete"
+    with pytest.raises(ValueError, match="Already published"):
+        publish_when_ready.run(job)
+
+
+def test_large_range_bypass_is_exact_scoped_append_only_and_idempotent(monkeypatch):
+    normal = {"id": "normal", "ref": "latent_craft_static_assets", "action_parameters": {"cache": True}}
+    unrelated = {"id": "other", "ref": "another_site", "expression": 'http.host eq "elsewhere.test"'}
+    entry = {"id": "ruleset", "rules": [unrelated, normal]}
+    writes = []
+    def api(_credentials, path, method="GET", data=None):
+        if method == "GET": return {"success": True, "result": entry}
+        assert method == "POST" and path == "/zones/zone/rulesets/ruleset/rules"
+        writes.append(data)
+        entry["rules"].append({**data, "id": "exception"})
+        return {"success": True, "result": entry}
+    monkeypatch.setattr(cloudflare_setup, "api", api)
+    zones = [{"id": "zone", "name": "latent.download", "status": "active"}]
+    for _ in range(2): cloudflare_setup.configure_large_ranges({}, "assets.latent.download", zones)
+    assert len(writes) == 1
+    rule = writes[0]
+    assert rule["action_parameters"] == {"cache": False}
+    assert 'http.host eq "assets.latent.download"' in rule["expression"]
+    assert 'http.request.uri.path in {' in rule["expression"] and 'starts_with' not in rule["expression"]
+    assert len(cloudflare_setup.LARGE_RANGE_PATHS) == 3
+    assert entry["rules"][:2] == [unrelated, normal]
+    entry["rules"][-1]["enabled"] = False
+    with pytest.raises(ValueError, match="changed"):
+        cloudflare_setup.configure_large_ranges({}, "assets.latent.download", zones)

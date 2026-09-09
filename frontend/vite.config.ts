@@ -9,6 +9,7 @@ export default defineConfig(({ mode }) => {
       this.emitFile({ type: "asset", fileName: "build-profile.json", source: JSON.stringify({
         dataset: env.VITE_DEMO_DATASET || null, dataOrigin: env.VITE_DATA_ORIGIN || "",
         thumbnailPack: env.VITE_THUMB_PACK_URL || "", monetThumbnailPack: env.VITE_MONET_THUMB_PACK_URL || "",
+        thumbnailOrigin: env.VITE_THUMBS_ORIGIN ?? env.VITE_DATA_ORIGIN ?? "",
       }) });
     } }],
     server: {
