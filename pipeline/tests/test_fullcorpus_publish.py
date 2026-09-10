@@ -34,7 +34,7 @@ def projection_fixture(tmp_path, monkeypatch):
         pca_sha256=publisher.digest(pca), source_identity={"inputs": [
             dict(path=str(p), bytes=p.stat().st_size, mtime_ns=p.stat().st_mtime_ns) for p in inputs]})
     (folder / "manifest.json").write_text(json.dumps(receipt))
-    return folder, head, dict(column="dino.npy", pca=str(pca)), receipt
+    return folder, head, dict(column="dino.npy", pca=str(pca), training_rows=6_000_000), receipt
 
 
 def test_dino_projection_identity_keeps_saved_pca_and_explicit_input_columns(tmp_path, monkeypatch):
@@ -66,6 +66,51 @@ def test_dino_projection_rejects_nonfinite_coordinates_and_changed_sources(tmp_p
     receipt["source_identity"]["inputs"][0]["mtime_ns"] += 1
     (folder / "manifest.json").write_text(json.dumps(receipt))
     with pytest.raises(ValueError, match="changed"): publisher.verify_projection(folder, head, 2, profile)
+
+
+def test_12m_profile_reuses_pca_but_requires_its_own_heads_and_training_receipt(tmp_path, monkeypatch):
+    profile = publisher.PROFILES["dino-12m-pca768"]
+    old = publisher.PROFILES["dino-6m-pca768"]
+    assert profile["pca"] == old["pca"]
+    assert profile["heads"] != old["heads"] and profile["stem"] != old["stem"]
+    assert profile["training_rows"] == 12_000_000
+    assert Path(profile["folders"][0]).is_relative_to(publisher.DATA_ROOT / "projections")
+    folder, head, fixture, receipt = projection_fixture(tmp_path, monkeypatch)
+    fixture["training_rows"] = profile["training_rows"]
+    with pytest.raises(ValueError, match="training identity"):
+        publisher.verify_projection(folder, head, 2, fixture)
+    receipt["training_rows"] = 12_000_000
+    (folder / "manifest.json").write_text(json.dumps(receipt))
+    assert publisher.verify_projection(folder, head, 2, fixture)["manifest"]["training_rows"] == 12_000_000
+
+
+def test_projection_batches_preserve_pool_complement_boundary():
+    import sys
+    sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+    from project_fullcorpus_monet import batches
+    assert list(batches([5, 7], 4)) == [(0, 0, 4, 0), (0, 4, 5, 4), (1, 0, 4, 5), (1, 4, 7, 9)]
+    with pytest.raises(ValueError): list(batches([5, 7], 0))
+
+
+def test_projection_output_cannot_overwrite_or_write_research_inputs(tmp_path, monkeypatch):
+    import sys
+    sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+    import project_fullcorpus_monet as project
+    monkeypatch.setattr(project, "DATA_ROOT", tmp_path / "data")
+    monkeypatch.setattr(project, "SANDBOX", tmp_path / "research")
+    out = tmp_path / "data/projections/new-2d"
+    profile = dict(folders=(str(out), "existing-3d"))
+    assert project.projection_output(profile, 2) == out
+    with pytest.raises(ValueError, match="fresh"): project.projection_output(profile, 3)
+    out.mkdir(parents=True)
+    with pytest.raises(ValueError, match="fresh"): project.projection_output(profile, 2)
+    with pytest.raises(ValueError, match="dimension"): project.projection_output(profile, 4)
+
+
+def test_changed_head_rejected_before_loading_checkpoint(tmp_path):
+    path = tmp_path / "head.pt"; path.write_bytes(b"changed checkpoint")
+    with pytest.raises(ValueError, match="checkpoint changed"):
+        audit.load_head(path, "not-the-recorded-hash")
 
 
 def test_source_mapping_preserves_shuffled_rows_and_validates_global_shard_boundary():

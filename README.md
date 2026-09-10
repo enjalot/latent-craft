@@ -21,8 +21,9 @@ The MONET demo contains 103,816,750 images, projected by 4M-trained CLIP basemap
 heads, with disk-backed FAISS search. Cloudflare R2 serves its 128px thumbnails,
 voxel packs, minimap and URL metadata. The [search artifacts](https://huggingface.co/datasets/enjalot/latent-craft-monet-search)
 stay on the HF worker; search warms separately from the map after a cold start.
-See [MONET deployment](docs/monet-demo.md). The separate
-[6M-trained DINO/PCA-768 map](docs/full-corpus-monet.md) has no text-search bar.
+See [MONET deployment](docs/monet-demo.md). Separate
+[6M- and 12M-trained DINO/PCA-768 maps](docs/full-corpus-monet.md) are prepared
+for local use and have no text-search bar.
 
 ## What the browser loads
 

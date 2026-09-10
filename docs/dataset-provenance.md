@@ -8,13 +8,19 @@ legacy MONET draw maps still project CLIP vectors, not SSCD vectors.
 | --- | --- | --- | ---: |
 | `bl-160` | Google SigLIP 2 SO400M patch16-256, 1152D | Independent 2D / 3D UMAP | 1,080,814 |
 | MONET full CLIP, 512³ | OpenAI CLIP ViT-B/32, 512D | Paired 4M-trained basemap heads | 103,816,750 |
-| MONET full DINO, 512³ | DINOv2 ViT-g/14, centered PCA to 768D, then L2 normalization | Paired 6M-trained basemap heads | 103,816,750 |
+| MONET full DINO, 6M heads, 512³ | DINOv2 ViT-g/14, centered PCA to 768D, then L2 normalization | Paired 6M-trained basemap heads | 103,816,750 |
+| MONET full DINO, 12M heads, 512³ | DINOv2 ViT-g/14, reused 6M-fitted PCA-768, then L2 normalization | Paired 12M-trained basemap heads | 103,816,750 |
 | MONET random / SSCD / ANN draw arms | OpenAI CLIP ViT-B/32, 512D | Independent 2D / 3D UMAP | 2,000,000 each |
 
 The full-corpus row layout is the initial 19,344,847-row pool followed by
 84,471,903 complementary rows. Each map has a separate geometric address table;
 sharing thumbnail references does not make CLIP and DINO voxel IDs interchangeable.
 See [full-corpus construction and audit](full-corpus-monet.md).
+
+The 12M DINO draw contains the earlier 6M training rows plus six million new
+ones; its PCA basis is deliberately unchanged. Its head checkpoints begin
+`7c38430a492a1ff5` (2D) and `a786ede1f47bdff6` (3D). New voxel assignments require
+a separate saved-game identity even though source-image row IDs are shared.
 
 ## Search identity
 

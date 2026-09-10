@@ -7,39 +7,57 @@ interchangeable with projection row order.
 
 ## Model profiles
 
-`pipeline/scripts/build_fullcorpus_monet.py` supports two explicit profiles:
+`pipeline/scripts/build_fullcorpus_monet.py` supports three explicit profiles:
 
 | Profile | Embeddings supplied to the head | Training draw |
 | --- | --- | --- |
 | `clip-4m` | CLIP ViT-B/32, 512 dimensions | 4M |
 | `dino-6m-pca768` | DINOv2 ViT-g/14, centered PCA to 768 dimensions, then L2 normalized | 6M |
+| `dino-12m-pca768` | DINOv2 ViT-g/14, the same saved 6M-fitted PCA-768, then L2 normalized | 12M |
 
 Each profile pairs separately trained 2D and 3D heads using the same embedding
-representation. The DINO profile uses the saved PCA transform fitted on the
-training draw, not a new transform fitted on the full corpus. A separately
+representation. Both DINO profiles use the saved PCA transform fitted on the
+6M training draw, not a new transform fitted on the full corpus. A separately
 trained direct-DINO-1536 2D projection is not substituted into this pair.
 
-The registered DINO release is `monet-dino-basemap-full-6m-pca768-20260908a`;
-select `?dataset=monet-dino-basemap-full-6m-pca768-512` on a frontend with its
-data routes configured. The current storage-only repack is
-`monet-dino-basemap-full-6m-pca768-20260908a-512-web-20260908b`.
-Its completed full-row audit measured:
+The 12M draw nests the earlier 6M draw and deliberately reuses its PCA basis.
+The 12M heads have their own checkpoint and dataset identities. Doubling the
+training draw does not double browser downloads: the corpus still has
+103,816,750 rows, and the learned heads are not shipped to the browser.
 
-| Quantity | Value |
-| --- | ---: |
-| Occupied voxels | 1,408,316 |
-| Streaming chunks | 4,446 |
-| Largest voxel | 91,696 images |
-| Complete compact streaming pack | 3,739,632,688 bytes (3.48 GiB) |
-| Saved against the original streaming pack | 992,855,692 bytes (20.98%) |
-| Compressed atlases, included in pack | 230,019,081 bytes (219.36 MiB) |
-| Density overview files and gzip sidecar, included in pack | 276,941 bytes (270.45 KiB) |
+## Prepared DINO datasets
+
+Both full-corpus pairs are registered locally. On a frontend with their data
+routes configured, select `?dataset=monet-dino-basemap-full-12m-pca768-512`
+or `?dataset=monet-dino-basemap-full-6m-pca768-512`. The 12M map does not replace
+the 6M map or either public demo.
+
+| Head | Points / inventory identity | Compact chunk directory |
+| --- | --- | --- |
+| 12M | `monet-dino-basemap-full-12m-pca768-20260910a` | `monet-dino-basemap-full-12m-pca768-20260910a-512-web-20260910a` |
+| 6M | `monet-dino-basemap-full-6m-pca768-20260908a` | `monet-dino-basemap-full-6m-pca768-20260908a-512-web-20260908b` |
+
+Completed full-row audits measured:
+
+| Quantity | 12M heads | 6M heads |
+| --- | ---: | ---: |
+| Images | 103,816,750 | 103,816,750 |
+| Occupied voxels | 1,395,664 | 1,408,316 |
+| Streaming chunks | 5,250 | 4,446 |
+| Largest voxel | 77,597 images | 91,696 images |
+| Complete compact streaming pack | 3,743,725,752 bytes (3.49 GiB) | 3,739,632,688 bytes (3.48 GiB) |
+| Saved against the original streaming pack | 1,045,756,402 bytes (21.83%) | 992,855,692 bytes (20.98%) |
+| Compressed atlases, included in pack | 232,885,489 bytes (222.10 MiB) | 230,019,081 bytes (219.36 MiB) |
+| Density overview files and gzip sidecar, included in pack | 269,144 bytes (262.84 KiB) | 276,941 bytes (270.45 KiB) |
 
 These are server-side file sizes, excluding the shared thumbnail store and build
 intermediates. They are not browser memory requirements or startup transfers.
 Desktop retains the existing distance/residency budgets. Touch devices use the
 smaller profile described below. The repack preserves image/voxel identities and
-the original `save_identity`, so existing inventories and CSV files remain valid.
+the original `save_identity`, so existing inventories and CSV files remain valid
+within each map. Inventories are not silently moved between 6M and 12M geometry.
+The 12M build has 2,426 blank representative atlas tiles (0.174% of occupied
+voxels) from failed source thumbnail decodes; those image rows remain indexed.
 
 ## Build and verify
 
@@ -50,11 +68,24 @@ shards, the prior pool metadata table, and Basis Universal's `basisu` encoder.
 Head re-inference additionally requires PyTorch and the sibling `latent-basemap`
 model implementation. It runs on CPU without allocating a GPU.
 
+If a profile has a missing projection under the local data root, prepare it first:
+
+```bash
+python pipeline/scripts/project_fullcorpus_monet.py \
+  --profile dino-12m-pca768 --dim 2 --device cuda
+```
+
+This command only creates a fresh `DATA_ROOT/projections/` artifact; research
+inputs and completed outputs cannot be overwritten. It streams bounded batches,
+holds both research GPU locks, checks source/model/PCA fingerprints and every
+output for finite values, and writes a completion receipt last. CPU mode is
+also available. The existing 12M 3D projection remains a read-only input.
+
 From the repository root, using a Python environment with these dependencies:
 
 ```bash
 python pipeline/scripts/build_fullcorpus_monet.py \
-  --profile dino-6m-pca768 --release RELEASE_ID --voxels 512 \
+  --profile dino-12m-pca768 --release RELEASE_ID --voxels 512 \
   --atlas-workers 4 --check-heads
 
 python pipeline/scripts/verify_fullcorpus_monet.py \
@@ -137,20 +168,21 @@ that the saved head and PCA reproduce coordinates from both corpus halves.
 
 ## Storage is not the browser working set
 
-Both profiles use occupied-only 512³ voxels grouped into 16³ streaming chunks,
+All profiles use occupied-only 512³ voxels grouped into 16³ streaming chunks,
 32px compressed atlases, hierarchical proxy bricks, and bounded 128px sharp
 previews. The 2D overview is a fixed 512×512 density heatmap counting every image;
 exact identities use separate ranged spatial pages.
 
 The 103.82M-row tables stay on the data server. The client range cache is bounded
-and mining reads postings in pages, even for very dense voxels. Existing packed
-256px thumbnail blobs are shared by releases rather than duplicated. See
+and mining reads postings in pages, even for very dense voxels. Source 256px
+thumbnail blobs and the shared 128px R2 publication store are reused across
+maps, not regenerated per head. See
 [streaming architecture](streaming-architecture.md) for binary layouts and cache
 budgets. Generated packs, model weights, search indexes, and corpus images do
 not belong in Git; only the small application theme textures are bundled.
 
 Original URL metadata currently covers the initial pool, not the complement.
-Complement images use available 256px thumbnails. Known failed source decodes
+Complement images use the configured thumbnail store. Known failed source decodes
 remain missing images and can produce blank representative tiles. A map build
 does not add full-corpus text search; a CLIP text-navigation head cannot be used
 in the DINO coordinate frame.

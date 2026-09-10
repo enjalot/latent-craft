@@ -74,6 +74,13 @@ export interface DatasetConfig {
 }
 
 const ALL_DATASETS: Record<string, DatasetConfig> = {
+  "monet-dino-basemap-full-12m-pca768-512": {
+    path: "/chunks/monet-dino-basemap-full-12m-pca768-20260910a-512-web-20260910a",
+    label: "MONET · DINOv2 ViT-g/14 · PCA-768 · 12M head · 103.82M · 512³",
+    pointsId: "monet-dino-basemap-full-12m-pca768-20260910a",
+    minimapPath: "/minimap/monet-dino-basemap-full-12m-pca768-20260910a",
+    pointMetaFile: { path: "/points/monet-clip-basemap-pool-20260905a/point_meta.bin", rows: 19344847, bytes: 1887424406 },
+  },
   "monet-dino-basemap-full-6m-pca768-512": {
     path: "/chunks/monet-dino-basemap-full-6m-pca768-20260908a-512-web-20260908b",
     label: "MONET · DINOv2 ViT-g/14 · PCA-768 · 6M head · 103.82M · 512³",

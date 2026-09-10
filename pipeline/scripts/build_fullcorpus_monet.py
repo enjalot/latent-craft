@@ -37,11 +37,16 @@ def digest(path):
 PROFILES = {
     "clip-4m": dict(stem="monet-clip-basemap-full-4m", embedding="CLIP ViT-B/32", head="random-4m",
         folders=("monet-clip-fullcorpus-proj-4m-20260905", "monet-clip-fullcorpus-proj-4m-3d-20260905"),
-        heads=("monet-random-clip-4m", "monet-random-clip-4m-3d"), column="clip512.f32.npy"),
+        heads=("monet-random-clip-4m", "monet-random-clip-4m-3d"), column="clip512.f32.npy", training_rows=4_000_000),
     "dino-6m-pca768": dict(stem="monet-dino-basemap-full-6m-pca768", embedding="DINOv2 ViT-g/14 · PCA-768", head="random-6m-pca768",
         folders=("fullcorpus-dino-6m-pca768-2d", "fullcorpus-dino-6m-pca768-3d"),
         heads=("monet-random-dino-6m-pca768", "monet-random-dino-6m-pca768-3d"), column="dino1536.f16.npy",
-        pca="/data2/monet/random-dino-6m/pca768-model.npz"),
+        pca="/data2/monet/random-dino-6m/pca768-model.npz", training_rows=6_000_000),
+    "dino-12m-pca768": dict(stem="monet-dino-basemap-full-12m-pca768", embedding="DINOv2 ViT-g/14 · PCA-768", head="random-12m-pca768",
+        folders=(str(DATA_ROOT / "projections/fullcorpus-dino-12m-pca768-2d-20260910a"), "fullcorpus-dino-12m-pca768-3d"),
+        heads=("monet-random-dino-12m-pca768", "monet-random-dino-12m-pca768-3d"), column="dino1536.f16.npy",
+        # The 12M training draw deliberately reuses the 6M-fitted PCA basis.
+        pca="/data2/monet/random-dino-6m/pca768-model.npz", training_rows=12_000_000),
 }
 
 
@@ -69,8 +74,8 @@ def verify_projection(folder, expected, dim, profile):
         checkpoint=str(expected), checkpoint_sha256=checkpoint_hash, manifest=manifest)
     if profile.get("pca"):
         pca = Path(profile["pca"]); pca_hash = digest(pca)
-        if dim == 2:
-            if manifest.get("training_rows") != 6_000_000 or manifest.get("input_dimensions") != 768 or manifest.get("pca_sha256") != pca_hash:
+        if dim == 2 or manifest.get("source_identity"):
+            if manifest.get("training_rows") != profile["training_rows"] or manifest.get("input_dimensions") != 768 or manifest.get("pca_sha256") != pca_hash:
                 raise ValueError("PCA training identity mismatch")
             recorded = manifest["source_identity"]["inputs"]
             if recorded != [dict(path=str(p), bytes=p.stat().st_size, mtime_ns=p.stat().st_mtime_ns) for p in inputs]:

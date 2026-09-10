@@ -7,7 +7,7 @@ describe("dataset identities", () => {
     for (const [id, dataset] of Object.entries(DATASETS)) {
       if (!id.startsWith("monet-")) continue;
       if (id.startsWith("monet-dino-")) {
-        expect(dataset.label).toContain("DINOv2 ViT-g/14 · PCA-768 · 6M head");
+        expect(dataset.label).toContain(`DINOv2 ViT-g/14 · PCA-768 · ${id.includes("-12m-") ? "12M" : "6M"} head`);
         continue;
       }
       expect(dataset.label).toContain("CLIP ViT-B/32");
@@ -44,6 +44,22 @@ describe("dataset identities", () => {
       minimapPath: "/minimap/monet-dino-basemap-full-6m-pca768-20260908a",
     });
     expect(dino.pointsId).not.toBe(DATASETS["monet-clip-basemap-full-4m-512"].pointsId);
+    expect(dino.searchProfile).toBeUndefined();
+    expect(dino.metadataEndpoint).toBeUndefined();
+    expect(dino.streamingProfile).toBeUndefined();
+  });
+
+  it("registers the audited 12M DINO pair without replacing the 6M map or attaching CLIP search", () => {
+    const dino = DATASETS["monet-dino-basemap-full-12m-pca768-512"];
+    const previous = DATASETS["monet-dino-basemap-full-6m-pca768-512"];
+    expect(dino).toMatchObject({
+      path: "/chunks/monet-dino-basemap-full-12m-pca768-20260910a-512-web-20260910a",
+      pointsId: "monet-dino-basemap-full-12m-pca768-20260910a",
+      minimapPath: "/minimap/monet-dino-basemap-full-12m-pca768-20260910a",
+    });
+    expect(dino.pointsId).not.toBe(previous.pointsId);
+    expect(dino.pointsId).not.toBe(DATASETS["monet-clip-basemap-full-4m-512"].pointsId);
+    expect(dino.pointMetaFile).toEqual(previous.pointMetaFile);
     expect(dino.searchProfile).toBeUndefined();
     expect(dino.metadataEndpoint).toBeUndefined();
     expect(dino.streamingProfile).toBeUndefined();

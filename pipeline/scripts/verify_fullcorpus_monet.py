@@ -18,27 +18,35 @@ from lsvoxel.frame import normalize_to_cube
 from lsvoxel.minimap._vendored_map_pack_core import quantize
 
 
-def verify_heads(provenance):
-    """Reproduce samples from both halves with the actual checkpoint architecture."""
+def load_head(path, expected_hash):
+    """Load only the supported local architecture, with a pinned checkpoint."""
+    with Path(path).open("rb") as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != expected_hash:
+            raise ValueError("Projection checkpoint changed")
     import torch
-    torch.set_num_threads(2)
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    if (checkpoint["architecture"] != "residual_bottleneck" or checkpoint["input_dim"] not in (512, 768)
+            or checkpoint["n_components"] not in (2, 3)):
+        raise ValueError("Unexpected projection model architecture")
     architecture = Path(__file__).resolve().parents[3] / "latent-basemap/basemap/pumap/parametric_umap/models/mlp.py"
     spec = importlib.util.spec_from_file_location("full_map_mlp", architecture)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    head = module.ResidualBottleneckMLP(checkpoint["input_dim"], checkpoint["hidden_dim"], checkpoint["n_components"],
+        checkpoint["n_layers"], checkpoint["neck_fraction"])
+    head.load_state_dict(checkpoint["model_state_dict"], strict=True)
+    return head.eval(), checkpoint
+
+
+def verify_heads(provenance):
+    """Reproduce samples from both halves with the actual checkpoint architecture."""
+    import torch
+    torch.set_num_threads(2)
     errors = {}
     for entry in provenance["coordinates"]:
-        with Path(entry["checkpoint"]).open("rb") as stream:
-            if hashlib.file_digest(stream, "sha256").hexdigest() != entry["checkpoint_sha256"]:
-                raise ValueError("Projection checkpoint changed")
-        checkpoint = torch.load(entry["checkpoint"], map_location="cpu", weights_only=True)
+        head, checkpoint = load_head(entry["checkpoint"], entry["checkpoint_sha256"])
         dim = checkpoint["n_components"]
         input_dim = checkpoint["input_dim"]
-        if checkpoint["architecture"] != "residual_bottleneck" or input_dim not in (512, 768):
-            raise ValueError("Unexpected projection model architecture")
-        head = module.ResidualBottleneckMLP(input_dim, checkpoint["hidden_dim"], dim, checkpoint["n_layers"], checkpoint["neck_fraction"])
-        head.load_state_dict(checkpoint["model_state_dict"], strict=True)
-        head.eval()
         coords = np.load(entry["path"], mmap_mode="r")
         pca = None
         if entry.get("pca_model"):
